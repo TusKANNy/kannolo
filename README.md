@@ -23,7 +23,7 @@ kANNolo is a research-oriented library for Approximate Nearest Neighbors (ANN) s
 
 
 <!--
-Details on how to use Seismic's core engine in Rust 🦀 can be found in [`docs/RustUsage.md`](docs/RustUsage.md).
+Details on how to use kANNolo's core engine in Rust 🦀 can be found in [`docs/RustUsage.md`](docs/RustUsage.md).
 
 The instructions below explain how to use it by using the Python API. 
 

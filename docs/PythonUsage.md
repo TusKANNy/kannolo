@@ -11,21 +11,38 @@ import ir_datasets
 from ir_measures import *
 ```
 
-<!--
+### Index Construction
 
-Build the index
+Set index construction parameters.
 
 ```python
-json_input_file = "" # your input file
-
-index = SeismicIndex.build(json_input_file)
-print("Number of documents: ", index.len)
-print("Avg number of non-zero components: ", index.nnz / index.len)
-print("Dimensionality of the vectors: ", index.dim)
-
-index.print_space_usage_byte()
+efConstruction = 200
+m = 32 # n. neighbors per node
+metric = "ip" # Inner product
 ```
 
+Build HNSW index on dense, plain data.
+
+```python
+npy_input_file = "" # your input file
+
+index = DensePlainHNSW.build(npy_input_file, m, efConstruction, "ip")
+```
+
+Build HNSW index on dense, PQ-encoded data.
+
+```python
+npy_input_file = "" # your input file
+
+# Set PQ's parameters
+m_pq = 192 # Number of subspaces of PQ
+nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
+sample_size = 500_000 # Size of the sample of the dataset for training PQ
+
+index = DensePQHNSW.build(data_path, m, efConstruction, m_pq, nbits, "ip", sample_size)
+```
+
+<!--
 Load queries
 
 ```python
@@ -49,21 +66,44 @@ for query in queries:
     query_components.append(np.array(list(vector.keys()), dtype=string_type))
     query_values.append(np.array(list(vector.values()), dtype=np.float32))
 ```
+-->
+### Search
 
-Perform the search
+Set search parameters
+```python
+k = 10 # Number of results to be retrieved
+efSearch = 200 # Search parameter for regulating the accuracy
+```
+
+#### Batch Search
+
+Search multiple queries saved in a file.
 
 ```python
-results = index.batch_search(
-    queries_ids=queries_ids,
-    query_components=query_components,
-    query_values=query_values,
-    k=10,
-    query_cut=20,
-    heap_factor=0.7,
-    sorted=True,
-    n_knn=0,
-)
+query_file = "" # your queries file, .npy for dense, .bin for sparse
+dists, ids = index.search_batch(query_file, k, efSearch)
 ```
+
+#### Single query search
+
+Search for a single query.
+
+##### Dense
+
+Search for a dense query `my_query` stored in a numpy array.
+
+```python
+dists, ids = index.search(my_query, k, efSearch)
+```
+
+##### Sparse
+
+Search for a sparse query represented by two numpy arrays: `components`, containing the component IDs (i32) of the sparse query vector, and `values`, containing the non-zero floating point values (f32) associated with the components.
+
+```python
+dists, ids = index.search(components, values, k, efSearch)
+```
+<!--
 
 Evaluation
 

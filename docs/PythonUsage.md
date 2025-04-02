@@ -6,10 +6,9 @@ from kannolo import SparsePlainHNSW
 from kannolo import SparsePlainHNSWf16
 from kannolo import DensePQHNSW
 import numpy as np
-import ir_measures
-import ir_datasets
-from ir_measures import *
 ```
+
+The functioning of f16 indexes is the same as f32 ones, we outline examples for f32 indexes.
 
 ### Index Construction
 

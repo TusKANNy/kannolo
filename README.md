@@ -22,10 +22,11 @@
 kANNolo is a research-oriented library for Approximate Nearest Neighbors (ANN) search written in Rust 🦀. It is explicitly designed to combine usability with performance effectively. Designed with modularity and researchers in mind, kANNolo makes prototyping new ANN search algorithms and data structures easy. kANNolo supports both dense and sparse embeddings seamlessly. It implements the HNSW graph index and Product Quantization.
 
 
-<!--
+
 Details on how to use kANNolo's core engine in Rust 🦀 can be found in [`docs/RustUsage.md`](docs/RustUsage.md).
 
-The instructions below explain how to use it by using the Python API. 
+<!--
+The instructions below explain how to use the Python API. 
 
 
 ### ⚡ Installation  
@@ -109,15 +110,13 @@ This will generate a ```data``` directory at the ```/path/to/output``` path, wit
 
 If you download the NQ dataset from the HuggingFace repo, you need to specify ```--input-format nq``` as it uses a slightly different format. 
 
+-->
 
 ### Resources
-Check out our `docs` folder for more detailed guide on use to use Seismic directly in Rust, replicate the results of our paper, or use Seismic with your custom collection. 
-
+Check out our `docs` folder for more detailed guide on use to use kANNolo directly in Rust, replicate the results of our paper, or use kANNolo with your custom collection. 
 
 ### <a name="bib">📚 Bibliography</a>
-1. Sebastian Bruch, Franco Maria Nardini, Cosimo Rulli, and Rossano Venturini. "*Efficient Inverted Indexes for Approximate Retrieval over Learned Sparse Representations*." Proc. ACM SIGIR. 2024. 
-2. Sebastian Bruch, Franco Maria Nardini, Cosimo Rulli, and Rossano Venturini. "*Pairing Clustered Inverted Indexes with κ-NN Graphs for Fast Approximate Retrieval over Learned Sparse Representations*."  Proc. ACM CIKM. 2024.
-3. Sebastian Bruch, Franco Maria Nardini, Cosimo Rulli, Rossano Venturini, and Leonardo Venuta. "*Investigating the Scalability of Approximate Sparse Retrieval Algorithms to Massive Datasets*." Proc. ECIR. 2025. *To Appear*. 
+Leonardo Delfino, Domenico Erriquez, Silvio Martinico, Franco Maria Nardini, Cosimo Rulli and Rossano Venturini. "*kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search*." Proc. ECIR. 2025. *To Appear*. 
 
 
 ### Citation License
@@ -125,7 +124,6 @@ The source code in this repository is subject to the following citation license:
 
 By downloading and using this software, you agree to cite the under-noted paper in any kind of material you produce where it was used to conduct a search or experimentation, whether be it a research paper, dissertation, article, poster, presentation, or documentation. By using this software, you have agreed to the citation license.
 
--->
 
 arXiv
 ```bibtex

@@ -25,7 +25,7 @@ kANNolo is a research-oriented library for Approximate Nearest Neighbors (ANN) s
 
 Details on how to use kANNolo's core engine in Rust 🦀 can be found in [`docs/RustUsage.md`](docs/RustUsage.md).
 
-Details on how to use kANNolo's Python interface can be found in [`docs/RustUsage.md`](docs/PythonUsage.md).
+Details on how to use kANNolo's Python interface can be found in [`docs/PythonUsage.md`](docs/PythonUsage.md).
 
 <!--
 The instructions below explain how to use the Python API. 

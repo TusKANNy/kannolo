@@ -5,6 +5,8 @@ use super::utils::{
 use crate::utils::compute_squared_l2_distance;
 use std::arch::x86_64::*;
 
+/* ********** SIMD OPTIMIZED FUNCTIONS ********** */
+
 pub unsafe fn compute_distance_table_ip_d4(
     distance_table: &mut [f32],
     query: &[f32],

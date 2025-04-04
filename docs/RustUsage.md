@@ -22,12 +22,7 @@ Product Quantization needs two additional parameters:
 Examples of usage can be found in `src/bin/hnsw_pq_build` and `src/bin/hnsw_pq_run`.
 
 #### Sparse Data
-In kANNolo, documents and queries should be JSON-formatted files with the following fields:
-
-- `id`: An integer representing the document ID.
-- `vector`: A dictionary where each key represents a token, and its corresponding value is the score, e.g., `{"dog": 2.45}`.
-
-This is the standard output format of several libraries for training sparse models, such as [`learned-sparse-retrieval`](https://github.com/thongnt99/learned-sparse-retrieval).
+In kANNolo, sparse documents and queries should be in a binary format. For more details on this format see the [`docs/PythonUsage.md`](docs/PythonUsage.md)
 
 To build an index over sparse vectors, you need to load data, create a `SparseDataset` and a `SparsePlainQuantizer`, and call the `build` function of the `GraphIndex`.
 

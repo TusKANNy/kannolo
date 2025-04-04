@@ -91,7 +91,7 @@ dists, ids = index.search(my_query, k, efSearch)
 
 Search for a sparse query represented by two numpy arrays: `components`, containing the component IDs (i32) of the sparse query vector, and `values`, containing the non-zero floating point values (f32) associated with the components.
 
-Numpy arrays for sparse queries can be produced starting from a binary file with the `convert_bin_to_npy_arrays.py` script.
+Conversion between numpy arrays and binary format for sparse data and queries can be performed with the `convert_bin_to_npy_arrays.py` and `convert_npy_arrays_to_bin.py` scripts.
 
 ```python
 dists, ids = index.search(components, values, k, efSearch)

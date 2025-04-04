@@ -1,0 +1,54 @@
+name =          "dragon_hnsw_pq_search"
+title =         "Search dense HNSWM on MSMARCO (Dragon)"
+description =   "Search dense HNSWM on MSMARCO (Dragon)"
+dataset =       "Dragon on MS-MARCO"
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+query-command = "./target/release/hnsw_pq_run"
+
+[settings]
+k =             10
+n-runs =        1       # Number of runs. PLEASE think carefully how increasing 
+                        # this may influence your query time
+NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
+metric =        ""
+
+[folder] 
+data =          # data base path
+index =         # index input path
+qrels_path =    ""
+experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
+
+[filename]
+queries =       "dragon_queries.npy" # queries input file
+groundtruth =   "dragon_gt_IP_full.npy" # ground truth input file
+doc_ids =       ""
+query_ids =     ""
+index =         # index input file name
+
+[indexing_parameters]
+m =            32
+efc =          200
+metric =       "ip"
+
+[pq_parameters]
+m-pq =         192
+
+[query]
+    [query.efs_10]
+    ef-search =      10
+    [query.efs_20]
+    ef-search =      20
+    [query.efs_40]
+    ef-search =      40
+    [query.efs_80]
+    ef-search =      80
+    [query.efs_120]
+    ef-search =      120
+    [query.efs_200]
+    ef-search =      200
+    [query.efs_400]
+    ef-search =      400
+    [query.efs_600]
+    ef-search =      600
+    [query.efs_800]
+    ef-search =      800

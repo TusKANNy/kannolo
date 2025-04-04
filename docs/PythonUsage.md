@@ -41,31 +41,23 @@ sample_size = 500_000 # Size of the sample of the dataset for training PQ
 index = DensePQHNSW.build(data_path, m_pq, nbits, m, efConstruction, "ip", sample_size)
 ```
 
-<!--
-Load queries
+
+Build HNSW index on sparse data.
 
 ```python
-queries_path = "" # your query file
+"""
+Binary File Format:
+- First 4 bytes: Unsigned 32-bit integer (little-endian) indicating the total number of sparse vectors.
+- For each vector:
+    - 4 bytes: Unsigned 32-bit integer (little-endian) representing the number of nonzero components.
+    - Next (4 * n) bytes: Array of n unsigned 32-bit integers (little-endian) for component indices (cast to int32).
+    - Following (4 * n) bytes: Array of n 32-bit floating point values (little-endian) for the nonzero components.
+"""
+bin_input_file = "" # your input file
 
-queries = []
-with open(queries_path, 'r') as f:
-    for line in f:
-        queries.append(json.loads(line))
-
-MAX_TOKEN_LEN = 30
-string_type  = f'U{MAX_TOKEN_LEN}'
-
-queries_ids = np.array([q['id'] for q in queries], dtype=string_type)
-
-query_components = []
-query_values = []
-
-for query in queries:
-    vector = query['vector']
-    query_components.append(np.array(list(vector.keys()), dtype=string_type))
-    query_values.append(np.array(list(vector.values()), dtype=np.float32))
+index = SparsePlainHNSW.build(data_path, m, efConstruction, "ip")
 ```
--->
+
 ### Search
 
 Set search parameters
@@ -99,16 +91,12 @@ dists, ids = index.search(my_query, k, efSearch)
 
 Search for a sparse query represented by two numpy arrays: `components`, containing the component IDs (i32) of the sparse query vector, and `values`, containing the non-zero floating point values (f32) associated with the components.
 
+Numpy arrays for sparse queries can be produced starting from a binary file with the `convert_bin_to_npy_arrays.py` script.
+
 ```python
 dists, ids = index.search(components, values, k, efSearch)
 ```
-<!--
 
-Evaluation
+### Evaluation
 
-```python
-ir_results = [ir_measures.ScoredDoc(query_id, doc_id, score) for r in results for (query_id, score, doc_id) in r]
-qrels = ir_datasets.load('msmarco-passage/dev/small').qrels
-
-ir_measures.calc_aggregate([RR@10], qrels, ir_results)
-```
+For evaluation, see the demo notebooks in the `notebooks` folder.

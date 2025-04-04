@@ -8,7 +8,7 @@ from kannolo import DensePQHNSW
 import numpy as np
 ```
 
-The functioning of f16 indexes is the same as f32 ones, we outline examples for f32 indexes.
+The functioning of f16 indexes is the same as that of f32 ones, we outline examples for f32 indexes.
 
 ### Index Construction
 
@@ -38,7 +38,7 @@ m_pq = 192 # Number of subspaces of PQ
 nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
 sample_size = 500_000 # Size of the sample of the dataset for training PQ
 
-index = DensePQHNSW.build(data_path, m, efConstruction, m_pq, nbits, "ip", sample_size)
+index = DensePQHNSW.build(data_path, m_pq, nbits, m, efConstruction, "ip", sample_size)
 ```
 
 <!--

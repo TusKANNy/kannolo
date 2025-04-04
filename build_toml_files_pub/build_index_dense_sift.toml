@@ -1,0 +1,23 @@
+name =          "dense_hnsw_build_sift"
+title =         "Build dense HNSWM on SIFT1M"
+description =   "Build dense HNSWM on SIFT1M"
+dataset =       "SIFT1M"
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+build-command = "./target/release/hnsw_plain_dense_build"
+
+[settings]
+NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
+
+[folder] 
+data =          # data base path
+index =         # index output path
+experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
+
+[filename]
+dataset =       "sift1m.npy" # dataset input file name
+index =         # index output file name
+
+[indexing_parameters]
+m =            16
+efc =          150
+metric =       "l2"

@@ -2,6 +2,10 @@
 name = "kannolo"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both leanred and sparse vectors."
+repository = "https://github.com/TusKANNy/kannolo"
+readme = "README.md"
 build = "build.rs"
 
 [dependencies]

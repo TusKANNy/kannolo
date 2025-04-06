@@ -2,7 +2,7 @@
 
 <h1 align="center">kANNolo</h1>
 <p align="center">
-    <img width="300px" src="https://github.com/SilvioM97/kannolo_private/blob/main/kannolo.png" />
+    <img width="300px" src="kannolo.png" />
 </p>
 
 <p align="center">

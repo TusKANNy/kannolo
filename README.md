@@ -83,11 +83,14 @@ By downloading and using this software, you agree to cite the under-noted paper 
 
 arXiv
 ```bibtex
-@article{delfino2025kannolo,
-  title={kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search},
-  author={Delfino, Leonardo and Erriquez, Domenico and Martinico, Silvio and Nardini, Franco Maria and Rulli, Cosimo and Venturini, Rossano},
-  journal={arXiv preprint arXiv:2501.06121},
-  year={2025}
+@InProceedings{10.1007/978-3-031-88717-8_29,
+author="Delfino, Leonardo and Erriquez, Domenico and Martinico, Silvio and Nardini, Franco Maria and Rulli, Cosimo and Venturini, Rossano",
+title="kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search",
+booktitle="Advances in Information Retrieval",
+year="2025",
+publisher="Springer Nature Switzerland",
+pages="400--406",
+isbn="978-3-031-88717-8"
 }
 ```
 

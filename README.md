@@ -72,7 +72,7 @@ Check out our `docs` folder for more detailed guide on use to use kANNolo direct
 Disclaimer: The results in the paper are obtained with a direct-access table shared among threads to keep track of visited nodes. In the current version, this is substituted with a hash set, with the double goal of simplifying the code for users and to make it independent of the size of the dataset, a feature that one would like to enable when dealing with large datasets. This may affect performance.
 
 ### <a name="bib">📚 Bibliography</a>
-Leonardo Delfino, Domenico Erriquez, Silvio Martinico, Franco Maria Nardini, Cosimo Rulli and Rossano Venturini. "*kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search*." Proc. ECIR. 2025. *To Appear*. 
+Leonardo Delfino, Domenico Erriquez, Silvio Martinico, Franco Maria Nardini, Cosimo Rulli and Rossano Venturini. "*kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search*." Proc. ECIR. 2025.
 
 
 ### Citation License

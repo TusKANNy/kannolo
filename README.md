@@ -2,13 +2,21 @@
 
 <h1 align="center">kANNolo</h1>
 <p align="center">
-    <img width="300px" src="kannolo.png" />
+    <img width="300px" src="imgs/kannolo.png" />
 </p>
 
 <p align="center">
+    <a href="https://rdcu.be/eii62"><img src="https://badgen.net/static/paper/ECIR 2025/yellow"" /></a>  
     <a href="https://arxiv.org/abs/2501.06121"><img src="https://badgen.net/static/arXiv/2501.06121/red" /></a>
 </p>
 
+<!--
+<p align="center">    
+    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/v/seismic" /></a>
+    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/d/seismic" /></a>
+    <a href="LICENSE.md"><img src="https://badgen.net/static/license/MIT/blue" /></a>
+</p>
+-->
 
 <!--
 <p align="center">    

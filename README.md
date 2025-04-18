@@ -13,6 +13,7 @@
 <p align="center">    
     <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/v/kannolo" /></a>
     <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/d/kannolo" /></a>
+    <a href="LICENSE"><img src="https://badgen.net/static/license/MIT/blue" /></a>
 </p>
 
 <!--

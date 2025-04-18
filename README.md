@@ -10,13 +10,10 @@
     <a href="https://arxiv.org/abs/2501.06121"><img src="https://badgen.net/static/arXiv/2501.06121/red" /></a>
 </p>
 
-<!--
 <p align="center">    
-    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/v/seismic" /></a>
-    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/d/seismic" /></a>
-    <a href="LICENSE.md"><img src="https://badgen.net/static/license/MIT/blue" /></a>
+    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/v/kannolo" /></a>
+    <a href="https://crates.io/crates/kannolo"><img src="https://badgen.infra.medigy.com/crates/d/kannolo" /></a>
 </p>
--->
 
 <!--
 <p align="center">    

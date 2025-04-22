@@ -81,7 +81,7 @@ The source code in this repository is subject to the following citation license:
 By downloading and using this software, you agree to cite the under-noted paper in any kind of material you produce where it was used to conduct a search or experimentation, whether be it a research paper, dissertation, article, poster, presentation, or documentation. By using this software, you have agreed to the citation license.
 
 
-arXiv
+ECIR 2025
 ```bibtex
 @InProceedings{10.1007/978-3-031-88717-8_29,
 author="Delfino, Leonardo and Erriquez, Domenico and Martinico, Silvio and Nardini, Franco Maria and Rulli, Cosimo and Venturini, Rossano",

@@ -1,3 +1,5 @@
+use std::f32;
+
 use crate::datasets::{dense_dataset::DenseDataset, sparse_dataset::SparseDataset};
 use crate::hnsw::graph_index::GraphIndex;
 use crate::hnsw_utils::config_hnsw::ConfigHnsw;
@@ -21,14 +23,14 @@ pub struct DensePlainHNSW {
 
 #[pymethods]
 impl DensePlainHNSW {
-    /// Build a dense plain index from a 2D NumPy array.
-    /// - `dataset`: a 2D f32 array of shape (num_docs, dim)
+    /// Build a dense plain index from a 2D NumPy array stored in a npy file.
+    /// - `data_path`: path to a 2D f32 array of shape (num_docs, dim) stored in a npy file
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during index construction
     /// - `metric`: either "l2" for Euclidean or "ip" for inner product
     #[staticmethod]
     #[pyo3(signature = (data_path, m=32, ef_construction=200, metric="ip".to_string()))]
-    pub fn build(
+    pub fn build_from_file(
         data_path: &str,
         m: usize,
         ef_construction: usize,
@@ -69,6 +71,60 @@ impl DensePlainHNSW {
 
         Ok(DensePlainHNSW { index })
     }
+
+
+    /// Build a dense plain index from a 1D NumPy array given the dimensionality.
+    /// - `data_vec`: a 1D f32 array of len num_docs * dim
+    /// - `dim`: dimensionality of the data
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during index construction
+    /// - `metric`: either "l2" for Euclidean or "ip" for inner product
+    #[staticmethod]
+    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()))]
+    pub fn build_from_array(
+        data_vec: PyReadonlyArray1<f32>,
+        dim: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+
+        let data_vec = data_vec.as_slice()?.to_vec();
+
+        // Determine the distance type.
+        let distance = match metric.as_str() {
+            "l2" => DistanceType::Euclidean,
+            "ip" => DistanceType::DotProduct,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid metric; choose 'l2' or 'ip'",
+                ))
+            }
+        };
+
+        // Create a plain quantizer.
+        let quantizer = PlainQuantizer::<f32>::new(dim, distance);
+
+        // Build the dense dataset.
+        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
+
+        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(boxed_dataset);
+
+        let config = ConfigHnsw::new()
+            .num_neighbors(m)
+            .ef_construction(ef_construction)
+            .build();
+
+        let num_threads = rayon::current_num_threads();
+
+        let start = std::time::Instant::now();
+        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let elapsed = start.elapsed();
+        println!("Time to build index: {:?}", elapsed);
+
+        Ok(DensePlainHNSW { index })
+    }
+
 
     /// Save the index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
@@ -201,14 +257,14 @@ pub struct DensePlainHNSWf16 {
 
 #[pymethods]
 impl DensePlainHNSWf16 {
-    /// Build a dense plain index from a 2D NumPy array.
-    /// - `dataset`: a 2D f32 array of shape (num_docs, dim)
+    /// Build a dense plain index from a 2D NumPy array saved in a npy file.
+    /// - `data_path`: path to a 2D f32 array of shape (num_docs, dim) saved in a npy file
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during index construction
     /// - `metric`: either "l2" for Euclidean or "ip" for inner product
     #[staticmethod]
     #[pyo3(signature = (data_path, m=32, ef_construction=200, metric="ip".to_string()))]
-    pub fn build(
+    pub fn build_from_file(
         data_path: &str,
         m: usize,
         ef_construction: usize,
@@ -251,6 +307,63 @@ impl DensePlainHNSWf16 {
 
         Ok(DensePlainHNSWf16 { index })
     }
+
+    /// Build a dense plain index from a 1D NumPy array given the dimensionality.
+    /// - `data_vec`: a 1D f32 array of len num_docs * dim
+    /// - `dim`: dimensionality of the data
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during index construction
+    /// - `metric`: either "l2" for Euclidean or "ip" for inner product
+    #[staticmethod]
+    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()))]
+    pub fn build_from_array(
+        data_vec: PyReadonlyArray1<f32>,
+        dim: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        // Convert the f32 data to f16.
+        let data_vec: Vec<f16> = data_vec
+            .as_slice()?
+            .iter()
+            .map(|&v| f16::from_f32(v))
+            .collect();
+
+        // Determine the distance type.
+        let distance = match metric.as_str() {
+            "l2" => DistanceType::Euclidean,
+            "ip" => DistanceType::DotProduct,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid metric; choose 'l2' or 'ip'",
+                ))
+            }
+        };
+
+        // Create a plain quantizer.
+        let quantizer = PlainQuantizer::<f16>::new(dim, distance);
+
+        // Build the dense dataset.
+        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
+
+        let static_dataset: &'static DenseDataset<PlainQuantizer<f16>> = Box::leak(boxed_dataset);
+
+        let config = ConfigHnsw::new()
+            .num_neighbors(m)
+            .ef_construction(ef_construction)
+            .build();
+
+        let num_threads = rayon::current_num_threads();
+
+        let start = std::time::Instant::now();
+        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let elapsed = start.elapsed();
+        println!("Time to build index: {:?}", elapsed);
+
+        Ok(DensePlainHNSWf16 { index })
+    }
+
 
     /// Save the index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
@@ -389,14 +502,14 @@ pub struct SparsePlainHNSW {
 #[pymethods]
 impl SparsePlainHNSW {
     /// Build a sparse plain index from a dataset file.
-    /// The file is assumed to be in the binary format expected by your library.
+    /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
     #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="ip".to_string()))]
-    pub fn build(
+    pub fn build_from_file(
         data_file: &str,
         m: usize,
         ef_construction: usize,
@@ -416,6 +529,77 @@ impl SparsePlainHNSW {
         // Read the sparse dataset from file.
         let boxed_dataset = Box::new(
             SparseDataset::<SparsePlainQuantizer<f32>>::read_bin_file(data_file).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error reading dataset: {:?}",
+                    e
+                ))
+            })?,
+        );
+        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f32>> =
+            Box::leak(boxed_dataset);
+
+        // Create a quantizer for the sparse dataset.
+        let quantizer = SparsePlainQuantizer::<f32>::new(static_dataset.dim(), distance);
+
+        // Create HNSW configuration.
+        let config = ConfigHnsw::new()
+            .num_neighbors(m)
+            .ef_construction(ef_construction)
+            .build();
+
+        let num_threads = rayon::current_num_threads();
+
+        // Build the index.
+        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+
+        Ok(SparsePlainHNSW { index })
+    }
+
+    /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
+    /// The file is assumed to be in binary format.
+    /// - `data_file`: path to the binary dataset file
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during construction
+    /// - `metric`: either "l2" or "ip"
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="ip".to_string()))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i32>,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+
+        let components_vec = components
+            .to_vec()
+            .unwrap()
+            .iter()
+            .map(|x| *x as u16)
+            .collect::<Vec<_>>();
+        let values_slice = values.as_slice()?;
+        let offsets_vec = offsets
+            .to_vec()
+            .unwrap()
+            .iter()
+            .map(|x| *x as usize)
+            .collect::<Vec<_>>();
+
+        // Determine distance type.
+        let distance = match metric.as_str() {
+            "l2" => DistanceType::Euclidean,
+            "ip" => DistanceType::DotProduct,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid metric; choose 'l2' or 'ip'",
+                ))
+            }
+        };
+
+        // Read the sparse dataset from file.
+        let boxed_dataset = Box::new(
+            SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(components_vec.as_slice(), values_slice, offsets_vec.as_slice()).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading dataset: {:?}",
                     e
@@ -603,15 +787,15 @@ pub struct SparsePlainHNSWf16 {
 
 #[pymethods]
 impl SparsePlainHNSWf16 {
-    /// Build a sparse plain index from a dataset file.
-    /// The file is assumed to be in the binary format expected by your library.
+    /// Build a sparse plain index from a binary dataset file.
+    /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
     #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="ip".to_string()))]
-    pub fn build(
+    pub fn build_from_file(
         data_file: &str,
         m: usize,
         ef_construction: usize,
@@ -637,6 +821,82 @@ impl SparsePlainHNSWf16 {
                         e
                     ))
                 })?,
+        );
+        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f16>> =
+            Box::leak(boxed_dataset);
+
+        // Create a quantizer for the sparse dataset.
+        let quantizer = SparsePlainQuantizer::<f16>::new(static_dataset.dim(), distance);
+
+        // Create HNSW configuration.
+        let config = ConfigHnsw::new()
+            .num_neighbors(m)
+            .ef_construction(ef_construction)
+            .build();
+
+        let num_threads = rayon::current_num_threads();
+
+        // Build the index.
+        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+
+        Ok(SparsePlainHNSWf16 { index })
+    }
+
+        /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
+    /// The file is assumed to be in binary format.
+    /// - `data_file`: path to the binary dataset file
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during construction
+    /// - `metric`: either "l2" or "ip"
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="ip".to_string()))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i32>,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+
+        let components_vec = components
+            .to_vec()
+            .unwrap()
+            .iter()
+            .map(|x| *x as u16)
+            .collect::<Vec<_>>();
+        let values_vec = values
+            .to_vec()
+            .unwrap()
+            .iter()
+            .map(|&x| half::f16::from_f32(x))
+            .collect::<Vec<_>>();
+        let offsets_vec = offsets
+            .to_vec()
+            .unwrap()
+            .iter()
+            .map(|x| *x as usize)
+            .collect::<Vec<_>>();
+
+        // Determine distance type.
+        let distance = match metric.as_str() {
+            "l2" => DistanceType::Euclidean,
+            "ip" => DistanceType::DotProduct,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid metric; choose 'l2' or 'ip'",
+                ))
+            }
+        };
+
+        // Read the sparse dataset from file.
+        let boxed_dataset = Box::new(
+            SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(components_vec.as_slice(), values_vec.as_slice(), offsets_vec.as_slice()).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error reading dataset: {:?}",
+                    e
+                ))
+            })?,
         );
         let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f16>> =
             Box::leak(boxed_dataset);
@@ -834,10 +1094,10 @@ pub struct DensePQHNSW {
 
 #[pymethods]
 impl DensePQHNSW {
-    /// Build a PQ index from a 2D NumPy array.
+    /// Build a PQ index from a 2D NumPy array (f32) of shape (num_docs, dim) saved in a npy file.
     ///
     /// Parameters:
-    /// - `dataset`: a 2D NumPy array (f32) of shape (num_docs, dim)
+    /// - `data_vec`: path to a 2D NumPy array (f32) of shape (num_docs, dim) saved in a npy file.
     /// - `m`: number of neighbors per node (for the HNSW graph)
     /// - `ef_construction`: candidate pool size during construction
     /// - `m_pq`: number of subspaces (const generic for ProductQuantizer). Supported values: 8, 16, or 32.
@@ -846,7 +1106,7 @@ impl DensePQHNSW {
     /// - `sample_size`: number of training samples for PQ training.
     #[staticmethod]
     #[pyo3(signature = (data_path, m_pq, nbits=8, m=32, ef_construction=200, metric="ip".to_string(), sample_size=100_000))]
-    pub fn build(
+    pub fn build_from_file(
         data_path: &str,
         m_pq: usize,
         nbits: usize,
@@ -856,6 +1116,129 @@ impl DensePQHNSW {
         sample_size: usize,
     ) -> PyResult<Self> {
         let (data_vec, dim) = read_numpy_f32_flatten_2d(data_path.to_string());
+
+        // Choose distance type.
+        let distance = match metric.as_str() {
+            "l2" => DistanceType::Euclidean,
+            "ip" => DistanceType::DotProduct,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid metric; choose 'l2' or 'ip'",
+                ))
+            }
+        };
+
+        // Build the HNSW configuration.
+        let config = ConfigHnsw::new()
+            .num_neighbors(m)
+            .ef_construction(ef_construction)
+            .build();
+
+        // Create a base dataset (using a plain quantizer as a placeholder).
+        let base_dataset = Box::new(DenseDataset::from_vec(
+            data_vec,
+            dim,
+            PlainQuantizer::<f32>::new(dim, distance),
+        ));
+        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(base_dataset);
+
+        // Sample training data from the dataset.
+        let mut rng = StdRng::seed_from_u64(523);
+        let mut training_vec: Vec<f32> = Vec::new();
+        for vec in static_dataset.iter().choose_multiple(&mut rng, sample_size) {
+            training_vec.extend(vec.values_as_slice());
+        }
+        let training_dataset =
+            DenseDataset::from_vec(training_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
+
+        let num_threads = rayon::current_num_threads();
+
+        // Dispatch based on m_pq.
+        let inner = match m_pq {
+            8 => {
+                let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ8(index)
+            }
+            16 => {
+                let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ16(index)
+            }
+            32 => {
+                let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ32(index)
+            }
+            48 => {
+                let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ48(index)
+            }
+            64 => {
+                let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ64(index)
+            }
+            96 => {
+                let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ96(index)
+            }
+            128 => {
+                let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ128(index)
+            }
+            192 => {
+                let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ192(index)
+            }
+            256 => {
+                let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ256(index)
+            }
+            384 => {
+                let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
+                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                DensePQHNSWEnum::PQ384(index)
+            }
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
+                ))
+            }
+        };
+
+        Ok(DensePQHNSW { inner })
+    }
+
+    /// Build a PQ index from a 1D NumPy array given the dimensionality.
+    ///
+    /// Parameters:
+    /// - `data_vec`: a 1D f32 array of len `num_docs * dim`.
+    /// - `dim`: dimensionality of the data
+    /// - `m`: number of neighbors per node (for the HNSW graph)
+    /// - `ef_construction`: candidate pool size during construction
+    /// - `m_pq`: number of subspaces (const generic for ProductQuantizer). Supported values: 8, 16, or 32.
+    /// - `nbits`: number of bits for each subspace.
+    /// - `metric`: "l2" for Euclidean or "ip" for inner product.
+    /// - `sample_size`: number of training samples for PQ training.
+    #[staticmethod]
+    #[pyo3(signature = (data_vec, dim, m_pq, nbits=8, m=32, ef_construction=200, metric="ip".to_string(), sample_size=100_000))]
+    pub fn build_from_array(
+        data_vec: PyReadonlyArray1<f32>,
+        dim: usize,
+        m_pq: usize,
+        nbits: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+        sample_size: usize,
+    ) -> PyResult<Self> {
+        let data_vec = data_vec.as_slice()?.to_vec();
 
         // Choose distance type.
         let distance = match metric.as_str() {

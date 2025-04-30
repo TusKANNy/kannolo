@@ -8,7 +8,7 @@ from kannolo import DensePQHNSW
 import numpy as np
 ```
 
-The functioning of f16 indexes is the same as that of f32 ones, we outline examples for f32 indexes.
+The functioning of f16 indexes is the same as that of standard (f32) ones, we outline examples for f32 indexes.
 
 ### Index Construction
 
@@ -20,12 +20,12 @@ m = 32 # n. neighbors per node
 metric = "ip" # Inner product
 ```
 
-Build HNSW index on dense, plain data.
+Build HNSW index on dense, plain data stored in a file.
 
 ```python
 npy_input_file = "" # your input file
 
-index = DensePlainHNSW.build(npy_input_file, m, efConstruction, "ip")
+index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, "ip")
 ```
 
 Build HNSW index on dense, PQ-encoded data.
@@ -38,7 +38,7 @@ m_pq = 192 # Number of subspaces of PQ
 nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
 sample_size = 500_000 # Size of the sample of the dataset for training PQ
 
-index = DensePQHNSW.build(data_path, m_pq, nbits, m, efConstruction, "ip", sample_size)
+index = DensePQHNSW.build_from_file(data_path, m_pq, nbits, m, efConstruction, "ip", sample_size)
 ```
 
 
@@ -55,8 +55,10 @@ Binary File Format:
 """
 bin_input_file = "" # your input file
 
-index = SparsePlainHNSW.build(data_path, m, efConstruction, "ip")
+index = SparsePlainHNSW.build_from_file(data_path, m, efConstruction, "ip")
 ```
+
+Alternatively, it is possible to build indexes directly with numpy arrays using the  ```build_from_array()``` function for dense data and the ```build_from_arrays()``` function for sparse data, instead of loading from file. 
 
 ### Search
 

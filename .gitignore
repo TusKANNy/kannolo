@@ -285,3 +285,6 @@ data_for_testing/
 # Privte toml files
 /build_toml_files
 /search_toml_files
+
+# Notebooks for personal tests
+/other_notebooks

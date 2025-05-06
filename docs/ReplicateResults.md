@@ -13,7 +13,7 @@ Datasets can be found at [`Hugging Face`](https://huggingface.co/collections/tus
 Here is an example
 
 ```bash
-python3 scripts_experiments/run_search.py --exp search_toml_files_pub/run_search_dense_dragon.toml  
+python3 scripts/run_search.py --exp search_toml_files_pub/run_search_dense_dragon.toml  
 ```
 
 Make sure to provide the correct paths in the `toml` files.

@@ -72,7 +72,6 @@ impl DensePlainHNSW {
         Ok(DensePlainHNSW { index })
     }
 
-
     /// Build a dense plain index from a 1D NumPy array given the dimensionality.
     /// - `data_vec`: a 1D f32 array of len num_docs * dim
     /// - `dim`: dimensionality of the data
@@ -88,7 +87,6 @@ impl DensePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-
         let data_vec = data_vec.as_slice()?.to_vec();
 
         // Determine the distance type.
@@ -124,7 +122,6 @@ impl DensePlainHNSW {
 
         Ok(DensePlainHNSW { index })
     }
-
 
     /// Save the index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
@@ -364,7 +361,6 @@ impl DensePlainHNSWf16 {
         Ok(DensePlainHNSWf16 { index })
     }
 
-
     /// Save the index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
         IndexSerializer::save_index(path, &self.index).map_err(|e| {
@@ -571,7 +567,6 @@ impl SparsePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-
         let components_vec = components
             .to_vec()
             .unwrap()
@@ -599,7 +594,12 @@ impl SparsePlainHNSW {
 
         // Read the sparse dataset from file.
         let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(components_vec.as_slice(), values_slice, offsets_vec.as_slice()).map_err(|e| {
+            SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(
+                components_vec.as_slice(),
+                values_slice,
+                offsets_vec.as_slice(),
+            )
+            .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading dataset: {:?}",
                     e
@@ -842,7 +842,7 @@ impl SparsePlainHNSWf16 {
         Ok(SparsePlainHNSWf16 { index })
     }
 
-        /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
+    /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
     /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
     /// - `m`: number of neighbors per node
@@ -858,7 +858,6 @@ impl SparsePlainHNSWf16 {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-
         let components_vec = components
             .to_vec()
             .unwrap()
@@ -891,7 +890,12 @@ impl SparsePlainHNSWf16 {
 
         // Read the sparse dataset from file.
         let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(components_vec.as_slice(), values_vec.as_slice(), offsets_vec.as_slice()).map_err(|e| {
+            SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(
+                components_vec.as_slice(),
+                values_vec.as_slice(),
+                offsets_vec.as_slice(),
+            )
+            .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading dataset: {:?}",
                     e

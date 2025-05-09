@@ -10,7 +10,7 @@ TOML files to reproduce the experiments of our paper can be found in [`reproduce
 
 Datasets can be found at [`Hugging Face`](https://huggingface.co/collections/tuskanny/kannolo-datasets-67f2527781f4f7a1b4c9fe54).
 
-As an example, let's now run the experiments using the TOML file [`reproduce_experiments/ecir2025/dense_sift1m.toml`](reproduce_experiments/ecir2025/dense_sift1m.toml), , which replicates the results of kANNolo on the SIFT1M dataset.
+As an example, let's now run the experiments using the TOML file [`reproduce_experiments/ecir2025/dense_sift1m.toml`](reproduce_experiments/ecir2025/dense_sift1m.toml), which replicates the results of kANNolo on the SIFT1M dataset.
 
 ### <a name="bin_data">Setting up for the Experiment</a>
 Let's start by creating a working directory for the data and indexes.

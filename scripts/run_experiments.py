@@ -102,6 +102,67 @@ def get_index_filename(base_filename, configs):
     return "_".join(str(l) for l in name)
 
 
+def build_index(configs, experiment_dir):
+    """Build the index using the provided configuration."""
+    input_file =  os.path.join(configs["folder"]["data"], configs["filename"]["dataset"])
+    index_folder = configs["folder"]["index"]
+
+    os.makedirs(index_folder, exist_ok=True)
+    output_file = os.path.join(index_folder, get_index_filename(configs["filename"]["index"], configs))
+    
+    print()
+    print(colored(f"Dataset filename:", "blue"), input_file)
+    print(colored(f"Index filename:", "blue"), output_file)
+
+    build_command = configs.get("build-command", None)
+    if not build_command:
+        raise ValueError("Build command must be specified!!!")
+
+    command_and_params = [
+        build_command,
+        f"--data-file {input_file}",
+        f"--output-file {output_file}",
+        f"--m {configs['indexing_parameters']['m']}",
+        f"--efc {configs['indexing_parameters']['efc']}",
+        f"--metric {configs['indexing_parameters']['metric']}",
+    ] 
+
+    # If there is a section [pq_params] in the configuration file, add the parameters to the command
+    if "pq_parameters" in configs:
+        for k, v in configs["pq_parameters"].items():
+            command_and_params.append(f"--{k} {v}")
+
+    command = ' '.join(command_and_params)
+
+    # Print the command that will be executed
+    print()
+    print(colored(f"Indexing", "green"))
+    print(colored(f"Indexing command:", "blue"), command)
+
+    building_output_file = os.path.join(experiment_dir, "building.output")
+
+    # Build the index and display output in real-time
+    print(colored("Building index...", "yellow"))
+    building_time = 0
+    with open(building_output_file, "w") as build_output:
+        build_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for line in iter(build_process.stdout.readline, b''):
+            decoded_line = line.decode()
+            print(decoded_line, end='')  # Print each line as it is produced
+            build_output.write(decoded_line)  # Write each line to the output file
+            if decoded_line.startswith("Time to build ") and decoded_line.strip().endswith("(before serializing)"):
+                building_time = int(decoded_line.split()[3])
+        build_process.stdout.close()
+        build_process.wait()
+
+    if build_process.returncode != 0:
+        print(colored("ERROR: Indexing failed!", "red"))
+        sys.exit(1)
+
+    print(colored(f"Index built successfully in {building_time} secs!", "yellow"))
+    return building_time
+
+
 def compute_metric(configs, output_file, gt_file, metric): 
 
     if metric == None or metric == "":
@@ -382,6 +443,12 @@ def run_experiment(config_data):
     
     compile_rust_code(config_data, experiment_folder)
 
+    building_time = 0
+    if config_data['settings']['build']:
+        building_time = build_index(config_data, experiment_folder)
+    else:
+        print("Index is already built!")
+
     metric = config_data['settings']['metric']
     print(f"Evaluation runs with metric {metric}")
     
@@ -404,7 +471,7 @@ def main(experiment_config_filename):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Load a kANNolo index and query it.")
+    parser = argparse.ArgumentParser(description="Run a kANNolo experiment on a dataset and query it.")
     parser.add_argument("--exp", required=True, help="Path to the experiment configuration TOML file.")
     args = parser.parse_args()
 

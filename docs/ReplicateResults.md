@@ -2,18 +2,74 @@
 
 We provide a quick way to replicate the results of our paper. 
 
-Use the scripts in `scripts/` to quickly reproduce a result from the paper. 
+Use the `scripts/run_experiments.py` script to quickly reproduce a result from the paper. 
+This script is configurable via TOML files, which specify the parameters to build the index and execute queries on it.  
+The script measures average query time (in microseconds), recall with respect to the true closest vectors of the query (accuracy@k), MRR or other metrics with respect to judged qrels if specified, and index space usage (bytes).
 
-Use `scripts/build_index.py` to build the indexes. Use `scripts/run_search.py` to perform a search.
-
-Use the files in `build_toml_files_pub/` and `search_toml_files_pub` to specify the experiment to reproduce.
+TOML files to reproduce the experiments of our paper can be found in `reproduce_experiments/ecir2025`.
 
 Datasets can be found at [`Hugging Face`](https://huggingface.co/collections/tuskanny/kannolo-datasets-67f2527781f4f7a1b4c9fe54).
 
-Here is an example
+As an example, let's now run the experiments using the TOML file [`reproduce_experiments/ecir2025/dense_sift1m.toml`](reproduce_experiments/ecir2025/dense_sift1m.toml), , which replicates the results of kANNolo on the SIFT1M dataset.
+
+### <a name="bin_data">Setting up for the Experiment</a>
+Let's start by creating a working directory for the data and indexes.
 
 ```bash
-python3 scripts/run_search.py --exp search_toml_files_pub/run_search_dense_dragon.toml  
+mkdir -p ~/kannolo_data/
+mkdir -p ~/kannolo_data/indexes
 ```
 
-Make sure to provide the correct paths in the `toml` files.
+We need to download datasets, queries, ground truth (and, eventually, qrels and query IDs) as follows. Here, we are downloading SIFT1M vectors.  
+
+```bash
+cd ~/kannolo_data/
+git clone https://huggingface.co/datasets/tuskanny/kannolo-sift1M
+```
+
+
+### Running the Experiment
+We are now ready to run the experiment.
+
+First, clone the kANNolo Git repository and compile kANNolo:
+
+```bash
+cd ~
+git clone git@github.com:TusKANNy/kannolo.git
+cd kannolo
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+```
+
+If needed, install Rust on your machine with the following command:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Now we can run the experiment with the following command:
+
+```bash
+python3 scripts/run_experiments.py --exp reproduce_experiments/ecir2025/dense_sift1m.toml
+```
+
+Please install the required Python's libraries with the following command:
+```bash
+pip install -r scripts/requirements.txt
+```
+
+The script will build an index using the parameters in the `[indexing_parameters]` section of the TOML file.  
+The index is saved in the directory `~/kannolo_data/indexes`.  
+You can change directory names by modifying the `[folders]` section in the TOML file.
+
+Next, the script will query the same index with different parameters, as specified in the `[query]` section.  
+These parameters provide different trade-offs between query time and accuracy.
+
+**Important**: if your machine is NUMA, the NUMA setting in the TOML file should be UNcommented and should be configured according to your hardware for better performance. 
+
+### Getting the Results
+The script creates a folder named `sift_hnsw_XXX`, where `XXX` encodes the datetime at which the script was executed. This ensures that each run creates a unique directory.
+
+Inside the folder, you can find the data collected during the experiment.
+
+The most important file is `report.tsv`, which reports *query time* and *accuracy*.
+

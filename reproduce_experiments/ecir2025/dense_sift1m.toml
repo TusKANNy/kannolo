@@ -1,34 +1,37 @@
-name =          "sparse_hnsw_search"
-title =         "Search sparse HNSWM on MSMARCO"
-description =   "Search sparse HNSWM on MSMARCO with memory budget 1.5"
-dataset =       "Splade cocondenser on MS-MARCO"
+name =          "sift_hnsw"
+title =         "Search dense HNSWM on SIFT1M"
+description =   "Search dense HNSWM on SIFT1M"
+dataset =       "SIFT1M"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
-query-command = "./target/release/hnsw_plain_sparse_run"
+build-command = "./target/release/hnsw_plain_dense_build"
+query-command = "./target/release/hnsw_plain_dense_run"
 
 [settings]
 k =             10
 n-runs =        1       # Number of runs. PLEASE think carefully how increasing 
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
-metric =        "RR@10"
+build =         true   # Need to build the index or the index is already built?
+metric =        ""
 
 [folder] 
-data =          # data base path
-index =         # index input path
-qrels_path =    "qrels.dev.small.tsv" 
+data =          "~/exp_folder/kannolo-sift1M" # data base path
+index =         "~/exp_folder/kannolo-sift1M/indexes" # index input path
+qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
 [filename]
-queries =       "queries.bin" # queries input file
-groundtruth =   "groundtruth.tsv" # ground truth input file
-doc_ids =       "doc_ids.npy"
-query_ids =     "queries_ids.npy"
-index =         # index input file name
+dataset =       "dataset.npy" # dataset input file name
+queries =       "queries.npy" # queries input file name
+groundtruth =   "groundtruth.npy" # ground truth input file
+doc_ids =       ""
+query_ids =     ""
+index =         "ecir_2025_sift1m" # index file name
 
 [indexing_parameters]
-m =            32
-efc =          2000
-metric =       "ip"
+m =            16
+efc =          150
+metric =       "l2"
 
 [query]
     [query.efs_10]

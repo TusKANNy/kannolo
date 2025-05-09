@@ -139,9 +139,11 @@ pub trait DArray1 {
     fn values_as_slice(&self) -> &[Self::ValuesType];
 }
 
+static EMPTY_COMPONENTS: [(); 0] = [];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DenseDArray1<T: AsRefItem> {
-    components: Vec<()>,
+    components: (),
     values: T,
 }
 
@@ -149,7 +151,7 @@ impl<T: AsRefItem> DenseDArray1<T> {
     #[inline]
     pub fn new(values: T) -> Self {
         DenseDArray1 {
-            components: Vec::default(),
+            components: (),
             values,
         }
     }
@@ -166,7 +168,7 @@ impl<T: AsRefItem> DArray1 for DenseDArray1<T> {
 
     #[inline(always)]
     fn components_as_slice(&self) -> &[Self::ComponentsType] {
-        self.components.as_ref()
+        &EMPTY_COMPONENTS
     }
 
     #[inline(always)]

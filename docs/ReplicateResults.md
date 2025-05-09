@@ -2,11 +2,11 @@
 
 We provide a quick way to replicate the results of our paper. 
 
-Use the `scripts/run_experiments.py` script to quickly reproduce a result from the paper. 
+Use the [`scripts/run_experiments.py`](scripts/run_experiments.py) script to quickly reproduce a result from the paper. 
 This script is configurable via TOML files, which specify the parameters to build the index and execute queries on it.  
 The script measures average query time (in microseconds), recall with respect to the true closest vectors of the query (accuracy@k), MRR or other metrics with respect to judged qrels if specified, and index space usage (bytes).
 
-TOML files to reproduce the experiments of our paper can be found in `reproduce_experiments/ecir2025`.
+TOML files to reproduce the experiments of our paper can be found in [`reproduce_experiments/ecir2025`](reproduce_experiments/ecir2025).
 
 Datasets can be found at [`Hugging Face`](https://huggingface.co/collections/tuskanny/kannolo-datasets-67f2527781f4f7a1b4c9fe54).
 

@@ -1,10 +1,10 @@
-name =          "dragon_hnsw_pq_search"
-title =         "Search dense HNSWM on MSMARCO (Dragon)"
-description =   "Search dense HNSWM on MSMARCO (Dragon)"
-dataset =       "Dragon on MS-MARCO"
+name =          "sift_hnsw"
+title =         "Search dense HNSWM on SIFT1M"
+description =   "Search dense HNSWM on SIFT1M"
+dataset =       "SIFT1M"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
-build-command = "./target/release/hnsw_pq_build"
-query-command = "./target/release/hnsw_pq_run"
+build-command = "./target/release/hnsw_plain_dense_build"
+query-command = "./target/release/hnsw_plain_dense_run"
 
 [settings]
 k =             10
@@ -15,8 +15,8 @@ build =         true   # Need to build the index or the index is already built?
 metric =        ""
 
 [folder] 
-data =          "~/exp_folder/kannolo-msmarco-dragon" # data base path
-index =         "~/exp_folder/kannolo-msmarco-dragon/indexes" # index input path
+data =          "~/knn_datasets/dense_datasets/sift1M" # data base path
+index =         "~/knn_indexes/dense_datasets/sift1M" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
@@ -26,17 +26,12 @@ queries =       "queries.npy" # queries input file name
 groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_pq_dragon" # index file name
+index =         "ecir_2025_sift1m" # index file name
 
 [indexing_parameters]
-m =            32
-efc =          200
-metric =       "ip"
-
-[pq_parameters]
-m-pq =         192
-nbits =       8
-sample-size =  1000000
+m =            16
+efc =          150
+metric =       "l2"
 
 [query]
     [query.efs_10]

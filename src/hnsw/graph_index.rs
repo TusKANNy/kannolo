@@ -491,4 +491,29 @@ where
             add_distances_fn(distance_neighbor, *neighbor);
         }
     }
+
+    /// Help function to print the space usage of the index.
+    pub fn print_space_usage_byte(&self) -> usize {
+        println!("Space Usage:");
+        let forward: usize = self.dataset.get_space_usage_bytes();
+        println!("\tForward Index: {:} Bytes", forward);
+        let levels: usize = self
+            .levels
+            .iter()
+            .map(|level| level.get_space_usage_bytes())
+            .sum();
+
+        let permutation: usize = self.id_permutation.len() * std::mem::size_of::<usize>();
+
+        let additional: usize = 2 * std::mem::size_of::<usize>();
+
+        println!("\tLinks structure: {:} Bytes", levels + permutation + additional);
+
+        println!("\tTotal: {:} Bytes",
+            forward + permutation + additional + levels
+        );
+
+        forward + permutation + additional + levels
+    }
+
 }

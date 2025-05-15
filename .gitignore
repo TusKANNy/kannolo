@@ -268,9 +268,6 @@ $RECYCLE.BIN/
 # local script must added manually
 *.sh
 
-# data for testing directory
-data_for_testing/
-
 # benchmark files
 *.txt
 *.csv
@@ -278,13 +275,6 @@ data_for_testing/
 
 # serialized indexes
 /index_hnsw_serialized
-
-# experiments data and results
-/experiments
-
-# Privte toml files
-/build_toml_files
-/search_toml_files
 
 # Notebooks for personal tests
 /other_notebooks

@@ -1,7 +1,7 @@
-name =          "sift_hnsw"
-title =         "Search dense HNSWM on SIFT1M"
-description =   "Search dense HNSWM on SIFT1M"
-dataset =       "SIFT1M"
+name =          "star_hnsw_search"
+title =         "Search dense HNSWM on MSMARCO (Star)"
+description =   "Search dense HNSWM on MSMARCO (Star)"
+dataset =       "Star on MS-MARCO"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
 build-command = "./target/release/hnsw_plain_dense_build"
 query-command = "./target/release/hnsw_plain_dense_run"
@@ -15,8 +15,8 @@ build =         true   # Need to build the index or the index is already built?
 metric =        ""
 
 [folder] 
-data =          "~/exp_folder/kannolo-sift1M" # data base path
-index =         "~/exp_folder/kannolo-sift1M/indexes" # index input path
+data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/star" # data base path
+index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/star" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
@@ -26,12 +26,12 @@ queries =       "queries.npy" # queries input file name
 groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_sift1m" # index file name
+index =         "ecir_2025_star" # index file name
 
 [indexing_parameters]
-m =            16
-efc =          150
-metric =       "l2"
+m =            32
+efc =          200
+metric =       "ip"
 
 [query]
     [query.efs_10]

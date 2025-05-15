@@ -1,10 +1,10 @@
-name =          "dragon_hnsw"
-title =         "Search dense HNSWM on MSMARCO (Dragon)"
-description =   "Search dense HNSWM on MSMARCO (Dragon)"
-dataset =       "Dragon on MS-MARCO"
+name =          "sparse_hnsw_search"
+title =         "Search sparse HNSWM on MSMARCO"
+description =   "Search sparse HNSWM on MSMARCO with memory budget 1.5"
+dataset =       "Splade cocondenser on MS-MARCO"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
-build-command = "./target/release/hnsw_plain_dense_build"
-query-command = "./target/release/hnsw_plain_dense_run"
+build-command = "./target/release/hnsw_plain_sparse_build"
+query-command = "./target/release/hnsw_plain_sparse_run"
 
 [settings]
 k =             10
@@ -12,25 +12,25 @@ n-runs =        1       # Number of runs. PLEASE think carefully how increasing
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         true   # Need to build the index or the index is already built?
-metric =        ""
+metric =        "RR@10"
 
 [folder] 
-data =          "~/exp_folder/kannolo-msmarco-dragon" # data base path
-index =         "~/exp_folder/kannolo-msmarco-dragon/indexes" # index input path
-qrels_path =    ""
+data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/splade" # data base path
+index =         "~/knn_indexes/sparse_datasets/msmarco_v1_passage/splade" # index input path
+qrels_path =    "~/knn_datasets/sparse_datasets/msmarco_v1_passage/qrels.dev.small.tsv" 
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
 [filename]
-dataset =       "dataset.npy" # dataset input file name
-queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth.npy" # ground truth input file
-doc_ids =       ""
-query_ids =     ""
-index =         "ecir_2025_dragon" # index file name
+dataset =       "documents.bin"
+queries =       "queries.bin" # queries input file
+groundtruth =   "groundtruth.tsv" # ground truth input file
+doc_ids =       "doc_ids.npy"
+query_ids =     "queries_ids.npy"
+index =         "ecir_2025_splade" # index input file name
 
 [indexing_parameters]
 m =            32
-efc =          200
+efc =          2000
 metric =       "ip"
 
 [query]

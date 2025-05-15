@@ -110,6 +110,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         16 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>> =
@@ -124,6 +125,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         32 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>> =
@@ -138,6 +140,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         48 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>> =
@@ -152,6 +155,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         64 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>> =
@@ -166,6 +170,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         96 => {
             println!("Sono entrato pd");
@@ -181,6 +186,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         128 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>> =
@@ -195,6 +201,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         192 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>> =
@@ -209,6 +216,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         256 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>> =
@@ -223,6 +231,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         384 => {
             let index: GraphIndex<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>> =
@@ -237,6 +246,7 @@ fn main() {
                 let duration_search = start_time.elapsed();
                 total_time_search += duration_search.as_micros();
             }
+            index.print_space_usage_byte();
         }
         _ => {
             panic!("Unsupported M_PQ value");

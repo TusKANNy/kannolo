@@ -107,6 +107,8 @@ fn main() {
 
     println!("[######] Average Query Time: {avg_time_search_per_query}");
 
+    index.print_space_usage_byte();
+
     let output_path = args.output_path.unwrap();
     let mut output_file = File::create(output_path).unwrap();
 

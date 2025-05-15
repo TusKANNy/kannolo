@@ -366,16 +366,16 @@ def get_machine_info(configs, experiment_folder):
     governor = subprocess.Popen(command_governor, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     governor.wait()
 
-    # for line in iter(governor.stdout.readline, b''):
-    #     cpus_with_performance_governor = int(line.decode())
-    #     machine_info.write(f'Number of CPUs with governor set to "performance" (should be equal to the number of CPUs below): {cpus_with_performance_governor}\n')
+    for line in iter(governor.stdout.readline, b''):
+        cpus_with_performance_governor = int(line.decode())
+        machine_info.write(f'Number of CPUs with governor set to "performance" (should be equal to the number of CPUs below): {cpus_with_performance_governor}\n')
 
     # checking if the hardware looks well configured...
-    # if (num_cpus != cpus_with_performance_governor):
-    #     print()
-    #     print(colored("ERROR: Problems with hardware configuration found!", "red"))
-    #     print(colored("Your CPU is not set to performance mode. Please, run `cpufreq-info` for more details.", "red"))
-    #     print()
+    if (num_cpus != cpus_with_performance_governor):
+        print()
+        print(colored("ERROR: Problems with hardware configuration found!", "red"))
+        print(colored("Your CPU is not set to performance mode. Please, run `cpufreq-info` for more details.", "red"))
+        print()
 
     machine_info.write(f"\n-----------------\n")
     machine_info.write(f"CPU configuration\n")
@@ -427,7 +427,7 @@ def run_experiment(config_data):
 
     # Create an experiment folder with date and hour
     timestamp  = str(datetime.now().strftime("%Y-%m-%d_%H:%M:%S"))
-    experiment_folder = os.path.join(config_data["folder"]["experiment"], f"experiments/{experiment_name}_{timestamp}")
+    experiment_folder = os.path.join(config_data["folder"]["experiment"], f"{experiment_name}_{timestamp}")
 
     os.makedirs(experiment_folder, exist_ok=True)
 
@@ -454,11 +454,17 @@ def run_experiment(config_data):
     
     # Execute queries for each subsection under [query]
     with open(os.path.join(experiment_folder, "report.tsv"), 'w') as report_file:
-        report_file.write(f"Subsection\tQuery Time (microsecs)\tRecall\t{metric}\tMemory Usage (Bytes)\n")
+        if metric != "":
+            # Concatenate \t{metric} 
+            metric = f"\t{metric}"
+        report_file.write(f"Subsection\tQuery Time (microsecs)\tRecall{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
         if 'query' in config_data:
             for subsection, query_config in config_data['query'].items():
                 query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection)
-                report_file.write(f"{subsection}\t{query_time}\t{recall}\t{metric}\t{memory_usage}\n")
+                if metric is not None:
+                    report_file.write(f"{subsection}\t{query_time}\t{recall}\t{metric}\t{memory_usage}\t{building_time}\n")
+                else:
+                    report_file.write(f"{subsection}\t{query_time}\t{recall}\t{memory_usage}\t{building_time}\n")
 
 def main(experiment_config_filename):
     config_data = parse_toml(experiment_config_filename)

@@ -192,4 +192,9 @@ impl Level {
         let num_neighbors = self.offsets[id_vec + 1] - start;
         &self.neighbors[start..start + num_neighbors]
     }
+
+    pub fn get_space_usage_bytes(&self) -> usize {
+        self.neighbors.len() * std::mem::size_of::<usize>()
+            + self.offsets.len() * std::mem::size_of::<usize>()
+    }
 }

@@ -2,7 +2,7 @@
 
 <h1 align="center">kANNolo</h1>
 <p align="center">
-    <img width="300px" src="imgs/kannolo.png" />
+    <img width="300px" src="/imgs/kannolo.png" />
 </p>
 
 <p align="center">

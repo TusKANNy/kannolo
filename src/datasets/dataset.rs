@@ -31,9 +31,7 @@ where
 
     fn len(&self) -> usize;
 
-    fn get_space_usage_bytes(&self) -> usize {
-        self.len() * self.dim() * std::mem::size_of::<Q::OutputItem>()
-    }
+    fn get_space_usage_bytes(&self) -> usize;
 
     #[inline]
     #[must_use]

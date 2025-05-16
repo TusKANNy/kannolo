@@ -68,6 +68,11 @@ where
         self.n_vecs * self.d
     }
 
+    fn get_space_usage_bytes(&self) -> usize {
+        self.len() * self.dim() * std::mem::size_of::<Q::OutputItem>()
+            + self.quantizer.get_space_usage_bytes()
+    }
+
     #[inline]
     fn get(&'a self, index: usize) -> Self::DataType {
         assert!(index < self.len(), "Index out of bounds.");

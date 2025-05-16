@@ -114,7 +114,7 @@ where
 
     #[inline]
     fn dim(&self) -> usize {
-        // id massima componente + 1
+        // id maximum component + 1
         self.d
     }
 
@@ -126,6 +126,13 @@ where
     #[inline]
     fn nnz(&self) -> usize {
         self.components.as_ref().len()
+    }
+
+    fn get_space_usage_bytes(&self) -> usize {
+        let components = self.components.as_ref().len() * std::mem::size_of::<u16>();
+        let values = self.values.as_ref().len() * std::mem::size_of::<Q::OutputItem>();
+        let offsets = self.offsets.as_ref().len() * std::mem::size_of::<usize>();
+        components + values + offsets + self.quantizer.get_space_usage_bytes()
     }
 
     #[inline]

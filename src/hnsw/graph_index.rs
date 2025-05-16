@@ -507,13 +507,16 @@ where
 
         let additional: usize = 2 * std::mem::size_of::<usize>();
 
-        println!("\tLinks structure: {:} Bytes", levels + permutation + additional);
+        println!(
+            "\tLinks structure: {:} Bytes",
+            levels + permutation + additional
+        );
 
-        println!("\tTotal: {:} Bytes",
+        println!(
+            "\tTotal: {:} Bytes",
             forward + permutation + additional + levels
         );
 
         forward + permutation + additional + levels
     }
-
 }

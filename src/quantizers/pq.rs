@@ -122,6 +122,10 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
     fn distance(&self) -> DistanceType {
         self.distance
     }
+
+    fn get_space_usage_bytes(&self) -> usize {
+        4 * std::mem::size_of::<usize>() + self.centroids.len() * std::mem::size_of::<f32>()
+    }
 }
 
 impl<'a, const M: usize> ProductQuantizer<M> {

@@ -56,6 +56,10 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     fn distance(&self) -> DistanceType {
         self.distance
     }
+
+    fn get_space_usage_bytes(&self) -> usize {
+        std::mem::size_of::<usize>()
+    }
 }
 
 pub struct QueryEvaluatorPlain<

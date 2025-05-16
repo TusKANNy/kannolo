@@ -31,6 +31,8 @@ pub trait Quantizer: Sized {
     fn m(&self) -> usize;
 
     fn distance(&self) -> DistanceType;
+
+    fn get_space_usage_bytes(&self) -> usize;
 }
 
 pub trait QueryEvaluator<'a> {

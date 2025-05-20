@@ -10,7 +10,7 @@ use kannolo::{
     hnsw::graph_index::GraphIndex, hnsw_utils::config_hnsw::ConfigHnsw, Dataset, DistanceType,
     IndexSerializer,
 };
-use kannolo::{read_numpy_f32_flatten_2d, DArray1, DenseDataset};
+use kannolo::{read_numpy_f32_flatten_2d, Vector1D, DenseDataset};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]

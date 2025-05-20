@@ -16,7 +16,7 @@ use std::io::{BufReader, Read, Result as IoResult};
 use std::ops::Range;
 use std::path::Path;
 
-use crate::{DArray1, SparseDArray1};
+use crate::{Vector1D, SparseVector1D};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ where
     C::Type<u16>: AsRef<[u16]>,
     C::Type<usize>: AsRef<[usize]>,
 {
-    type DataType = SparseDArray1<&'a [u16], &'a [Q::OutputItem]>;
+    type DataType = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
 
     #[inline]
     fn new(quantizer: Q, _d: usize) -> Self {
@@ -109,7 +109,7 @@ where
 
     #[inline]
     fn data(&'a self) -> Self::DataType {
-        SparseDArray1::new(self.components.as_ref(), self.values.as_ref())
+        SparseVector1D::new(self.components.as_ref(), self.values.as_ref())
     }
 
     #[inline]
@@ -143,7 +143,7 @@ where
             &self.components.as_ref()[Self::vector_range(self.offsets.as_ref(), index)];
         let v_values = &self.values.as_ref()[Self::vector_range(self.offsets.as_ref(), index)];
 
-        SparseDArray1::new(v_components, v_values)
+        SparseVector1D::new(v_components, v_values)
     }
 
     #[inline]
@@ -236,7 +236,7 @@ where
         &self,
         offset: usize,
         len: usize,
-    ) -> SparseDArray1<&[u16], &[Q::OutputItem]> {
+    ) -> SparseVector1D<&[u16], &[Q::OutputItem]> {
         assert!(
             offset + len <= self.components.as_ref().len(),
             "The id is out of range"
@@ -245,7 +245,7 @@ where
         let v_components = &self.components.as_ref()[offset..offset + len];
         let v_values = &self.values.as_ref()[offset..offset + len];
 
-        SparseDArray1::new(v_components, v_values)
+        SparseVector1D::new(v_components, v_values)
     }
 
     #[must_use]
@@ -274,7 +274,7 @@ where
     C: Container<Type<u16> = Vec<u16>>,
     C: Container<Type<usize> = Vec<usize>>,
 {
-    type InputDataType = SparseDArray1<&'a [u16], &'a [Q::InputItem]>;
+    type InputDataType = SparseVector1D<&'a [u16], &'a [Q::InputItem]>;
 
     #[inline]
     fn push(&mut self, vec: &Self::InputDataType) {
@@ -363,7 +363,7 @@ where
                 values.push(f16::from_f32(v));
             }
 
-            data.push(&SparseDArray1::new(&components, &values));
+            data.push(&SparseVector1D::new(&components, &values));
         }
 
         Ok(data)
@@ -410,7 +410,7 @@ where
                 values.push(v);
             }
 
-            data.push(&SparseDArray1::new(&components, &values));
+            data.push(&SparseVector1D::new(&components, &values));
         }
 
         Ok(data)
@@ -536,7 +536,7 @@ where
             let vec_components = &components[start..end];
             let vec_values = &values[start..end];
 
-            dataset.push(&SparseDArray1::new(vec_components, vec_values));
+            dataset.push(&SparseVector1D::new(vec_components, vec_values));
         }
 
         Ok(dataset)
@@ -560,7 +560,7 @@ where
             let vec_components = &components[start..end];
             let vec_values = &values[start..end];
 
-            dataset.push(&SparseDArray1::new(vec_components, vec_values));
+            dataset.push(&SparseVector1D::new(vec_components, vec_values));
         }
 
         Ok(dataset)
@@ -642,7 +642,7 @@ impl<'a, Q> Iterator for SparseDatasetIter<'a, Q>
 where
     Q: Quantizer,
 {
-    type Item = SparseDArray1<&'a [u16], &'a [Q::OutputItem]>;
+    type Item = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -657,7 +657,7 @@ where
 
         self.last_offset = next_offset;
 
-        Some(SparseDArray1::new(cur_components, cur_values))
+        Some(SparseVector1D::new(cur_components, cur_values))
     }
 }
 
@@ -682,7 +682,7 @@ where
     C: Container<Type<usize> = Vec<usize>>,
 {
     type Iter = ParSparseDatasetIter<'a, Q>;
-    type Item = SparseDArray1<&'a [u16], &'a [Q::OutputItem]>;
+    type Item = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
 
     fn into_par_iter(self) -> Self::Iter {
         ParSparseDatasetIter {
@@ -699,7 +699,7 @@ where
     Q: Quantizer,
     Q::OutputItem: Sync,
 {
-    type Item = SparseDArray1<&'a [u16], &'a [Q::OutputItem]>;
+    type Item = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
 
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where
@@ -761,7 +761,7 @@ where
 
         self.last_offset = last_offset;
 
-        Some(SparseDArray1::new(cur_components, cur_values))
+        Some(SparseVector1D::new(cur_components, cur_values))
     }
 }
 
@@ -780,7 +780,7 @@ where
     Q: Quantizer,
     Q::OutputItem: Sync,
 {
-    type Item = SparseDArray1<&'a [u16], &'a [Q::OutputItem]>;
+    type Item = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
     type IntoIter = SparseDatasetIter<'a, Q>;
 
     fn into_iter(self) -> Self::IntoIter {

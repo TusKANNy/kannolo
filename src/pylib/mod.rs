@@ -7,7 +7,7 @@ use crate::index_serializer::IndexSerializer;
 use crate::plain_quantizer::PlainQuantizer;
 use crate::pq::ProductQuantizer;
 use crate::sparse_plain_quantizer::SparsePlainQuantizer;
-use crate::{read_numpy_f32_flatten_2d, DArray1, Dataset, DenseDArray1, DistanceType};
+use crate::{read_numpy_f32_flatten_2d, Vector1D, Dataset, DenseVector1D, DistanceType};
 use half::f16;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -164,8 +164,8 @@ impl DensePlainHNSW {
         let mut search_config = ConfigHnsw::new().build();
         search_config.set_ef_search(ef_search);
 
-        // Wrap the query slice in a DenseDArray1.
-        let query_darray = DenseDArray1::new(query_slice);
+        // Wrap the query slice in a DenseVector1D.
+        let query_darray = DenseVector1D::new(query_slice);
 
         // Perform the search.
         let search_results = self
@@ -221,7 +221,7 @@ impl DensePlainHNSW {
 
         // Iterate over each query using chunks_exact (each chunk is one query).
         for query in queries_slice.chunks_exact(dim) {
-            let query_darray = DenseDArray1::new(query);
+            let query_darray = DenseVector1D::new(query);
             // Search returns a vector of (score, doc_id) pairs.
             let search_results = self
                 .index
@@ -405,7 +405,7 @@ impl DensePlainHNSWf16 {
         // Convert the f32 query to f16.
         let query_slice: Vec<f16> = query_slice.iter().map(|&v| f16::from_f32(v)).collect();
         let query_slice = query_slice.as_slice();
-        let query_darray = DenseDArray1::new(query_slice);
+        let query_darray = DenseVector1D::new(query_slice);
 
         // Perform the search.
         let search_results = self
@@ -464,7 +464,7 @@ impl DensePlainHNSWf16 {
             // Convert the f32 query to f16.
             let query: Vec<f16> = query.iter().map(|&v| f16::from_f32(v)).collect();
             let query_slice = query.as_slice();
-            let query_darray = DenseDArray1::new(query_slice);
+            let query_darray = DenseVector1D::new(query_slice);
             // Search returns a vector of (score, doc_id) pairs.
             let search_results = self
                 .index
@@ -1431,8 +1431,8 @@ impl DensePQHNSW {
         let mut search_config = ConfigHnsw::new().build();
         search_config.set_ef_search(ef_search);
 
-        // Wrap the query slice in a DenseDArray1 for search.
-        let query_darray = DenseDArray1::new(query_slice);
+        // Wrap the query slice in a DenseVector1D for search.
+        let query_darray = DenseVector1D::new(query_slice);
 
         // Dispatch the search call based on the internal PQ variant.
         let results = match &self.inner {
@@ -1543,7 +1543,7 @@ impl DensePQHNSW {
 
         // Iterate over each query (each chunk is one query).
         for query in queries_slice.chunks_exact(dim) {
-            let query_darray = DenseDArray1::new(query);
+            let query_darray = DenseVector1D::new(query);
             // Dispatch based on the internal PQ variant.
             let results = match &self.inner {
                 DensePQHNSWEnum::PQ8(index) => index

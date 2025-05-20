@@ -13,7 +13,7 @@ use crate::{Float, PlainDenseDataset};
 use itertools::izip;
 use rayon::prelude::*;
 
-use crate::{AsRefItem, DArray1, DenseDArray1};
+use crate::{AsRefItem, Vector1D, DenseVector1D};
 
 use serde::{Deserialize, Serialize};
 
@@ -368,7 +368,7 @@ impl<'a, const M: usize> ProductQuantizer<M> {
     }
 
     #[inline]
-    fn compute_euclidean_distance_table<T>(&self, query: &DenseDArray1<T>) -> Vec<f32>
+    fn compute_euclidean_distance_table<T>(&self, query: &DenseVector1D<T>) -> Vec<f32>
     where
         T: AsRefItem<Item = f32>,
     {
@@ -412,7 +412,7 @@ impl<'a, const M: usize> ProductQuantizer<M> {
     }
 
     #[inline]
-    pub fn compute_dot_product_table<T>(&self, query: &DenseDArray1<T>) -> Vec<f32>
+    pub fn compute_dot_product_table<T>(&self, query: &DenseVector1D<T>) -> Vec<f32>
     where
         T: AsRefItem<Item = f32>,
     {
@@ -486,7 +486,7 @@ pub struct QueryEvaluatorPQ<'a, const M: usize> {
 
 impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
     type Q = ProductQuantizer<M>;
-    type QueryType = DenseDArray1<&'a [f32]>;
+    type QueryType = DenseVector1D<&'a [f32]>;
 
     #[inline]
     fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {

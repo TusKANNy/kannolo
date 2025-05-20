@@ -1,7 +1,7 @@
 use crate::distances::dot_product_dense_sparse;
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{DArray1, DenseDArray1, SparseDArray1};
+use crate::{Vector1D, DenseVector1D, SparseVector1D};
 use crate::{Dataset, DistanceType, Float};
 use crate::{DotProduct, EuclideanDistance};
 
@@ -63,12 +63,12 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for SparsePlainQuan
 
 pub struct SparseQueryEvaluatorPlain<'a, T: Float + 'a> {
     dataset: &'a <<Self as QueryEvaluator<'a>>::Q as Quantizer>::DatasetType<'a>,
-    dense_query: DenseDArray1<Vec<T>>,
+    dense_query: DenseVector1D<Vec<T>>,
 }
 
 impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
     type Q = SparsePlainQuantizer<T>;
-    type QueryType = SparseDArray1<&'a [u16], &'a [T]>;
+    type QueryType = SparseVector1D<&'a [u16], &'a [T]>;
 
     #[inline]
     fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {
@@ -81,7 +81,7 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
             dense_query[i as usize] = v;
         }
 
-        let dense_query = DenseDArray1::new(dense_query);
+        let dense_query = DenseVector1D::new(dense_query);
 
         Self {
             dataset,

@@ -1,6 +1,6 @@
 use crate::distances::dot_product_unrolled_avx;
 use crate::simd_utils::horizontal_sum_256;
-use crate::{AsRefItem, DArray1, DenseDArray1};
+use crate::{AsRefItem, Vector1D, DenseVector1D};
 use half::f16;
 use itertools::izip;
 use std::arch::x86_64::*;
@@ -190,7 +190,7 @@ impl EuclideanDistance<f32> for f32 {
 }
 
 #[inline]
-fn dense_euclidean_distance_general<T, U>(query: &DenseDArray1<T>, values: &DenseDArray1<T>) -> f32
+fn dense_euclidean_distance_general<T, U>(query: &DenseVector1D<T>, values: &DenseVector1D<T>) -> f32
 where
     T: AsRefItem<Item = U>,
     U: Float,
@@ -207,8 +207,8 @@ where
 
 #[inline]
 pub fn dense_euclidean_distance_unrolled<T, U>(
-    query: &DenseDArray1<T>,
-    values: &DenseDArray1<T>,
+    query: &DenseVector1D<T>,
+    values: &DenseVector1D<T>,
 ) -> f32
 where
     T: AsRefItem<Item = U>,
@@ -230,7 +230,7 @@ where
 
     r.iter().fold(0.0, |acc, &val| acc + val)
         + dense_euclidean_distance_general(
-            &DenseDArray1::new(&query.values_as_slice()[N_LANES * chunks..]),
-            &DenseDArray1::new(&values.values_as_slice()[N_LANES * chunks..]),
+            &DenseVector1D::new(&query.values_as_slice()[N_LANES * chunks..]),
+            &DenseVector1D::new(&values.values_as_slice()[N_LANES * chunks..]),
         )
 }

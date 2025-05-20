@@ -1,7 +1,7 @@
 use crate::distances::{self, dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{dot_product_batch_4, euclidean_distance_batch_4, DArray1, DenseDArray1};
+use crate::{dot_product_batch_4, euclidean_distance_batch_4, Vector1D, DenseVector1D};
 use crate::{Dataset, DistanceType, Float};
 
 use crate::datasets::dense_dataset::DenseDataset;
@@ -80,7 +80,7 @@ where
         + distances::dot_product::DotProduct<T>,
 {
     type Q = PlainQuantizer<T>;
-    type QueryType = DenseDArray1<&'a [T]>;
+    type QueryType = DenseVector1D<&'a [T]>;
 
     #[inline]
     fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {

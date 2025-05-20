@@ -130,7 +130,7 @@ impl<'a, U> AsRefItem for &'a mut [U] {
     }
 }
 
-pub trait DArray1 {
+pub trait Vector1D {
     type ComponentsType;
     type ValuesType;
 
@@ -142,22 +142,22 @@ pub trait DArray1 {
 static EMPTY_COMPONENTS: [(); 0] = [];
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DenseDArray1<T: AsRefItem> {
+pub struct DenseVector1D<T: AsRefItem> {
     components: (),
     values: T,
 }
 
-impl<T: AsRefItem> DenseDArray1<T> {
+impl<T: AsRefItem> DenseVector1D<T> {
     #[inline]
     pub fn new(values: T) -> Self {
-        DenseDArray1 {
+        DenseVector1D {
             components: (),
             values,
         }
     }
 }
 
-impl<T: AsRefItem> DArray1 for DenseDArray1<T> {
+impl<T: AsRefItem> Vector1D for DenseVector1D<T> {
     type ComponentsType = ();
     type ValuesType = T::Item;
 
@@ -178,7 +178,7 @@ impl<T: AsRefItem> DArray1 for DenseDArray1<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SparseDArray1<V, T>
+pub struct SparseVector1D<V, T>
 where
     V: AsRefItem<Item = u16>,
     T: AsRefItem,
@@ -188,7 +188,7 @@ where
     max_component_id: u16,
 }
 
-impl<V, T> SparseDArray1<V, T>
+impl<V, T> SparseVector1D<V, T>
 where
     V: AsRefItem<Item = u16>,
     T: AsRefItem,
@@ -201,7 +201,7 @@ where
             .max()
             .map(|&x| x)
             .unwrap_or(0);
-        SparseDArray1 {
+        SparseVector1D {
             components,
             values,
             max_component_id,
@@ -209,7 +209,7 @@ where
     }
 }
 
-impl<V, T> DArray1 for SparseDArray1<V, T>
+impl<V, T> Vector1D for SparseVector1D<V, T>
 where
     V: AsRefItem<Item = u16>,
     T: AsRefItem,

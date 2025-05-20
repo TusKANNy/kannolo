@@ -1,13 +1,13 @@
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{DArray1, Float};
+use crate::{Vector1D, Float};
 use crate::{DotProduct, EuclideanDistance};
 
 pub trait Dataset<'a, Q>
 where
     Q: Quantizer<DatasetType<'a> = Self> + 'a,
 {
-    type DataType: DArray1<ValuesType = Q::OutputItem>;
+    type DataType: Vector1D<ValuesType = Q::OutputItem>;
 
     fn new(quantizer: Q, d: usize) -> Self;
 
@@ -64,6 +64,6 @@ pub trait GrowableDataset<'a, Q>: Dataset<'a, Q>
 where
     Q: Quantizer<DatasetType<'a> = Self> + 'a,
 {
-    type InputDataType: DArray1<ValuesType = Q::InputItem>;
+    type InputDataType: Vector1D<ValuesType = Q::InputItem>;
     fn push(&mut self, vec: &Self::InputDataType);
 }

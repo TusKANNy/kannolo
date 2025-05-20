@@ -3,7 +3,7 @@ use crate::plain_quantizer::PlainQuantizer;
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
 use crate::{
-    DArray1, Dataset, DenseDArray1, DistanceType, Float, GrowableDataset, PlainDenseDataset,
+    Vector1D, Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset,
 };
 use crate::{DotProduct, EuclideanDistance};
 
@@ -26,7 +26,7 @@ where
     Q: Quantizer<DatasetType<'a> = Self> + 'a,
     B: AsRef<[Q::OutputItem]> + Default,
 {
-    type DataType = DenseDArray1<&'a [Q::OutputItem]>;
+    type DataType = DenseVector1D<&'a [Q::OutputItem]>;
 
     #[inline]
     fn new(quantizer: Q, d: usize) -> Self {
@@ -50,7 +50,7 @@ where
 
     #[inline]
     fn data(&'a self) -> Self::DataType {
-        DenseDArray1::new(self.data.as_ref())
+        DenseVector1D::new(self.data.as_ref())
     }
 
     #[inline]
@@ -82,7 +82,7 @@ where
         let start = index * m;
         let end = start + m;
 
-        DenseDArray1::new(&self.data.as_ref()[start..end])
+        DenseVector1D::new(&self.data.as_ref()[start..end])
     }
 
     fn compute_distance_by_id(&'a self, idx1: usize, idx2: usize) -> f32
@@ -188,7 +188,7 @@ where
     Q: Quantizer<DatasetType<'a> = DenseDataset<Q>> + 'a,
     Q::OutputItem: Copy + Default,
 {
-    type InputDataType = DenseDArray1<&'a [Q::InputItem]>;
+    type InputDataType = DenseVector1D<&'a [Q::InputItem]>;
 
     #[inline]
     fn push(&mut self, vec: &Self::InputDataType) {
@@ -241,7 +241,7 @@ where
     Q: Quantizer<DatasetType<'a> = DenseDataset<Q, B>>,
     B: AsRef<[Q::OutputItem]> + Default,
 {
-    type Item = DenseDArray1<&'a [Q::OutputItem]>;
+    type Item = DenseVector1D<&'a [Q::OutputItem]>;
     type IntoIter = DenseDatasetIter<'a, Q>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -302,7 +302,7 @@ impl<'a, Q> Iterator for DenseDatasetIter<'a, Q>
 where
     Q: Quantizer,
 {
-    type Item = DenseDArray1<&'a [Q::OutputItem]>;
+    type Item = DenseVector1D<&'a [Q::OutputItem]>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -314,7 +314,7 @@ where
         let end = std::cmp::min(start + self.batch_size * self.d, self.data.len());
         self.index = end;
 
-        Some(DenseDArray1::new(&self.data[start..end]))
+        Some(DenseVector1D::new(&self.data[start..end]))
     }
 }
 
@@ -365,7 +365,7 @@ where
         let mut sample = Self::with_capacity_plain(n_vecs, self.d);
 
         for id in sampled_id {
-            sample.push(&DenseDArray1::new(
+            sample.push(&DenseVector1D::new(
                 &self.data[id * self.d..(id + 1) * self.d],
             ));
         }
@@ -387,7 +387,7 @@ where
         let mut results = Vec::with_capacity(batch_size);
 
         for query in queries.chunks_exact(self.dim()) {
-            let query_array = DenseDArray1::new(query);
+            let query_array = DenseVector1D::new(query);
 
             let mut heap = TopkHeap::new(1);
             let search_results = self.search(query_array, &mut heap);

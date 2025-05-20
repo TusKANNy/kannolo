@@ -1,5 +1,5 @@
 use crate::simd_utils::horizontal_sum_256;
-use crate::{AsRefItem, DArray1, DenseDArray1, Float, SparseDArray1};
+use crate::{AsRefItem, Vector1D, DenseVector1D, Float, SparseVector1D};
 use itertools::izip;
 use std::arch::x86_64::*;
 use std::iter::zip;
@@ -7,7 +7,7 @@ use std::iter::zip;
 use half::f16;
 
 #[inline]
-pub fn dense_dot_product<T, U>(query: &DenseDArray1<T>, document: &DenseDArray1<T>) -> f32
+pub fn dense_dot_product<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
 where
     T: AsRef<[U]> + AsRefItem<Item = U>,
     U: Float,
@@ -16,7 +16,7 @@ where
 }
 
 #[inline]
-pub fn dense_dot_product_unrolled<T, U>(query: &DenseDArray1<T>, document: &DenseDArray1<T>) -> f32
+pub fn dense_dot_product_unrolled<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
 where
     T: AsRef<[U]> + AsRefItem<Item = U>,
     U: Float,
@@ -37,13 +37,13 @@ where
 
     r.iter().sum::<f32>()
         + dense_dot_product_general(
-            &DenseDArray1::new(&query.values_as_slice()[N_LANES * chunks..]),
-            &DenseDArray1::new(&document.values_as_slice()[N_LANES * chunks..]),
+            &DenseVector1D::new(&query.values_as_slice()[N_LANES * chunks..]),
+            &DenseVector1D::new(&document.values_as_slice()[N_LANES * chunks..]),
         )
 }
 
 #[inline]
-pub fn dense_dot_product_general<T, U>(query: &DenseDArray1<T>, document: &DenseDArray1<T>) -> f32
+pub fn dense_dot_product_general<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
 where
     T: AsRef<[U]> + AsRefItem<Item = U>,
     U: Float,
@@ -60,8 +60,8 @@ where
 // Sparse
 #[inline]
 pub fn dot_product_dense_sparse<T1, T, U, F>(
-    query: &DenseDArray1<T1>,
-    array: &SparseDArray1<U, T>,
+    query: &DenseVector1D<T1>,
+    array: &SparseVector1D<U, T>,
 ) -> f32
 where
     T1: AsRefItem<Item = F>,
@@ -126,8 +126,8 @@ where
 #[inline]
 #[must_use]
 pub fn sparse_dot_product_with_merge<F, U, T>(
-    query: &SparseDArray1<U, T>,
-    vector: &SparseDArray1<U, T>,
+    query: &SparseVector1D<U, T>,
+    vector: &SparseVector1D<U, T>,
 ) -> f32
 where
     U: AsRefItem<Item = u16>,

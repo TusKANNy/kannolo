@@ -155,12 +155,12 @@ pub fn add_neighbors_to_heaps(
 /// use struttura_kANNolo::DenseDataset;
 /// use struttura_kANNolo::DistanceType;
 /// use struttura_kANNolo::plain_quantizer::PlainQuantizer;
-/// use struttura_kANNolo::DenseDArray1;
+/// use struttura_kANNolo::DenseVector1D;
 /// use crate::struttura_kANNolo::Dataset;
 ///
 /// // Create a query vector
 /// let query_vector: &[f32; 2] = &[1.0, 1.0];
-/// let query = DenseDArray1::new(query_vector.as_slice());
+/// let query = DenseVector1D::new(query_vector.as_slice());
 ///
 /// let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
 /// let quantizer = PlainQuantizer::new(2, DistanceType::Euclidean);
@@ -992,7 +992,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
 
     use crate::{
         hnsw_utils::compute_closest_from_neighbors, plain_quantizer::PlainQuantizer, Dataset,
-        DenseDArray1, DenseDataset, DistanceType,
+        DenseVector1D, DenseDataset, DistanceType,
     };
 
     /// Tests that `compute_closest_from_neighbors` correctly updates the nearest neighbor.
@@ -1003,7 +1003,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     fn test_compute_closest_from_neighbors_updates_nearest() {
         let query_vector: &[f32; 2] = &[1.0, 1.0];
 
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
 
@@ -1034,7 +1034,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_single_neighbor() {
         let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         let neighbor_vectors = &[2.0, 2.0];
 
@@ -1066,7 +1066,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_equidistant_neighbors() {
         let query_vector: &[f32; 2] = &[0.0, 0.0];
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         // Neighbor vectors that are equidistant from the query except for the first one
         let neighbor_vectors = &[2.0, 5.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
@@ -1098,7 +1098,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_no_neighbors() {
         let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         let neighbor_vectors = &[];
 
@@ -1130,7 +1130,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_max_distance() {
         let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         let neighbor_vectors = &[f32::INFINITY, f32::INFINITY, -f32::INFINITY, -f32::INFINITY];
 
@@ -1164,7 +1164,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_exact_match() {
         let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseDArray1::new(query_vector.as_slice());
+        let query = DenseVector1D::new(query_vector.as_slice());
 
         // One neighbor is exactly as the query vecor
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.0];

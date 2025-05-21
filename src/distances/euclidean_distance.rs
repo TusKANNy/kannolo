@@ -1,6 +1,6 @@
 use crate::distances::dot_product_unrolled_avx;
 use crate::simd_utils::horizontal_sum_256;
-use crate::{AsRefItem, Vector1D, DenseVector1D};
+use crate::{AsRefItem, DenseVector1D, Vector1D};
 use half::f16;
 use itertools::izip;
 use std::arch::x86_64::*;
@@ -190,7 +190,10 @@ impl EuclideanDistance<f32> for f32 {
 }
 
 #[inline]
-fn dense_euclidean_distance_general<T, U>(query: &DenseVector1D<T>, values: &DenseVector1D<T>) -> f32
+fn dense_euclidean_distance_general<T, U>(
+    query: &DenseVector1D<T>,
+    values: &DenseVector1D<T>,
+) -> f32
 where
     T: AsRefItem<Item = U>,
     U: Float,

@@ -7,7 +7,7 @@ use crate::index_serializer::IndexSerializer;
 use crate::plain_quantizer::PlainQuantizer;
 use crate::pq::ProductQuantizer;
 use crate::sparse_plain_quantizer::SparsePlainQuantizer;
-use crate::{read_numpy_f32_flatten_2d, Vector1D, Dataset, DenseVector1D, DistanceType};
+use crate::{read_numpy_f32_flatten_2d, Dataset, DenseVector1D, DistanceType, Vector1D};
 use half::f16;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;

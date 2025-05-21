@@ -1,8 +1,8 @@
 use crate::distances::dot_product_dense_sparse;
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{Vector1D, DenseVector1D, SparseVector1D};
 use crate::{Dataset, DistanceType, Float};
+use crate::{DenseVector1D, SparseVector1D, Vector1D};
 use crate::{DotProduct, EuclideanDistance};
 
 use crate::datasets::sparse_dataset::SparseDataset;

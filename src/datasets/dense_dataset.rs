@@ -3,7 +3,7 @@ use crate::plain_quantizer::PlainQuantizer;
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
 use crate::{
-    Vector1D, Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset,
+    Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset, Vector1D,
 };
 use crate::{DotProduct, EuclideanDistance};
 

@@ -1,5 +1,5 @@
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{Vector1D, Dataset, DistanceType, Float};
+use crate::{Dataset, DistanceType, Float, Vector1D};
 use crate::{DotProduct, EuclideanDistance};
 
 pub trait IdentityQuantizer: Quantizer<InputItem = Self::T, OutputItem = Self::T> {

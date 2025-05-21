@@ -16,7 +16,7 @@ use std::io::{BufReader, Read, Result as IoResult};
 use std::ops::Range;
 use std::path::Path;
 
-use crate::{Vector1D, SparseVector1D};
+use crate::{SparseVector1D, Vector1D};
 
 use serde::{Deserialize, Serialize};
 

@@ -13,7 +13,7 @@ use crate::{Float, PlainDenseDataset};
 use itertools::izip;
 use rayon::prelude::*;
 
-use crate::{AsRefItem, Vector1D, DenseVector1D};
+use crate::{AsRefItem, DenseVector1D, Vector1D};
 
 use serde::{Deserialize, Serialize};
 

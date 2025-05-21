@@ -992,7 +992,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
 
     use crate::{
         hnsw_utils::compute_closest_from_neighbors, plain_quantizer::PlainQuantizer, Dataset,
-        DenseVector1D, DenseDataset, DistanceType,
+        DenseDataset, DenseVector1D, DistanceType,
     };
 
     /// Tests that `compute_closest_from_neighbors` correctly updates the nearest neighbor.

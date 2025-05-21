@@ -1,5 +1,5 @@
 use crate::simd_utils::horizontal_sum_256;
-use crate::{AsRefItem, Vector1D, DenseVector1D, Float, SparseVector1D};
+use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
 use itertools::izip;
 use std::arch::x86_64::*;
 use std::iter::zip;
@@ -16,7 +16,10 @@ where
 }
 
 #[inline]
-pub fn dense_dot_product_unrolled<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
+pub fn dense_dot_product_unrolled<T, U>(
+    query: &DenseVector1D<T>,
+    document: &DenseVector1D<T>,
+) -> f32
 where
     T: AsRef<[U]> + AsRefItem<Item = U>,
     U: Float,

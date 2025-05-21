@@ -1,7 +1,7 @@
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{Vector1D, Float};
 use crate::{DotProduct, EuclideanDistance};
+use crate::{Float, Vector1D};
 
 pub trait Dataset<'a, Q>
 where

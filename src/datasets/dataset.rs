@@ -14,15 +14,15 @@ where
     fn new(quantizer: Q, d: usize) -> Self;
 
     #[inline]
-    fn query_evaluator(
+    fn query_evaluator<'a>(
         &self,
-        query: <Q::Evaluator as QueryEvaluator>::QueryType,
-    ) -> Q::Evaluator
+        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
+    ) -> Q::Evaluator<'a>
     where
-        Q::Evaluator: QueryEvaluator<Q = Q>,
+        Q::Evaluator<'a>: QueryEvaluator<'a, Q = Q>,
         Q::InputItem: Float + EuclideanDistance<Q::InputItem> + DotProduct<Q::InputItem>,
     {
-        <Q::Evaluator>::new(query)
+        <Q::Evaluator<'a>>::new(query)
     }
 
     fn quantizer(&self) -> &Q;
@@ -55,9 +55,9 @@ where
     where
         Q::OutputItem: 'a;
 
-    fn search<H: OnlineTopKSelector>(
+    fn search<'a, H: OnlineTopKSelector>(
         &self,
-        query: <Q::Evaluator as QueryEvaluator>::QueryType,
+        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
     where

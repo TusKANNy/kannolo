@@ -33,12 +33,12 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     type DatasetType
         = DenseDataset<Self>;
 
-    type Evaluator
-        = QueryEvaluatorPlain<Self::InputItem>
+    type Evaluator<'a>
+        = QueryEvaluatorPlain<'a, Self::InputItem>
     where
         Self::InputItem: Float
             + distances::euclidean_distance::EuclideanDistance<T>
-            + distances::dot_product::DotProduct<T>;
+            + distances::dot_product::DotProduct<T> + 'a;
 
     #[inline]
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
@@ -60,22 +60,23 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     }
 }
 
-pub struct QueryEvaluatorPlain<
+pub struct QueryEvaluatorPlain<'a,
     T: Float
         + distances::euclidean_distance::EuclideanDistance<T>
-        + distances::dot_product::DotProduct<T>,
+        + distances::dot_product::DotProduct<T>
+        + 'a,
 > {
-    query: <Self as QueryEvaluator>::QueryType,
+    query: <Self as QueryEvaluator<'a>>::QueryType,
 }
 
-impl<T: Float> QueryEvaluator for QueryEvaluatorPlain<T>
+impl<'a, T: Float> QueryEvaluator<'a> for QueryEvaluatorPlain<'a, T>
 where
     T: Float
         + distances::euclidean_distance::EuclideanDistance<T>
         + distances::dot_product::DotProduct<T>,
 {
     type Q = PlainQuantizer<T>;
-    type QueryType = DenseVector1D<Vec<T>>;
+    type QueryType = DenseVector1D<&'a [T]>;
 
     #[inline]
     fn new(query: Self::QueryType) -> Self {

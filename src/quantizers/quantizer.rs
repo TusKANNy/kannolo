@@ -19,10 +19,10 @@ pub trait Quantizer: Sized {
     type OutputItem;
     type DatasetType: Dataset<Self>;
 
-    type Evaluator: QueryEvaluator<Q = Self>
+    type Evaluator<'a>: QueryEvaluator<'a, Q = Self>
     where
         Self::InputItem:
-            Float + EuclideanDistance<Self::InputItem> + DotProduct<Self::InputItem>;
+            Float + EuclideanDistance<Self::InputItem> + DotProduct<Self::InputItem> + 'a;
 
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]);
 
@@ -33,7 +33,7 @@ pub trait Quantizer: Sized {
     fn get_space_usage_bytes(&self) -> usize;
 }
 
-pub trait QueryEvaluator {
+pub trait QueryEvaluator<'a> {
     type Q: Quantizer;
     type QueryType: Vector1D;
 

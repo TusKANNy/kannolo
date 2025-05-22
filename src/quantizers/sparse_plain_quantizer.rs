@@ -35,10 +35,10 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for SparsePlainQuan
     type DatasetType
         = SparseDataset<Self>;
 
-    type Evaluator
+    type Evaluator<'a>
         = SparseQueryEvaluatorPlain<Self::InputItem>
     where
-        Self::InputItem: Float + EuclideanDistance<T> + DotProduct<T>;
+        Self::InputItem: Float + EuclideanDistance<T> + DotProduct<T> + 'a;
 
     #[inline]
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
@@ -64,7 +64,7 @@ pub struct SparseQueryEvaluatorPlain<T: Float> {
     dense_query: DenseVector1D<Vec<T>>,
 }
 
-impl<T: Float> QueryEvaluator for SparseQueryEvaluatorPlain<T> {
+impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<T> {
     type Q = SparsePlainQuantizer<T>;
     type QueryType = SparseVector1D<Vec<u16>, Vec<T>>;
 

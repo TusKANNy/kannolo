@@ -80,7 +80,7 @@ where
 
     // This constraint is necessary because the vector returned by the dataset's "get" function is of type Datatype.
     // The query evaluator, however, requires a vector of type Querytype.
-    Q::Evaluator: QueryEvaluator<QueryType = <D as Dataset<Q>>::DataType<'a>>,
+    Q::Evaluator<'a>: QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
     <Q as IdentityQuantizer>::T: 'a
 {
     /// Constructs a new `HnswBuilder` instance.
@@ -490,7 +490,7 @@ where
         dis_nearest_vec: &mut f32,
     ) 
     where
-        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
     {
         loop {
             let prec_nearest = *nearest_vec;
@@ -593,7 +593,7 @@ where
         config: &ConfigHnsw,
     )
     where
-        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
     {
         //max-heap, on top is the farthest vector
         let mut closest_vectors: BinaryHeap<Node> = BinaryHeap::new();
@@ -879,7 +879,7 @@ where
         config: &ConfigHnsw,
     ) 
     where
-        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
     {
         //min-heap based on distance
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();

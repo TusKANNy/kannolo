@@ -54,8 +54,8 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
 
     type DatasetType = DenseDataset<Self>;
 
-    type Evaluator
-        = QueryEvaluatorPQ<M>
+    type Evaluator<'a>
+        = QueryEvaluatorPQ<'a, M>
     where
         Self::InputItem: Float;
 
@@ -478,14 +478,14 @@ impl<const M: usize> ProductQuantizer<M> {
     }
 }
 
-pub struct QueryEvaluatorPQ<const M: usize> {
-    _query: <Self as QueryEvaluator>::QueryType,
+pub struct QueryEvaluatorPQ<'a, const M: usize> {
+    _query: <Self as QueryEvaluator<'a>>::QueryType,
     distance_table: Vec<f32>,
 }
 
-impl<const M: usize> QueryEvaluator for QueryEvaluatorPQ<M> {
+impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
     type Q = ProductQuantizer<M>;
-    type QueryType = DenseVector1D<Vec<f32>>;
+    type QueryType = DenseVector1D<&'a [f32]>;
 
     #[inline]
     fn new(query: Self::QueryType) -> Self {
@@ -581,9 +581,9 @@ impl<const M: usize> QueryEvaluator for QueryEvaluatorPQ<M> {
     }
 }
 
-impl<const M: usize> QueryEvaluatorPQ<M> {
+impl<'a, const M: usize> QueryEvaluatorPQ<'a, M> {
     #[inline]
-    pub fn compute_distance_table(&mut self, query: <Self as QueryEvaluator>::QueryType, dataset: DenseDataset<ProductQuantizer<M>>) {
+    pub fn compute_distance_table(&mut self, query: <Self as QueryEvaluator<'a>>::QueryType, dataset: DenseDataset<ProductQuantizer<M>>) {
         let distance_table = match dataset.quantizer().distance() {
             DistanceType::Euclidean => dataset.quantizer().compute_euclidean_distance_table(&query),
             DistanceType::DotProduct => dataset.quantizer().compute_dot_product_table(&query),

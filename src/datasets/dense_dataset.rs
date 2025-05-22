@@ -113,9 +113,9 @@ where
     }
 
     #[inline]
-    fn search<H: OnlineTopKSelector>(
+    fn search<'a, H: OnlineTopKSelector>(
         &self,
-        query: <Q::Evaluator as QueryEvaluator>::QueryType,
+        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
     where
@@ -398,7 +398,7 @@ where
         let mut results = Vec::with_capacity(batch_size);
 
         for query in queries.chunks_exact(self.dim()) {
-            let query_array = DenseVector1D::new(query.to_vec());
+            let query_array = DenseVector1D::new(query);
 
             let mut heap = TopkHeap::new(1);
             let search_results = self.search(query_array, &mut heap);

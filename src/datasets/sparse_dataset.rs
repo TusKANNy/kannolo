@@ -177,9 +177,9 @@ where
     }
 
     #[inline]
-    fn search<H: OnlineTopKSelector>(
+    fn search<'a, H: OnlineTopKSelector>(
         &self,
-        query: <Q::Evaluator as QueryEvaluator>::QueryType,
+        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
     where
@@ -359,7 +359,6 @@ where
         let quantizer = SparsePlainQuantizer::<f16>::new(n_vecs, DistanceType::DotProduct);
         let mut data = SparseDataset::new(quantizer, 0);
 
-        let mut max_component = 0;
         for _ in 0..n_vecs {
             br.read_exact(&mut buffer_d)?;
             let n = u32::from_le_bytes(buffer_d) as usize;

@@ -71,8 +71,8 @@ impl Level {
 
         // This constraint is necessary because the vector returned by the dataset's get function is of type Datatype.
         // The query evaluator, however, requires a vector of type Querytype.
-        <Q as Quantizer>::Evaluator:
-            QueryEvaluator<QueryType = <D as Dataset<Q>>::DataType<'a>>,
+        <Q as Quantizer>::Evaluator<'a>:
+            QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
     {
         // Retrieve IDs of vectors assigned to the current level.
         let ids_assigned_curr_level: Vec<usize> = hnsw_builder
@@ -143,7 +143,7 @@ impl Level {
     /// This process is performed in a loop: after updating the nearest vector with the closest neighbor found,
     /// the function retrieves the neighbors of the new closest vector and repeats the process. The loop repeats
     /// until no closer neighbors can be found, meaning the closest vector to the query has been identified.
-    pub fn greedy_update_nearest<Q, D, E>(
+    pub fn greedy_update_nearest<'a, Q, D, E>(
         &self,
         dataset: &D,
         query_evaluator: &E,
@@ -153,7 +153,7 @@ impl Level {
     where
         Q: Quantizer<DatasetType = D>,   // 1) your quantizer’s associated type must be exactly D
         D: Dataset<Q>,                    // 2) dataset must implement Dataset<Q>
-        E: QueryEvaluator<Q = Q>,         // 3) evaluator’s Q must be your Q
+        E: QueryEvaluator<'a, Q = Q>,         // 3) evaluator’s Q must be your Q
     {
         loop {
             let prec_nearest = *nearest_vec;

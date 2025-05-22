@@ -247,7 +247,7 @@ impl DensePlainHNSW {
 #[pyclass]
 pub struct DensePlainHNSWf16 {
     // The index requires a 'static reference to the dataset.
-    index: GraphIndex<'static, DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
+    index: GraphIndex<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
 }
 
 #[pymethods]
@@ -490,7 +490,7 @@ impl DensePlainHNSWf16 {
 #[pyclass]
 pub struct SparsePlainHNSW {
     // The index type specialized for sparse datasets with SparsePlainQuantizer.
-    index: GraphIndex<'static, SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
+    index: GraphIndex<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
 }
 
 #[pymethods]
@@ -498,13 +498,15 @@ impl SparsePlainHNSW {
     /// Build a sparse plain index from a dataset file.
     /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
+    /// - `d`: dimensionality of the data
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_file(
         data_file: &str,
+        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -521,19 +523,16 @@ impl SparsePlainHNSW {
         };
 
         // Read the sparse dataset from file.
-        let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f32>>::read_bin_file(data_file).map_err(|e| {
+        let dataset: SparseDataset<SparsePlainQuantizer<f32>> = 
+            SparseDataset::<SparsePlainQuantizer<f32>>::read_bin_file(data_file, d).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading dataset: {:?}",
                     e
                 ))
-            })?,
-        );
-        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f32>> =
-            Box::leak(boxed_dataset);
+            })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f32>::new(static_dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
         let config = ConfigHnsw::new()
@@ -544,7 +543,7 @@ impl SparsePlainHNSW {
         let num_threads = rayon::current_num_threads();
 
         // Build the index.
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
 
         Ok(SparsePlainHNSW { index })
     }

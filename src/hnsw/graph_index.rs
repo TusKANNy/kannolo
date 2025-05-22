@@ -123,8 +123,8 @@ where
         IQ: IdentityQuantizer<DatasetType = SD, T: Float> + Sync + 'a,
         // This constraint is necessary because the vector returned by the dataset's get function is of type Datatype.
         // The query evaluator, however, requires a vector of type Querytype.
-        <IQ as Quantizer>::Evaluator:
-            QueryEvaluator<QueryType = <SD as Dataset<IQ>>::DataType<'a>>,
+        <IQ as Quantizer>::Evaluator<'a>:
+            QueryEvaluator<'a, QueryType = <SD as Dataset<IQ>>::DataType<'a>>,
         // This constraint is necessary because the `push` function of the new_dataset
         // expects input types of InputDataType, while we iterate over types of DataType from the source_dataset.
         D: GrowableDataset<Q, InputDataType<'a> = <SD as Dataset<IQ>>::DataType<'a>>,
@@ -266,10 +266,11 @@ where
         // This constraint is necessary because the find_k_nearest_neighbors function takes an input parameter
         // of type QueryType, which is an associated type of the QueryEvaluator associated with the quantizer Q.
         // However, the queries are of type DataType, which is an associated type of the dataset QD.
-        <Q as Quantizer>::Evaluator:
-            QueryEvaluator<QueryType = <QD as Dataset<QQ>>::DataType<'a>>,
+        <Q as Quantizer>::Evaluator<'a>:
+            QueryEvaluator<'a, QueryType = <QD as Dataset<QQ>>::DataType<'a>>,
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
+        <Q as Quantizer>::InputItem: 'a
     {
         let query_topk = self.find_k_nearest_neighbors(query, k, config);
 
@@ -311,9 +312,9 @@ where
     /// is the distance to the neighbor, and the second element is the neighbor's ID.
     /// The results are sorted in ascending order of distance, with the closest vectors appearing first.
 
-    pub fn find_k_nearest_neighbors(
+    pub fn find_k_nearest_neighbors<'a>(
         &self,
-        query_vec: <Q::Evaluator as QueryEvaluator>::QueryType,
+        query_vec: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         k: usize,
         config: &ConfigHnsw,
     ) -> Vec<(f32, usize)>
@@ -380,7 +381,7 @@ where
     /// - The `candidates` heap is empty.
     /// - The distance of the current node exceeds the maximum distance in the `top_candidates` heap.
     ///
-    fn search_from_candidates_unbounded<E>(
+    fn search_from_candidates_unbounded<'a, E>(
         &self,
         starting_node: Node,
         query_evaluator: &E,
@@ -388,7 +389,7 @@ where
         level: &Level,
     ) -> BinaryHeap<Node> 
     where
-        E: QueryEvaluator<Q = Q>,               // 1) tie evaluator’s Q = our Q
+        E: QueryEvaluator<'a, Q = Q>,               // 1) tie evaluator’s Q = our Q
         Q: Quantizer<DatasetType = D>,          // 2) ensure our Q’s DatasetType = D
         <Q as Quantizer>::InputItem:            // and preserve input‐item bounds
             EuclideanDistance<<Q as Quantizer>::InputItem>
@@ -459,14 +460,14 @@ where
     ///   `process_neighbors` is used.
     /// 5. **Final Handling**: Any remaining neighbors that did not form a complete batch are processed
     ///    and their distances are computed and added.
-    fn process_neighbors<E, F>(
+    fn process_neighbors<'a, E, F>(
         &self,
         neighbors: &[usize],
         visited_table: &mut HashSet<usize>,
         query_evaluator: &E,
         mut add_distances_fn: F,
     ) where
-        E: QueryEvaluator<Q = Q>,
+        E: QueryEvaluator<'a, Q = Q>,
         F: FnMut(f32, usize),
     {
         let mut counter = 0;

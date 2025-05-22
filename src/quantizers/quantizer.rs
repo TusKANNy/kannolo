@@ -17,14 +17,12 @@ where
 pub trait Quantizer: Sized {
     type InputItem;
     type OutputItem;
-    type DatasetType<'a>: Dataset<'a, Self>
-    where
-        Self: 'a;
+    type DatasetType: Dataset<Self>;
 
-    type Evaluator<'a>: QueryEvaluator<'a, Q = Self>
+    type Evaluator: QueryEvaluator<Q = Self>
     where
         Self::InputItem:
-            Float + EuclideanDistance<Self::InputItem> + DotProduct<Self::InputItem> + 'a;
+            Float + EuclideanDistance<Self::InputItem> + DotProduct<Self::InputItem>;
 
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]);
 
@@ -35,32 +33,34 @@ pub trait Quantizer: Sized {
     fn get_space_usage_bytes(&self) -> usize;
 }
 
-pub trait QueryEvaluator<'a> {
+pub trait QueryEvaluator {
     type Q: Quantizer;
     type QueryType: Vector1D;
 
-    fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self;
+    fn new(query: Self::QueryType) -> Self;
 
-    fn compute_distance(&self, index: usize) -> f32;
+    fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32;
 
     #[inline]
     fn compute_distances(
         &self,
+        dataset: &<Self::Q as Quantizer>::DatasetType,
         indexes: impl IntoIterator<Item = usize>,
     ) -> impl Iterator<Item = f32> {
         indexes
             .into_iter()
-            .map(|index| self.compute_distance(index))
+            .map(|index| self.compute_distance(dataset, index))
     }
 
     #[inline]
     fn compute_four_distances(
         &self,
+        dataset: &<Self::Q as Quantizer>::DatasetType,
         indexes: impl IntoIterator<Item = usize>,
     ) -> impl Iterator<Item = f32> {
         indexes
             .into_iter()
-            .map(|index| self.compute_distance(index))
+            .map(|index| self.compute_distance(dataset, index))
     }
 
     fn topk_retrieval<I, H>(&self, distances: I, heap: &mut H) -> Vec<(f32, usize)>

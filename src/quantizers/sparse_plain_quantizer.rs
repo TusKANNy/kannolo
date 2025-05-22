@@ -32,14 +32,13 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for SparsePlainQuan
     type InputItem = T;
     type OutputItem = T;
 
-    type DatasetType<'a>
-        = SparseDataset<Self>
+    type DatasetType
+        = SparseDataset<Self>;
+
+    type Evaluator
+        = SparseQueryEvaluatorPlain<Self::InputItem>
     where
-        T: 'a;
-    type Evaluator<'a>
-        = SparseQueryEvaluatorPlain<'a, Self::InputItem>
-    where
-        Self::InputItem: Float + EuclideanDistance<T> + DotProduct<T> + 'a;
+        Self::InputItem: Float + EuclideanDistance<T> + DotProduct<T>;
 
     #[inline]
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
@@ -61,18 +60,17 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for SparsePlainQuan
     }
 }
 
-pub struct SparseQueryEvaluatorPlain<'a, T: Float + 'a> {
-    dataset: &'a <<Self as QueryEvaluator<'a>>::Q as Quantizer>::DatasetType<'a>,
+pub struct SparseQueryEvaluatorPlain<T: Float> {
     dense_query: DenseVector1D<Vec<T>>,
 }
 
-impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
+impl<T: Float> QueryEvaluator for SparseQueryEvaluatorPlain<T> {
     type Q = SparsePlainQuantizer<T>;
-    type QueryType = SparseVector1D<&'a [u16], &'a [T]>;
+    type QueryType = SparseVector1D<Box<[u16]>, Box<[T]>>;
 
     #[inline]
-    fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {
-        let mut dense_query = vec![T::zero(); dataset.dim()];
+    fn new(query: Self::QueryType) -> Self {
+        let mut dense_query = vec![T::zero(); query.d as usize];
         for (&i, &v) in query
             .components_as_slice()
             .iter()
@@ -84,14 +82,13 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
         let dense_query = DenseVector1D::new(dense_query);
 
         Self {
-            dataset,
             dense_query,
         }
     }
 
     #[inline]
-    fn compute_distance(&self, index: usize) -> f32 {
-        let document = self.dataset.get(index);
+    fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
+        let document = dataset.get(index);
 
         -1.0 * dot_product_dense_sparse(&self.dense_query, &document)
     }

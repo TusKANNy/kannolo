@@ -67,7 +67,7 @@ pub struct HnswBuilder<'a, D, Q> {
 
 impl<'a, D, Q> HnswBuilder<'a, D, Q>
 where
-    D: Dataset<'a, Q> + Sync,
+    D: Dataset<Q> + Sync,
     // The IdentityQuantizer enforces that the InputItem and OutputItem of the quantizer are of the same type.
     // This is essential because:
     // - The `query_evaluator` function in the `Dataset` trait requires a vector of type `QueryType`,
@@ -76,11 +76,12 @@ where
     //   of type `OutputItem` from the quantizer.
     // By implementing the IdentityQuantizer trait, we ensure that `InputItem` and `OutputItem` are the same type,
     // allowing the dataset's `get` function to directly provide data that can be used by `query_evaluator`
-    Q: IdentityQuantizer<DatasetType<'a> = D, T: Float> + Sync,
+    Q: IdentityQuantizer<DatasetType = D, T: Float> + Sync,
 
     // This constraint is necessary because the vector returned by the dataset's "get" function is of type Datatype.
     // The query evaluator, however, requires a vector of type Querytype.
-    Q::Evaluator<'a>: QueryEvaluator<'a, QueryType = <D as Dataset<'a, Q>>::DataType>,
+    Q::Evaluator: QueryEvaluator<QueryType = <D as Dataset<Q>>::DataType<'a>>,
+    <Q as IdentityQuantizer>::T: 'a
 {
     /// Constructs a new `HnswBuilder` instance.
     ///
@@ -426,7 +427,7 @@ where
         let query_evaluator = self.dataset.query_evaluator(vector);
 
         let mut curr_level = self.max_level;
-        let mut dis_nearest_vec = query_evaluator.compute_distance(nearest_vec);
+        let mut dis_nearest_vec = query_evaluator.compute_distance(&self.dataset, nearest_vec);
 
         {
             let _lock = &locks[id_vec].lock().unwrap();
@@ -481,18 +482,22 @@ where
     /// the `compute_closest_from_neighbors` function to evaluate these neighbors and determine if any are closer to the
     /// vector being added. The nearest vector and its distance are updated if a closer neighbor is found. This process
     /// continues iteratively until no closer neighbors are found, at which point the function exits.
-    fn greedy_update_nearest(
+    fn greedy_update_nearest<E>(
         &self,
         curr_level: u8,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         nearest_vec: &mut usize,
         dis_nearest_vec: &mut f32,
-    ) {
+    ) 
+    where
+        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    {
         loop {
             let prec_nearest = *nearest_vec;
             let neighbors = self.get_unlocked_neighbors(*nearest_vec, curr_level);
 
             compute_closest_from_neighbors(
+                self.dataset,
                 query_evaluator,
                 neighbors.as_slice(),
                 nearest_vec,
@@ -575,9 +580,9 @@ where
     ///    first acquires the lock for each vector whose neighbor list is being updated. This prevents concurrent
     ///    modifications by other threads, maintaining the integrity of the neighbor lists.
     ///
-    fn add_links_starting_from(
+    fn add_links_starting_from<E>(
         &self,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         id_vec: usize,
         nearest_vec: usize,
         dis_nearest_vec: f32,
@@ -586,7 +591,10 @@ where
         locks: &[Mutex<()>],
         guard: MutexGuard<()>,
         config: &ConfigHnsw,
-    ) {
+    )
+    where
+        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    {
         //max-heap, on top is the farthest vector
         let mut closest_vectors: BinaryHeap<Node> = BinaryHeap::new();
 
@@ -860,16 +868,19 @@ where
     ///
     /// Once the search completes, `closest_vectors` will contain the closest neighbors to the query vector,
     /// and the visited table is advanced to prepare for subsequent searches.
-    fn search_neighbors_to_add(
+    fn search_neighbors_to_add<E>(
         &self,
         closest_vectors: &mut BinaryHeap<Node>,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         nearest_vec: usize,
         dis_nearest_vec: f32,
         curr_level: u8,
         visited_table: &mut VisitedTable,
         config: &ConfigHnsw,
-    ) {
+    ) 
+    where
+        E: QueryEvaluator<Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    {
         //min-heap based on distance
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
 
@@ -893,7 +904,7 @@ where
                 if !visited_table.get(neighbor) {
                     visited_table.set(neighbor);
 
-                    let distance_to_neighbor = query_evaluator.compute_distance(neighbor);
+                    let distance_to_neighbor = query_evaluator.compute_distance(&self.dataset, neighbor);
                     let neighbor_node = Node(distance_to_neighbor, neighbor);
 
                     add_neighbor_to_heaps(
@@ -1225,3 +1236,4 @@ where
         &self.levels_assigned
     }
 }
+

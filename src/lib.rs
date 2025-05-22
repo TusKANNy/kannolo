@@ -186,6 +186,7 @@ where
     components: V,
     values: T,
     max_component_id: u16,
+    d: usize, // dimensionality of the vector space
 }
 
 impl<V, T> SparseVector1D<V, T>
@@ -194,7 +195,7 @@ where
     T: AsRefItem,
 {
     #[inline]
-    pub fn new(components: V, values: T) -> Self {
+    pub fn new(components: V, values: T, d: usize) -> Self {
         let max_component_id = components
             .as_ref_item()
             .iter()
@@ -205,6 +206,7 @@ where
             components,
             values,
             max_component_id,
+            d,
         }
     }
 }

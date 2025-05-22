@@ -18,7 +18,7 @@ use rayon;
 #[pyclass]
 pub struct DensePlainHNSW {
     // The index requires a 'static reference to the dataset.
-    index: GraphIndex<'static, DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
+    index: GraphIndex<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
 }
 
 #[pymethods]
@@ -53,9 +53,7 @@ impl DensePlainHNSW {
         let quantizer = PlainQuantizer::<f32>::new(dim, distance);
 
         // Build the dense dataset.
-        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
-
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(boxed_dataset);
+        let dataset: DenseDataset<PlainQuantizer<f32>> = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
         let config = ConfigHnsw::new()
             .num_neighbors(m)
@@ -65,7 +63,7 @@ impl DensePlainHNSW {
         let num_threads = rayon::current_num_threads();
 
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 

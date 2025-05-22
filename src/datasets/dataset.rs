@@ -3,24 +3,26 @@ use crate::topk_selectors::OnlineTopKSelector;
 use crate::{Vector1D, Float};
 use crate::{DotProduct, EuclideanDistance};
 
-pub trait Dataset<'a, Q>
+pub trait Dataset<Q>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
 {
-    type DataType: Vector1D<ValuesType = Q::OutputItem>;
+    type DataType<'a>: Vector1D<ValuesType = Q::OutputItem>
+    where
+    Q::OutputItem: 'a, Self: 'a;
 
     fn new(quantizer: Q, d: usize) -> Self;
 
     #[inline]
     fn query_evaluator(
-        &'a self,
-        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
-    ) -> Q::Evaluator<'a>
+        &self,
+        query: <Q::Evaluator as QueryEvaluator>::QueryType,
+    ) -> Q::Evaluator
     where
-        Q::Evaluator<'a>: QueryEvaluator<'a, Q = Q>,
+        Q::Evaluator: QueryEvaluator<Q = Q>,
         Q::InputItem: Float + EuclideanDistance<Q::InputItem> + DotProduct<Q::InputItem>,
     {
-        <Q::Evaluator<'a>>::new(self, query)
+        <Q::Evaluator>::new(query)
     }
 
     fn quantizer(&self) -> &Q;
@@ -41,29 +43,33 @@ where
 
     fn nnz(&self) -> usize;
 
-    fn data(&'a self) -> Self::DataType;
+    fn data<'a>(&'a self) -> Self::DataType<'a>;
 
-    fn get(&'a self, index: usize) -> Self::DataType;
+    fn get<'a>(&'a self, index: usize) -> Self::DataType<'a>;
 
-    fn compute_distance_by_id(&'a self, idx1: usize, idx2: usize) -> f32
+    fn compute_distance_by_id(&self, idx1: usize, idx2: usize) -> f32
     where
         Q::OutputItem: Float;
 
-    fn iter(&'a self) -> impl Iterator<Item = Self::DataType>;
+    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a;
 
     fn search<H: OnlineTopKSelector>(
-        &'a self,
-        query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
+        &self,
+        query: <Q::Evaluator as QueryEvaluator>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
     where
         Q::InputItem: Float + EuclideanDistance<Q::InputItem> + DotProduct<Q::InputItem>;
 }
 
-pub trait GrowableDataset<'a, Q>: Dataset<'a, Q>
+pub trait GrowableDataset<Q>: Dataset<Q>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
 {
-    type InputDataType: Vector1D<ValuesType = Q::InputItem>;
-    fn push(&mut self, vec: &Self::InputDataType);
+    type InputDataType<'a>: Vector1D<ValuesType = Q::InputItem>
+    where 
+        Q::InputItem: 'a;
+    fn push<'a>(&mut self, vec: &Self::InputDataType<'a>);
 }

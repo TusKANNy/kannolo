@@ -1,6 +1,5 @@
 use crate::distances::dot_product_unrolled_avx;
 use crate::simd_utils::horizontal_sum_256;
-use crate::{AsRefItem, Vector1D, DenseVector1D};
 use half::f16;
 use itertools::izip;
 use std::arch::x86_64::*;
@@ -190,15 +189,13 @@ impl EuclideanDistance<f32> for f32 {
 }
 
 #[inline]
-fn dense_euclidean_distance_general<T, U>(query: &DenseVector1D<T>, values: &DenseVector1D<T>) -> f32
+fn dense_euclidean_distance_general<T>(query: &[T], values: &[T]) -> f32
 where
-    T: AsRefItem<Item = U>,
-    U: Float,
+    T: Float,
 {
     query
-        .values_as_slice()
         .iter()
-        .zip(values.values_as_slice())
+        .zip(values)
         .fold(0.0, |acc, (a, b)| {
             let diff = a.to_f32().unwrap() - b.to_f32().unwrap();
             acc + diff * diff
@@ -206,21 +203,20 @@ where
 }
 
 #[inline]
-pub fn dense_euclidean_distance_unrolled<T, U>(
-    query: &DenseVector1D<T>,
-    values: &DenseVector1D<T>,
+pub fn dense_euclidean_distance_unrolled<T>(
+    query: &[T],
+    values: &[T],
 ) -> f32
 where
-    T: AsRefItem<Item = U>,
-    U: Float,
+    T: Float,
 {
     const N_LANES: usize = 16;
     let mut r = [0.0; N_LANES];
 
     let chunks = query.len() / N_LANES;
     for (q_chunk, v_chunk) in zip(
-        query.values_as_slice().chunks_exact(N_LANES),
-        values.values_as_slice().chunks_exact(N_LANES),
+        query.chunks_exact(N_LANES),
+        values.chunks_exact(N_LANES),
     ) {
         for i in 0..N_LANES {
             let d = q_chunk[i].to_f32().unwrap() - v_chunk[i].to_f32().unwrap();
@@ -230,7 +226,7 @@ where
 
     r.iter().fold(0.0, |acc, &val| acc + val)
         + dense_euclidean_distance_general(
-            &DenseVector1D::new(&query.values_as_slice()[N_LANES * chunks..]),
-            &DenseVector1D::new(&values.values_as_slice()[N_LANES * chunks..]),
+            &query[N_LANES * chunks..],
+            &&values[N_LANES * chunks..],
         )
 }

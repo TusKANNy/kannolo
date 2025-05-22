@@ -75,7 +75,7 @@ where
         + distances::dot_product::DotProduct<T>,
 {
     type Q = PlainQuantizer<T>;
-    type QueryType = DenseVector1D<Box<[T]>>;
+    type QueryType = DenseVector1D<Vec<T>>;
 
     #[inline]
     fn new(query: Self::QueryType) -> Self {

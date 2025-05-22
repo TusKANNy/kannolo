@@ -485,7 +485,7 @@ pub struct QueryEvaluatorPQ<const M: usize> {
 
 impl<const M: usize> QueryEvaluator for QueryEvaluatorPQ<M> {
     type Q = ProductQuantizer<M>;
-    type QueryType = DenseVector1D<Box<[f32]>>;
+    type QueryType = DenseVector1D<Vec<f32>>;
 
     #[inline]
     fn new(query: Self::QueryType) -> Self {

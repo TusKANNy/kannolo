@@ -398,8 +398,7 @@ where
         let mut results = Vec::with_capacity(batch_size);
 
         for query in queries.chunks_exact(self.dim()) {
-            let boxed_query = query.to_vec().into_boxed_slice();
-            let query_array = DenseVector1D::new(boxed_query);
+            let query_array = DenseVector1D::new(query.to_vec());
 
             let mut heap = TopkHeap::new(1);
             let search_results = self.search(query_array, &mut heap);

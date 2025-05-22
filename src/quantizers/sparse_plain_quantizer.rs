@@ -66,7 +66,7 @@ pub struct SparseQueryEvaluatorPlain<T: Float> {
 
 impl<T: Float> QueryEvaluator for SparseQueryEvaluatorPlain<T> {
     type Q = SparsePlainQuantizer<T>;
-    type QueryType = SparseVector1D<Box<[u16]>, Box<[T]>>;
+    type QueryType = SparseVector1D<Vec<u16>, Vec<T>>;
 
     #[inline]
     fn new(query: Self::QueryType) -> Self {

@@ -1008,7 +1008,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_updates_nearest() {
         let query_vector: Vec<f32> = vec!(1.0, 1.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
 
@@ -1040,7 +1040,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_single_neighbor() {
         let query_vector: Vec<f32> = vec!(1.0, 1.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[2.0, 2.0];
 
@@ -1073,7 +1073,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_equidistant_neighbors() {
         let query_vector: Vec<f32> = vec!(0.0, 0.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         // Neighbor vectors that are equidistant from the query except for the first one
         let neighbor_vectors = &[2.0, 5.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
@@ -1106,7 +1106,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_no_neighbors() {
         let query_vector: Vec<f32> = vec!(1.0, 1.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[];
 
@@ -1139,7 +1139,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_max_distance() {
         let query_vector: Vec<f32> = vec!(1.0, 1.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[f32::INFINITY, f32::INFINITY, -f32::INFINITY, -f32::INFINITY];
 
@@ -1174,7 +1174,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     #[test]
     fn test_compute_closest_from_neighbors_exact_match() {
         let query_vector: Vec<f32> = vec!(1.0, 1.0);
-        let query = DenseVector1D::new(query_vector.into_boxed_slice());
+        let query = DenseVector1D::new(query_vector);
 
         // One neighbor is exactly as the query vecor
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.0];

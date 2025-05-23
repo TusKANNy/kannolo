@@ -37,7 +37,7 @@ npy_input_file = "" # your input file
 m_pq = 192 # Number of subspaces of PQ
 nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
 sample_size = 500_000 # Size of the sample of the dataset for training PQ
-metric = "ip" # Inner product
+metric = "ip" # Inner product. Alternatively, you can use "l2" for squared L2 metric
 
 index = DensePQHNSW.build_from_file(data_path, m_pq, nbits, m, efConstruction, metric, sample_size)
 ```

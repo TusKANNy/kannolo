@@ -25,7 +25,7 @@ Build HNSW index on dense, plain data stored in a file.
 ```python
 npy_input_file = "" # your input file
 
-index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, "ip")
+index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, metric)
 ```
 
 Build HNSW index on dense, PQ-encoded data.

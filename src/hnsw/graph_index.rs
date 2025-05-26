@@ -306,8 +306,6 @@ where
     /// - `query_vec`: The query vector for which the nearest neighbors are being searched.
     /// - `k`: The number of nearest neighbors to retrieve.
     /// - `config`: A reference to `ConfigHnsw`, which holds configuration parameters for the search.
-    /// - `visited_table`: A mutable reference to `VisitedTable`, which keeps track of visited nodes to
-    ///   avoid redundant searches.
     ///
     /// # Returns
     ///
@@ -368,7 +366,6 @@ where
     /// - `starting_node`: The initial candidate node from which the search starts.
     /// - `query_evaluator`: Evaluates the distance between the query vector and nodes in the graph.
     /// - `ef`: The number of neighbors to consider during the search, affecting the size of heaps.
-    /// - `visited_table`: Keeps track of nodes that have been visited to avoid redundant evaluations.
     /// - `level`: The current graph level where the search is conducted.
     ///
     /// # Description

@@ -21,7 +21,7 @@ float-cmp = "0.9.0"
 byteorder = "1.5.0"
 half = { version = "2.4.1", features = ["serde", "std", "num-traits"]}
 rayon = "1.10.0"
-indicatif = {version = "0.17.8", features = ["rayon"]}
+indicatif = {version = "0.17.11", features = ["rayon"]}
 hdf5 = "0.8.1"
 anyhow = "1.0.86"
 ann_dataset = "0.1.3"

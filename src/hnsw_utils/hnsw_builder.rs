@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashSet},
     marker::PhantomData,
     sync::{Mutex, MutexGuard},
 };
@@ -181,55 +181,30 @@ where
 
         let ids_per_level = self.order_ids_by_level(&num_ids_per_level, num_vectors);
 
-        thread_local! {
-            static VISITED_TABLE: RefCell<Option<VisitedTable>> = RefCell::new(None);
-        }
-
         let locks: Vec<Mutex<()>> = (0..num_vectors).map(|_| Mutex::new(())).collect();
 
         let mut rng = StdRng::seed_from_u64(537);
 
         let mut end = num_vectors;
 
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap();
+        for level in (0..=self.max_level).rev() {
+            let begin = end - num_ids_per_level[level as usize];
 
-        pool.scope(|_| {
-            for level in (0..=self.max_level).rev() {
-                let begin = end - num_ids_per_level[level as usize];
+            let mut ids_curr_level: Vec<&usize> =
+                ids_per_level.iter().take(end).skip(begin).collect();
 
-                let mut ids_curr_level: Vec<&usize> =
-                    ids_per_level.iter().take(end).skip(begin).collect();
+            ids_curr_level.shuffle(&mut rng);
 
-                ids_curr_level.shuffle(&mut rng);
-
-                if self.entry_vector.is_none() && level as u8 == self.max_level {
-                    // it assign as entry_vector the first id that got assigned the highest level
-                    self.entry_vector = Some(*ids_curr_level[0]);
-                }
-
-                ids_curr_level.par_iter().for_each(|&&id| {
-                    VISITED_TABLE.with(|visited_table| {
-                        let mut visited_table = visited_table.borrow_mut();
-
-                        if visited_table.is_none() {
-                            *visited_table = Some(VisitedTable::new(self.dataset.len()));
-                        }
-
-                        self.compute_neighbors_for_vector(
-                            id,
-                            level,
-                            &mut visited_table.as_mut().unwrap(),
-                            &locks,
-                            config,
-                        );
-                    });
-                });
-                end = begin;
+            if self.entry_vector.is_none() && level as u8 == self.max_level {
+                // it assign as entry_vector the first id that got assigned the highest level
+                self.entry_vector = Some(*ids_curr_level[0]);
             }
-        });
+
+            ids_curr_level.par_iter().for_each(|&&id| {
+                self.compute_neighbors_for_vector(id, level, &locks, config);
+            });
+            end = begin;
+        }
 
         self.compute_levels()
     }
@@ -411,7 +386,6 @@ where
         &self,
         id_vec: usize,
         level_vec: u8,
-        visited_table: &mut VisitedTable,
         locks: &Vec<Mutex<()>>,
         config: &ConfigHnsw,
     ) {
@@ -452,7 +426,6 @@ where
                 nearest_vec,
                 dis_nearest_vec,
                 curr_level,
-                visited_table,
                 locks,
                 guard,
                 config,
@@ -586,7 +559,6 @@ where
         nearest_vec: usize,
         dis_nearest_vec: f32,
         curr_level: u8,
-        visited_table: &mut VisitedTable,
         locks: &[Mutex<()>],
         guard: MutexGuard<()>,
         config: &ConfigHnsw,
@@ -602,7 +574,6 @@ where
             nearest_vec,
             dis_nearest_vec,
             curr_level,
-            visited_table,
             config,
         );
 
@@ -873,18 +844,18 @@ where
         nearest_vec: usize,
         dis_nearest_vec: f32,
         curr_level: u8,
-        visited_table: &mut VisitedTable,
         config: &ConfigHnsw,
     ) where
         E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
     {
         //min-heap based on distance
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
+        let mut visited_table: HashSet<usize> = HashSet::default();
 
         let node = Node(dis_nearest_vec, nearest_vec);
         candidates.push(Reverse(node));
         closest_vectors.push(node);
-        visited_table.set(nearest_vec);
+        visited_table.insert(nearest_vec);
 
         while let Some(node) = candidates.pop() {
             let curr_node = node.0;
@@ -898,8 +869,8 @@ where
             let neighbors = self.get_unlocked_neighbors(curr_node, curr_level);
 
             for &neighbor in neighbors.iter() {
-                if !visited_table.get(neighbor) {
-                    visited_table.set(neighbor);
+                if !visited_table.contains(&neighbor) {
+                    visited_table.insert(neighbor);
 
                     let distance_to_neighbor =
                         query_evaluator.compute_distance(&self.dataset, neighbor);
@@ -914,7 +885,6 @@ where
                 }
             }
         }
-        visited_table.advance();
     }
 
     /// Shrinks the neighbor list to ensure it contains only the most relevant neighbors, up to a

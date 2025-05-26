@@ -80,7 +80,7 @@ where
     type QueryType = DenseVector1D<&'a [T]>;
 
     #[inline]
-    fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
+    fn new(query: Self::QueryType, _dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
         Self { query }
     }
 

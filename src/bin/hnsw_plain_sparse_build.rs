@@ -59,8 +59,6 @@ fn main() {
         }
     };
 
-    let num_threads_construction = rayon::current_num_threads();
-
     // Set parameters for the HNSW index
     let config = ConfigHnsw::new()
         .num_neighbors(num_neighbors)
@@ -87,7 +85,7 @@ fn main() {
 
     let start_time = Instant::now();
     let index: GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>> =
-        GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+        GraphIndex::from_dataset(&dataset, &config, quantizer);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",

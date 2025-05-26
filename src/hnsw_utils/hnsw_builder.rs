@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     cmp::Reverse,
     collections::{BinaryHeap, HashSet},
     marker::PhantomData,
@@ -12,11 +11,11 @@ use crate::{
     Float,
 };
 use rand::prelude::*;
-use rayon::{prelude::*, ThreadPoolBuilder};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::{
     add_neighbor_to_heaps, compute_closest_from_neighbors, config_hnsw::ConfigHnsw,
-    from_max_heap_to_min_heap, level::Level, visited_table::VisitedTable, Node,
+    from_max_heap_to_min_heap, level::Level, Node,
 };
 
 /// A builder for constructing an HNSW (Hierarchical Navigable Small World) graph.
@@ -172,27 +171,22 @@ where
     pub fn compute_graph(
         &mut self,
         config: &ConfigHnsw,
-        num_threads: usize,
     ) -> (Vec<Level>, Vec<usize>, usize) {
         let num_vectors = self.dataset.len();
         self.assign_level(num_vectors);
 
         let num_ids_per_level = self.count_num_ids_per_level(num_vectors);
-
         let ids_per_level = self.order_ids_by_level(&num_ids_per_level, num_vectors);
 
         let locks: Vec<Mutex<()>> = (0..num_vectors).map(|_| Mutex::new(())).collect();
 
         let mut rng = StdRng::seed_from_u64(537);
-
         let mut end = num_vectors;
 
         for level in (0..=self.max_level).rev() {
             let begin = end - num_ids_per_level[level as usize];
-
             let mut ids_curr_level: Vec<&usize> =
                 ids_per_level.iter().take(end).skip(begin).collect();
-
             ids_curr_level.shuffle(&mut rng);
 
             if self.entry_vector.is_none() && level as u8 == self.max_level {

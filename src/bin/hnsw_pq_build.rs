@@ -78,8 +78,6 @@ fn main() {
         }
     };
 
-    let num_threads_construction = rayon::current_num_threads();
-
     // Set parameters for the HNSW index
     let config = ConfigHnsw::new()
         .num_neighbors(num_neighbors)
@@ -103,8 +101,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -125,8 +122,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -147,8 +143,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -169,8 +164,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -191,8 +185,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -213,8 +206,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -235,8 +227,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -257,8 +248,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -279,8 +269,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",
@@ -301,8 +290,7 @@ fn main() {
             );
             let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
             let start_time = Instant::now();
-            let index =
-                GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+            let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
             let duration = start_time.elapsed();
             println!(
                 "Time to build: {} s (before serializing)",

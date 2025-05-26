@@ -1,11 +1,5 @@
-use crate::hnsw::graph_index::GraphIndex;
-use crate::hnsw_utils::config_hnsw::ConfigHnsw;
 use crate::plain_quantizer::PlainQuantizer;
-use crate::pq::ProductQuantizer;
-use crate::{
-    dot_product_unrolled_avx, read_fvecs_file, read_numpy_f32_flatten_1d, Dataset, DenseDataset,
-    DistanceType, IndexSerializer,
-};
+use crate::{dot_product_unrolled_avx, read_fvecs_file, DenseDataset, DistanceType};
 use core::hash::Hash;
 use csv::WriterBuilder;
 use rand::thread_rng;

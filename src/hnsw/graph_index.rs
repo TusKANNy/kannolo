@@ -116,7 +116,6 @@ where
         source_dataset: &'a SD,
         config: &ConfigHnsw,
         quantizer: Q,
-        num_threads: usize,
     ) -> Self
     where
         SD: Dataset<IQ> + Sync,
@@ -132,8 +131,7 @@ where
     {
         let mut hnsw_builder = HnswBuilder::new(config.get_num_neighbors_per_vec(), source_dataset);
 
-        let (levels, id_permutation, entry_vector) =
-            hnsw_builder.compute_graph(config, num_threads);
+        let (levels, id_permutation, entry_vector) = hnsw_builder.compute_graph(config);
 
         let mut encoded_dataset = D::new(quantizer, source_dataset.dim());
 

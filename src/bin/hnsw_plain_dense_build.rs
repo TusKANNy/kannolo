@@ -58,8 +58,6 @@ fn main() {
         }
     };
 
-    let num_threads_construction = rayon::current_num_threads();
-
     // Set parameters for the HNSW index
     let config = ConfigHnsw::new()
         .num_neighbors(num_neighbors)
@@ -72,7 +70,7 @@ fn main() {
     let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(dataset.dim(), distance);
 
     let start_time = Instant::now();
-    let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+    let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",

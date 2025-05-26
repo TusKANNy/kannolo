@@ -12,7 +12,6 @@ use half::f16;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
-use rayon;
 
 /// A Python-exposed dense index built with a plain quantizer (no quantization).
 #[pyclass]
@@ -60,10 +59,8 @@ impl DensePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -109,10 +106,8 @@ impl DensePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -288,10 +283,8 @@ impl DensePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -342,10 +335,8 @@ impl DensePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -534,10 +525,8 @@ impl SparsePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -608,10 +597,8 @@ impl SparsePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -829,10 +816,8 @@ impl SparsePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -908,10 +893,8 @@ impl SparsePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -1151,58 +1134,56 @@ impl DensePQHNSW {
         let training_dataset =
             DenseDataset::from_vec(training_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
-        let num_threads = rayon::current_num_threads();
-
         // Dispatch based on m_pq.
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1270,58 +1251,56 @@ impl DensePQHNSW {
         let training_dataset =
             DenseDataset::from_vec(training_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
-        let num_threads = rayon::current_num_threads();
-
         // Dispatch based on m_pq.
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {

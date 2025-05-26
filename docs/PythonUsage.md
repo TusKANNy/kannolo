@@ -17,7 +17,7 @@ Set index construction parameters.
 ```python
 efConstruction = 200
 m = 32 # n. neighbors per node
-metric = "ip" # Inner product
+metric = "ip" # Inner product. Alternatively, you can use "l2" for squared L2 metric
 ```
 
 Build HNSW index on dense, plain data stored in a file.
@@ -25,7 +25,7 @@ Build HNSW index on dense, plain data stored in a file.
 ```python
 npy_input_file = "" # your input file
 
-index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, "ip")
+index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, metric)
 ```
 
 Build HNSW index on dense, PQ-encoded data.
@@ -37,8 +37,9 @@ npy_input_file = "" # your input file
 m_pq = 192 # Number of subspaces of PQ
 nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
 sample_size = 500_000 # Size of the sample of the dataset for training PQ
+metric = "ip" # Inner product. Alternatively, you can use "l2" for squared L2 metric
 
-index = DensePQHNSW.build_from_file(data_path, m_pq, nbits, m, efConstruction, "ip", sample_size)
+index = DensePQHNSW.build_from_file(data_path, m_pq, nbits, m, efConstruction, metric, sample_size)
 ```
 
 

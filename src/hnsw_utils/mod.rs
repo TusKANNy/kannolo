@@ -1,11 +1,8 @@
 use std::{
-    arch::x86_64::{_mm_prefetch, _MM_HINT_ET1},
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
     sync::Mutex,
 };
-
-use visited_table::VisitedTable;
 
 use crate::{
     quantizer::{Quantizer, QueryEvaluator},
@@ -15,7 +12,6 @@ use crate::{
 pub mod config_hnsw;
 pub mod hnsw_builder;
 pub mod level;
-pub mod visited_table;
 
 #[derive(Debug, Clone, Copy, PartialOrd)]
 
@@ -280,41 +276,6 @@ pub fn insert_into_topk(
     topk.lock()
         .unwrap()
         .splice(start_index..start_index + k, query_topk);
-}
-
-/// Prefetches data for specific neighbor indices to optimize cache performance during processing.
-///
-/// This function prefetches data from two vectors `visited_table` and `id_permutation` based on the neighbor indices
-/// provided. It uses different prefetching hints for each vector to optimize the performance depending on whether
-/// the data is read or written.
-///
-/// # Parameters
-/// - `neighbors`: A slice of `usize` representing the indices of the neighbor vectors to be prefetched. These indices
-///   determine which entries in the `visited_table` and `id_permutation` vectors are targeted for prefetching.
-/// - `visited_table`: A reference to a `VisitedTable` that contains the visit status vector. This vector is used to
-///   check whether a vector has been visited or not. Prefetching hints used for this vector are `_MM_HINT_ET1`, which
-///   is suitable for data that will be both read and written.
-/// - `id_permutation`: A slice of `usize` representing the mapping of vector IDs to access the dataset and retrieve the vector.
-///    Prefetching hints used for this vector are `_MM_HINT_T1`, which is optimized for data that will be read but not written.
-///
-/// # Safety
-/// This function uses unsafe Rust code to perform prefetching. It assumes that the pointers derived from `visited_table`
-/// and `id_permutation` are valid and that the indices in `neighbors` are within the bounds of these vectors. Ensure
-/// that the provided indices do not cause out-of-bounds access to avoid undefined behavior.
-#[inline]
-pub fn prefetch_neighbors(
-    neighbors: &[usize],
-    visited_table: &VisitedTable,
-    // id_permutation: &[usize],
-) {
-    for &neighbor in neighbors.iter() {
-        unsafe {
-            let ptr = visited_table.get_visit_status().as_ptr().add(neighbor);
-            _mm_prefetch(ptr as *const i8, _MM_HINT_ET1);
-            // let ptr_1 = id_permutation.as_ptr().add(neighbor);
-            // _mm_prefetch(ptr_1 as *const i8, _MM_HINT_T1)
-        }
-    }
 }
 
 #[inline]

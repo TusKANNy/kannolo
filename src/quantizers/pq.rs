@@ -13,7 +13,7 @@ use crate::{Float, PlainDenseDataset};
 use itertools::izip;
 use rayon::prelude::*;
 
-use crate::{AsRefItem, Vector1D, DenseVector1D};
+use crate::{AsRefItem, DenseVector1D, Vector1D};
 
 use serde::{Deserialize, Serialize};
 
@@ -488,10 +488,15 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
     type QueryType = DenseVector1D<&'a [f32]>;
 
     #[inline]
-    fn new(query: Self::QueryType) -> Self {
+    fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
+        let distance_table = match dataset.quantizer().distance() {
+            DistanceType::Euclidean => dataset.quantizer().compute_euclidean_distance_table(&query),
+            DistanceType::DotProduct => dataset.quantizer().compute_dot_product_table(&query),
+        };
+
         Self {
             _query: query,
-            distance_table: Vec::new(),
+            distance_table: distance_table,
         }
     }
 
@@ -578,16 +583,5 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
         }
 
         heap.topk()
-    }
-}
-
-impl<'a, const M: usize> QueryEvaluatorPQ<'a, M> {
-    #[inline]
-    pub fn compute_distance_table(&mut self, query: <Self as QueryEvaluator<'a>>::QueryType, dataset: DenseDataset<ProductQuantizer<M>>) {
-        let distance_table = match dataset.quantizer().distance() {
-            DistanceType::Euclidean => dataset.quantizer().compute_euclidean_distance_table(&query),
-            DistanceType::DotProduct => dataset.quantizer().compute_dot_product_table(&query),
-        };
-        self.distance_table = distance_table;
     }
 }

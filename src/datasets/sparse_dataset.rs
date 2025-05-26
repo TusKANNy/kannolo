@@ -16,7 +16,7 @@ use std::io::{BufReader, Read, Result as IoResult};
 use std::ops::Range;
 use std::path::Path;
 
-use crate::{Vector1D, SparseVector1D};
+use crate::{SparseVector1D, Vector1D};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,8 @@ where
     C::Type<u16>: AsRef<[u16]>,
     C::Type<usize>: AsRef<[usize]>,
 {
-    type DataType<'a> = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>
+    type DataType<'a>
+        = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>
     where
         Q: 'a,
         C: 'a,
@@ -96,7 +97,7 @@ where
             components: C::default::<u16>(),
             offsets: C::with_initial_value(0),
             n_vecs: 0,
-            d: 0,
+            d: quantizer.m(),
             quantizer,
         }
     }
@@ -113,7 +114,11 @@ where
 
     #[inline]
     fn data<'a>(&'a self) -> Self::DataType<'a> {
-        SparseVector1D::new(self.components.as_ref(), self.values.as_ref(), self.d as usize)
+        SparseVector1D::new(
+            self.components.as_ref(),
+            self.values.as_ref(),
+            self.d as usize,
+        )
     }
 
     #[inline]
@@ -169,8 +174,8 @@ where
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>> 
-    where 
+    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
+    where
         Q::OutputItem: 'a,
     {
         SparseDatasetIter::new(self)
@@ -281,7 +286,8 @@ where
     C: Container<Type<u16> = Vec<u16>>,
     C: Container<Type<usize> = Vec<usize>>,
 {
-    type InputDataType<'a> = SparseVector1D<&'a [u16], &'a [Q::InputItem]>
+    type InputDataType<'a>
+        = SparseVector1D<&'a [u16], &'a [Q::InputItem]>
     where
         Q::InputItem: 'a;
 
@@ -331,7 +337,10 @@ where
     /// Arguments:
     /// * `fname`: The name of the file to read.
     /// * `d`: The dimensionality of the dataset.
-    pub fn read_bin_file(fname: &str, d: usize) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
+    pub fn read_bin_file(
+        fname: &str,
+        d: usize,
+    ) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
         Self::read_bin_file_limit(fname, None, d)
     }
 
@@ -540,11 +549,11 @@ where
         components: &[u16],
         values: &[f16],
         offsets: &[usize],
-        d: usize
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f16>>> {
         let n_vecs = offsets.len() - 1;
-        let quantizer = SparsePlainQuantizer::<f16>::new(n_vecs, DistanceType::DotProduct);
-        let mut dataset = SparseDataset::new(quantizer, 0);
+        let quantizer = SparsePlainQuantizer::<f16>::new(d, DistanceType::DotProduct);
+        let mut dataset = SparseDataset::new(quantizer, d);
 
         for i in 0..n_vecs {
             let start = offsets[i];
@@ -565,11 +574,11 @@ where
         components: &[u16],
         values: &[f32],
         offsets: &[usize],
-        d: usize
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
         let n_vecs = offsets.len() - 1;
-        let quantizer = SparsePlainQuantizer::<f32>::new(n_vecs, DistanceType::DotProduct);
-        let mut dataset = SparseDataset::new(quantizer, 0);
+        let quantizer = SparsePlainQuantizer::<f32>::new(d, DistanceType::DotProduct);
+        let mut dataset = SparseDataset::new(quantizer, d);
 
         for i in 0..n_vecs {
             let start = offsets[i];

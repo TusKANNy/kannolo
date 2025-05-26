@@ -10,7 +10,7 @@ use kannolo::{
     hnsw::graph_index::GraphIndex, hnsw_utils::config_hnsw::ConfigHnsw, Dataset, DistanceType,
     IndexSerializer,
 };
-use kannolo::{read_numpy_f32_flatten_2d, Vector1D, DenseDataset};
+use kannolo::{read_numpy_f32_flatten_2d, DenseDataset, Vector1D};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -106,7 +106,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         16 => {
@@ -125,7 +128,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         32 => {
@@ -144,7 +150,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         48 => {
@@ -163,7 +172,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         64 => {
@@ -182,7 +194,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         96 => {
@@ -201,7 +216,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         128 => {
@@ -220,7 +238,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         192 => {
@@ -239,7 +260,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         256 => {
@@ -258,7 +282,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         384 => {
@@ -277,7 +304,10 @@ fn main() {
             let index =
                 GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
             let duration = start_time.elapsed();
-            println!("Time to build {} (before serializing)", duration.as_secs());
+            println!(
+                "Time to build: {} s (before serializing)",
+                duration.as_secs()
+            );
             let _ = IndexSerializer::save_index(&args.output_file, &index);
         }
         _ => {

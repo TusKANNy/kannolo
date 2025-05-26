@@ -7,7 +7,10 @@ use std::{
 
 use visited_table::VisitedTable;
 
-use crate::{quantizer::{Quantizer, QueryEvaluator}, Dataset};
+use crate::{
+    quantizer::{Quantizer, QueryEvaluator},
+    Dataset,
+};
 
 pub mod config_hnsw;
 pub mod hnsw_builder;
@@ -190,12 +193,11 @@ pub fn compute_closest_from_neighbors<'a, Q, D, E>(
     neighbors: &[usize],
     nearest_vec: &mut usize,
     dis_nearest_vec: &mut f32,
-)
-where 
-    Q: Quantizer<DatasetType = D>,   // 1) your quantizer’s associated type must be exactly D
-    D: Dataset<Q>,                    // 2) dataset must implement Dataset<Q>
-    E: QueryEvaluator<'a, Q = Q>,         // 3) evaluator’s Q must be your Q
-    {
+) where
+    Q: Quantizer<DatasetType = D>, // 1) your quantizer’s associated type must be exactly D
+    D: Dataset<Q>,                 // 2) dataset must implement Dataset<Q>
+    E: QueryEvaluator<'a, Q = Q>,  // 3) evaluator’s Q must be your Q
+{
     for &neighbor in neighbors {
         let distance_neighbor = query_evaluator.compute_distance(dataset, neighbor);
 
@@ -998,7 +1000,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
 
     use crate::{
         hnsw_utils::compute_closest_from_neighbors, plain_quantizer::PlainQuantizer, Dataset,
-        DenseVector1D, DenseDataset, DistanceType,
+        DenseDataset, DenseVector1D, DistanceType,
     };
 
     /// Tests that `compute_closest_from_neighbors` correctly updates the nearest neighbor.

@@ -1,5 +1,5 @@
 use crate::{dot_product_unrolled_avx, Dataset};
-use crate::{Vector1D, PlainDenseDataset};
+use crate::{PlainDenseDataset, Vector1D};
 use std::time::Instant;
 
 pub struct KMeans {

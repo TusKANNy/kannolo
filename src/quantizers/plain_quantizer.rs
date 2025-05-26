@@ -1,7 +1,7 @@
 use crate::distances::{self, dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{dot_product_batch_4, euclidean_distance_batch_4, Vector1D, DenseVector1D};
+use crate::{dot_product_batch_4, euclidean_distance_batch_4, DenseVector1D, Vector1D};
 use crate::{Dataset, DistanceType, Float};
 
 use crate::datasets::dense_dataset::DenseDataset;
@@ -30,15 +30,15 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     type InputItem = T;
     type OutputItem = T;
 
-    type DatasetType
-        = DenseDataset<Self>;
+    type DatasetType = DenseDataset<Self>;
 
     type Evaluator<'a>
         = QueryEvaluatorPlain<'a, Self::InputItem>
     where
         Self::InputItem: Float
             + distances::euclidean_distance::EuclideanDistance<T>
-            + distances::dot_product::DotProduct<T> + 'a;
+            + distances::dot_product::DotProduct<T>
+            + 'a;
 
     #[inline]
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
@@ -60,7 +60,8 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     }
 }
 
-pub struct QueryEvaluatorPlain<'a,
+pub struct QueryEvaluatorPlain<
+    'a,
     T: Float
         + distances::euclidean_distance::EuclideanDistance<T>
         + distances::dot_product::DotProduct<T>
@@ -79,7 +80,7 @@ where
     type QueryType = DenseVector1D<&'a [T]>;
 
     #[inline]
-    fn new(query: Self::QueryType) -> Self {
+    fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
         Self { query }
     }
 
@@ -88,7 +89,9 @@ where
         let document_slice = document_slice.values_as_slice();
         let query_slice = self.query.values_as_slice();
         match dataset.quantizer().distance() {
-            DistanceType::Euclidean => dense_euclidean_distance_unrolled(query_slice, document_slice),
+            DistanceType::Euclidean => {
+                dense_euclidean_distance_unrolled(query_slice, document_slice)
+            }
             DistanceType::DotProduct => -dense_dot_product_unrolled(query_slice, document_slice),
         }
     }
@@ -96,7 +99,7 @@ where
     #[inline]
     fn compute_four_distances(
         &self,
-        dataset: &<Self::Q as Quantizer>::DatasetType, 
+        dataset: &<Self::Q as Quantizer>::DatasetType,
         indexes: impl IntoIterator<Item = usize>,
     ) -> impl Iterator<Item = f32> {
         let chunk: Vec<_> = indexes.into_iter().map(|id| dataset.get(id)).collect();

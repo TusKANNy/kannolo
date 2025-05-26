@@ -3,7 +3,7 @@ use crate::plain_quantizer::PlainQuantizer;
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
 use crate::{
-    Vector1D, Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset,
+    Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset, Vector1D,
 };
 use crate::{DotProduct, EuclideanDistance};
 
@@ -26,11 +26,12 @@ where
     Q: Quantizer<DatasetType = Self>,
     B: AsRef<[Q::OutputItem]> + Default,
 {
-    type DataType<'a> = DenseVector1D<&'a [Q::OutputItem]>
+    type DataType<'a>
+        = DenseVector1D<&'a [Q::OutputItem]>
     where
-    Q: 'a,
-    B: 'a,
-    Q::OutputItem: 'a;
+        Q: 'a,
+        B: 'a,
+        Q::OutputItem: 'a;
 
     #[inline]
     fn new(quantizer: Q, d: usize) -> Self {
@@ -81,8 +82,8 @@ where
     fn get<'a>(&'a self, index: usize) -> Self::DataType<'a> {
         assert!(index < self.len(), "Index out of bounds.");
 
-        // m is the dim for plain, and is the number of subspaces for quantizers
         let m = self.quantizer.m();
+
         let start = index * m;
         let end = start + m;
 
@@ -98,13 +99,17 @@ where
         let document2_slice = self.get(idx2);
         let document2_slice = document2_slice.values_as_slice();
         match self.quantizer().distance() {
-            DistanceType::Euclidean => dense_euclidean_distance_unrolled(document1_slice, document2_slice),
-            DistanceType::DotProduct => -dense_dot_product_unrolled(document1_slice, document2_slice),
+            DistanceType::Euclidean => {
+                dense_euclidean_distance_unrolled(document1_slice, document2_slice)
+            }
+            DistanceType::DotProduct => {
+                -dense_dot_product_unrolled(document1_slice, document2_slice)
+            }
         }
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>> 
+    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
     where
         Q::OutputItem: 'a,
     {
@@ -197,7 +202,8 @@ where
     Q: Quantizer<DatasetType = DenseDataset<Q>>,
     Q::OutputItem: Copy + Default,
 {
-    type InputDataType<'a> = DenseVector1D<&'a [Q::InputItem]>
+    type InputDataType<'a>
+        = DenseVector1D<&'a [Q::InputItem]>
     where
         Q::InputItem: 'a;
 

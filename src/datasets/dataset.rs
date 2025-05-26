@@ -1,7 +1,7 @@
 use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{Vector1D, Float};
 use crate::{DotProduct, EuclideanDistance};
+use crate::{Float, Vector1D};
 
 pub trait Dataset<Q>
 where
@@ -9,7 +9,8 @@ where
 {
     type DataType<'a>: Vector1D<ValuesType = Q::OutputItem>
     where
-    Q::OutputItem: 'a, Self: 'a;
+        Q::OutputItem: 'a,
+        Self: 'a;
 
     fn new(quantizer: Q, d: usize) -> Self;
 
@@ -22,7 +23,7 @@ where
         Q::Evaluator<'a>: QueryEvaluator<'a, Q = Q>,
         Q::InputItem: Float + EuclideanDistance<Q::InputItem> + DotProduct<Q::InputItem>,
     {
-        <Q::Evaluator<'a>>::new(query)
+        <Q::Evaluator<'a>>::new(query, &self)
     }
 
     fn quantizer(&self) -> &Q;
@@ -69,7 +70,7 @@ where
     Q: Quantizer<DatasetType = Self>,
 {
     type InputDataType<'a>: Vector1D<ValuesType = Q::InputItem>
-    where 
+    where
         Q::InputItem: 'a;
     fn push<'a>(&mut self, vec: &Self::InputDataType<'a>);
 }

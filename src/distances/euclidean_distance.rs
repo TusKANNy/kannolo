@@ -193,20 +193,14 @@ fn dense_euclidean_distance_general<T>(query: &[T], values: &[T]) -> f32
 where
     T: Float,
 {
-    query
-        .iter()
-        .zip(values)
-        .fold(0.0, |acc, (a, b)| {
-            let diff = a.to_f32().unwrap() - b.to_f32().unwrap();
-            acc + diff * diff
-        })
+    query.iter().zip(values).fold(0.0, |acc, (a, b)| {
+        let diff = a.to_f32().unwrap() - b.to_f32().unwrap();
+        acc + diff * diff
+    })
 }
 
 #[inline]
-pub fn dense_euclidean_distance_unrolled<T>(
-    query: &[T],
-    values: &[T],
-) -> f32
+pub fn dense_euclidean_distance_unrolled<T>(query: &[T], values: &[T]) -> f32
 where
     T: Float,
 {
@@ -214,10 +208,7 @@ where
     let mut r = [0.0; N_LANES];
 
     let chunks = query.len() / N_LANES;
-    for (q_chunk, v_chunk) in zip(
-        query.chunks_exact(N_LANES),
-        values.chunks_exact(N_LANES),
-    ) {
+    for (q_chunk, v_chunk) in zip(query.chunks_exact(N_LANES), values.chunks_exact(N_LANES)) {
         for i in 0..N_LANES {
             let d = q_chunk[i].to_f32().unwrap() - v_chunk[i].to_f32().unwrap();
             r[i] += d * d;
@@ -225,8 +216,5 @@ where
     }
 
     r.iter().fold(0.0, |acc, &val| acc + val)
-        + dense_euclidean_distance_general(
-            &query[N_LANES * chunks..],
-            &&values[N_LANES * chunks..],
-        )
+        + dense_euclidean_distance_general(&query[N_LANES * chunks..], &&values[N_LANES * chunks..])
 }

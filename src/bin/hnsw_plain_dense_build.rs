@@ -74,7 +74,10 @@ fn main() {
     let start_time = Instant::now();
     let index = GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
     let duration = start_time.elapsed();
-    println!("Time to build {} (before serializing)", duration.as_secs());
+    println!(
+        "Time to build: {} s (before serializing)",
+        duration.as_secs()
+    );
 
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }

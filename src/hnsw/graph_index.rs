@@ -128,7 +128,7 @@ where
         // This constraint is necessary because the `push` function of the new_dataset
         // expects input types of InputDataType, while we iterate over types of DataType from the source_dataset.
         D: GrowableDataset<Q, InputDataType<'a> = <SD as Dataset<IQ>>::DataType<'a>>,
-        <Q as Quantizer>::InputItem: 'a
+        <Q as Quantizer>::InputItem: 'a,
     {
         let mut hnsw_builder = HnswBuilder::new(config.get_num_neighbors_per_vec(), source_dataset);
 
@@ -195,6 +195,9 @@ where
     D: Dataset<Q> + Sync,
     Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
 {
+    pub fn dim(&self) -> usize {
+        self.dataset.dim()
+    }
     /// Performs a nearest neighbor search for a given set of query vectors on the HNSW graph.
     ///
     /// This function searches for the `k` nearest neighbors for each vector in the provided query dataset.
@@ -270,7 +273,7 @@ where
             QueryEvaluator<'a, QueryType = <QD as Dataset<QQ>>::DataType<'a>>,
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
-        <Q as Quantizer>::InputItem: 'a
+        <Q as Quantizer>::InputItem: 'a,
     {
         let query_topk = self.find_k_nearest_neighbors(query, k, config);
 
@@ -331,7 +334,12 @@ where
 
         // Greedy search through the upper levels
         for level in self.levels.iter().skip(1).rev() {
-            level.greedy_update_nearest(&self.dataset, &query_evaluator, &mut nearest_vec, &mut dis_nearest_vec);
+            level.greedy_update_nearest(
+                &self.dataset,
+                &query_evaluator,
+                &mut nearest_vec,
+                &mut dis_nearest_vec,
+            );
         }
 
         let ef = std::cmp::max(config.get_ef_search(), k);
@@ -387,14 +395,13 @@ where
         query_evaluator: &E,
         ef: usize,
         level: &Level,
-    ) -> BinaryHeap<Node> 
+    ) -> BinaryHeap<Node>
     where
-        E: QueryEvaluator<'a, Q = Q>,               // 1) tie evaluator’s Q = our Q
-        Q: Quantizer<DatasetType = D>,          // 2) ensure our Q’s DatasetType = D
-        <Q as Quantizer>::InputItem:            // and preserve input‐item bounds
-            EuclideanDistance<<Q as Quantizer>::InputItem>
+        E: QueryEvaluator<'a, Q = Q>,  // 1) tie evaluator’s Q = our Q
+        Q: Quantizer<DatasetType = D>, // 2) ensure our Q’s DatasetType = D
+        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
-        {
+    {
         // max-heap
         let mut top_candidates: BinaryHeap<Node> = BinaryHeap::new();
         // min-heap
@@ -485,7 +492,8 @@ where
             }
 
             if counter == 4 {
-                let distances = query_evaluator.compute_four_distances(&self.dataset, ids.iter().copied());
+                let distances =
+                    query_evaluator.compute_four_distances(&self.dataset, ids.iter().copied());
                 for (dis_neigh, &neighbor) in distances.zip(ids.iter()) {
                     add_distances_fn(dis_neigh, neighbor);
                 }

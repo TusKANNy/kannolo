@@ -149,11 +149,10 @@ impl Level {
         query_evaluator: &E,
         nearest_vec: &mut usize,
         dis_nearest_vec: &mut f32,
-    ) 
-    where
-        Q: Quantizer<DatasetType = D>,   // 1) your quantizer’s associated type must be exactly D
-        D: Dataset<Q>,                    // 2) dataset must implement Dataset<Q>
-        E: QueryEvaluator<'a, Q = Q>,         // 3) evaluator’s Q must be your Q
+    ) where
+        Q: Quantizer<DatasetType = D>, // 1) your quantizer’s associated type must be exactly D
+        D: Dataset<Q>,                 // 2) dataset must implement Dataset<Q>
+        E: QueryEvaluator<'a, Q = Q>,  // 3) evaluator’s Q must be your Q
     {
         loop {
             let prec_nearest = *nearest_vec;

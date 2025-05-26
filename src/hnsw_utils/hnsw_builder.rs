@@ -81,7 +81,7 @@ where
     // This constraint is necessary because the vector returned by the dataset's "get" function is of type Datatype.
     // The query evaluator, however, requires a vector of type Querytype.
     Q::Evaluator<'a>: QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
-    <Q as IdentityQuantizer>::T: 'a
+    <Q as IdentityQuantizer>::T: 'a,
 {
     /// Constructs a new `HnswBuilder` instance.
     ///
@@ -488,9 +488,8 @@ where
         query_evaluator: &E,
         nearest_vec: &mut usize,
         dis_nearest_vec: &mut f32,
-    ) 
-    where
-        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
     {
         loop {
             let prec_nearest = *nearest_vec;
@@ -591,9 +590,8 @@ where
         locks: &[Mutex<()>],
         guard: MutexGuard<()>,
         config: &ConfigHnsw,
-    )
-    where
-        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
     {
         //max-heap, on top is the farthest vector
         let mut closest_vectors: BinaryHeap<Node> = BinaryHeap::new();
@@ -877,9 +875,8 @@ where
         curr_level: u8,
         visited_table: &mut VisitedTable,
         config: &ConfigHnsw,
-    ) 
-    where
-        E: QueryEvaluator<'a, Q = Q>,     // <= tie evaluator’s Q to builder’s Q
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
     {
         //min-heap based on distance
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
@@ -904,7 +901,8 @@ where
                 if !visited_table.get(neighbor) {
                     visited_table.set(neighbor);
 
-                    let distance_to_neighbor = query_evaluator.compute_distance(&self.dataset, neighbor);
+                    let distance_to_neighbor =
+                        query_evaluator.compute_distance(&self.dataset, neighbor);
                     let neighbor_node = Node(distance_to_neighbor, neighbor);
 
                     add_neighbor_to_heaps(
@@ -1236,4 +1234,3 @@ where
         &self.levels_assigned
     }
 }
-

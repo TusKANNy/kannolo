@@ -1,11 +1,5 @@
-use crate::hnsw::graph_index::GraphIndex;
-use crate::hnsw_utils::config_hnsw::ConfigHnsw;
 use crate::plain_quantizer::PlainQuantizer;
-use crate::pq::ProductQuantizer;
-use crate::{
-    dot_product_unrolled_avx, read_fvecs_file, read_numpy_f32_flatten_1d, Dataset, DenseDataset,
-    DistanceType, IndexSerializer,
-};
+use crate::{dot_product_unrolled_avx, read_fvecs_file, DenseDataset, DistanceType};
 use core::hash::Hash;
 use csv::WriterBuilder;
 use rand::thread_rng;
@@ -248,48 +242,6 @@ pub fn compute_squared_l2_distance(query_vec: &[f32], centroids: &[f32], length:
             diff * diff // Squared difference
         })
         .sum() // Sum of all squared differences
-}
-
-pub fn serialize_indexhnsw(
-    distance: DistanceType,
-    config: &ConfigHnsw,
-    plain_quantizer: bool,
-    folder_path: &str,
-    data_path: &str,
-) {
-    let dataset = read_dataset_sift1m(distance, folder_path, data_path);
-
-    if plain_quantizer {
-        let filename = format!(
-                "/home/domenicoerriquez/struttura-kANNolo/index_hnsw_serialized/index_searialized_plain_M{}_ef{}",
-                config.get_num_neighbors_per_vec(), config.get_ef_construction()
-            );
-
-        let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(dataset.dim(), distance);
-        let index =
-            GraphIndex::from_dataset(&dataset, config, quantizer, rayon::current_num_threads());
-        IndexSerializer::save_index(&filename, &index).expect("NOT ABLE TO SERIALIZE");
-    } else {
-        let filename = format!(
-            "/home/domenicoerriquez/struttura-kANNolo/index_hnsw_serialized/index_searialized_pq32_M{}_ef{}",
-            config.get_num_neighbors_per_vec(), config.get_ef_construction()
-        );
-
-        let nbits = 8;
-        const M: usize = 32;
-
-        let centroids_path = format!(
-            "/home/ldelfino/struttura-kANNolo/data_for_testing/pq_centroids_{}.npy",
-            M
-        );
-
-        let (centroids, _) = read_numpy_f32_flatten_1d(centroids_path.to_string());
-        let quantizer =
-            ProductQuantizer::<M>::from_pretrained(dataset.dim(), nbits, centroids, distance);
-        let index =
-            GraphIndex::from_dataset(&dataset, config, quantizer, rayon::current_num_threads());
-        IndexSerializer::save_index(&filename, &index).expect("NOT ABLE TO SERIALIZE");
-    }
 }
 
 #[derive(Debug, serde::Serialize)]

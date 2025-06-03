@@ -1,7 +1,6 @@
 use std::{
-    cell::RefCell,
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashSet},
     marker::PhantomData,
     sync::{Mutex, MutexGuard},
 };
@@ -12,11 +11,11 @@ use crate::{
     Float,
 };
 use rand::prelude::*;
-use rayon::{prelude::*, ThreadPoolBuilder};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::{
     add_neighbor_to_heaps, compute_closest_from_neighbors, config_hnsw::ConfigHnsw,
-    from_max_heap_to_min_heap, level::Level, visited_table::VisitedTable, Node,
+    from_max_heap_to_min_heap, level::Level, Node,
 };
 
 /// A builder for constructing an HNSW (Hierarchical Navigable Small World) graph.
@@ -67,7 +66,7 @@ pub struct HnswBuilder<'a, D, Q> {
 
 impl<'a, D, Q> HnswBuilder<'a, D, Q>
 where
-    D: Dataset<'a, Q> + Sync,
+    D: Dataset<Q> + Sync,
     // The IdentityQuantizer enforces that the InputItem and OutputItem of the quantizer are of the same type.
     // This is essential because:
     // - The `query_evaluator` function in the `Dataset` trait requires a vector of type `QueryType`,
@@ -76,11 +75,12 @@ where
     //   of type `OutputItem` from the quantizer.
     // By implementing the IdentityQuantizer trait, we ensure that `InputItem` and `OutputItem` are the same type,
     // allowing the dataset's `get` function to directly provide data that can be used by `query_evaluator`
-    Q: IdentityQuantizer<DatasetType<'a> = D, T: Float> + Sync,
+    Q: IdentityQuantizer<DatasetType = D, T: Float> + Sync,
 
     // This constraint is necessary because the vector returned by the dataset's "get" function is of type Datatype.
     // The query evaluator, however, requires a vector of type Querytype.
-    Q::Evaluator<'a>: QueryEvaluator<'a, QueryType = <D as Dataset<'a, Q>>::DataType>,
+    Q::Evaluator<'a>: QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
+    <Q as IdentityQuantizer>::T: 'a,
 {
     /// Constructs a new `HnswBuilder` instance.
     ///
@@ -171,64 +171,34 @@ where
     pub fn compute_graph(
         &mut self,
         config: &ConfigHnsw,
-        num_threads: usize,
     ) -> (Vec<Level>, Vec<usize>, usize) {
         let num_vectors = self.dataset.len();
         self.assign_level(num_vectors);
 
         let num_ids_per_level = self.count_num_ids_per_level(num_vectors);
-
         let ids_per_level = self.order_ids_by_level(&num_ids_per_level, num_vectors);
-
-        thread_local! {
-            static VISITED_TABLE: RefCell<Option<VisitedTable>> = RefCell::new(None);
-        }
 
         let locks: Vec<Mutex<()>> = (0..num_vectors).map(|_| Mutex::new(())).collect();
 
         let mut rng = StdRng::seed_from_u64(537);
-
         let mut end = num_vectors;
 
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap();
+        for level in (0..=self.max_level).rev() {
+            let begin = end - num_ids_per_level[level as usize];
+            let mut ids_curr_level: Vec<&usize> =
+                ids_per_level.iter().take(end).skip(begin).collect();
+            ids_curr_level.shuffle(&mut rng);
 
-        pool.scope(|_| {
-            for level in (0..=self.max_level).rev() {
-                let begin = end - num_ids_per_level[level as usize];
-
-                let mut ids_curr_level: Vec<&usize> =
-                    ids_per_level.iter().take(end).skip(begin).collect();
-
-                ids_curr_level.shuffle(&mut rng);
-
-                if self.entry_vector.is_none() && level as u8 == self.max_level {
-                    // it assign as entry_vector the first id that got assigned the highest level
-                    self.entry_vector = Some(*ids_curr_level[0]);
-                }
-
-                ids_curr_level.par_iter().for_each(|&&id| {
-                    VISITED_TABLE.with(|visited_table| {
-                        let mut visited_table = visited_table.borrow_mut();
-
-                        if visited_table.is_none() {
-                            *visited_table = Some(VisitedTable::new(self.dataset.len()));
-                        }
-
-                        self.compute_neighbors_for_vector(
-                            id,
-                            level,
-                            &mut visited_table.as_mut().unwrap(),
-                            &locks,
-                            config,
-                        );
-                    });
-                });
-                end = begin;
+            if self.entry_vector.is_none() && level as u8 == self.max_level {
+                // it assign as entry_vector the first id that got assigned the highest level
+                self.entry_vector = Some(*ids_curr_level[0]);
             }
-        });
+
+            ids_curr_level.par_iter().for_each(|&&id| {
+                self.compute_neighbors_for_vector(id, level, &locks, config);
+            });
+            end = begin;
+        }
 
         self.compute_levels()
     }
@@ -410,7 +380,6 @@ where
         &self,
         id_vec: usize,
         level_vec: u8,
-        visited_table: &mut VisitedTable,
         locks: &Vec<Mutex<()>>,
         config: &ConfigHnsw,
     ) {
@@ -426,7 +395,7 @@ where
         let query_evaluator = self.dataset.query_evaluator(vector);
 
         let mut curr_level = self.max_level;
-        let mut dis_nearest_vec = query_evaluator.compute_distance(nearest_vec);
+        let mut dis_nearest_vec = query_evaluator.compute_distance(&self.dataset, nearest_vec);
 
         {
             let _lock = &locks[id_vec].lock().unwrap();
@@ -451,7 +420,6 @@ where
                 nearest_vec,
                 dis_nearest_vec,
                 curr_level,
-                visited_table,
                 locks,
                 guard,
                 config,
@@ -481,18 +449,21 @@ where
     /// the `compute_closest_from_neighbors` function to evaluate these neighbors and determine if any are closer to the
     /// vector being added. The nearest vector and its distance are updated if a closer neighbor is found. This process
     /// continues iteratively until no closer neighbors are found, at which point the function exits.
-    fn greedy_update_nearest(
+    fn greedy_update_nearest<E>(
         &self,
         curr_level: u8,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         nearest_vec: &mut usize,
         dis_nearest_vec: &mut f32,
-    ) {
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
+    {
         loop {
             let prec_nearest = *nearest_vec;
             let neighbors = self.get_unlocked_neighbors(*nearest_vec, curr_level);
 
             compute_closest_from_neighbors(
+                self.dataset,
                 query_evaluator,
                 neighbors.as_slice(),
                 nearest_vec,
@@ -575,18 +546,19 @@ where
     ///    first acquires the lock for each vector whose neighbor list is being updated. This prevents concurrent
     ///    modifications by other threads, maintaining the integrity of the neighbor lists.
     ///
-    fn add_links_starting_from(
+    fn add_links_starting_from<E>(
         &self,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         id_vec: usize,
         nearest_vec: usize,
         dis_nearest_vec: f32,
         curr_level: u8,
-        visited_table: &mut VisitedTable,
         locks: &[Mutex<()>],
         guard: MutexGuard<()>,
         config: &ConfigHnsw,
-    ) {
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
+    {
         //max-heap, on top is the farthest vector
         let mut closest_vectors: BinaryHeap<Node> = BinaryHeap::new();
 
@@ -596,7 +568,6 @@ where
             nearest_vec,
             dis_nearest_vec,
             curr_level,
-            visited_table,
             config,
         );
 
@@ -860,23 +831,25 @@ where
     ///
     /// Once the search completes, `closest_vectors` will contain the closest neighbors to the query vector,
     /// and the visited table is advanced to prepare for subsequent searches.
-    fn search_neighbors_to_add(
+    fn search_neighbors_to_add<E>(
         &self,
         closest_vectors: &mut BinaryHeap<Node>,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         nearest_vec: usize,
         dis_nearest_vec: f32,
         curr_level: u8,
-        visited_table: &mut VisitedTable,
         config: &ConfigHnsw,
-    ) {
+    ) where
+        E: QueryEvaluator<'a, Q = Q>, // <= tie evaluator’s Q to builder’s Q
+    {
         //min-heap based on distance
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
+        let mut visited_table: HashSet<usize> = HashSet::default();
 
         let node = Node(dis_nearest_vec, nearest_vec);
         candidates.push(Reverse(node));
         closest_vectors.push(node);
-        visited_table.set(nearest_vec);
+        visited_table.insert(nearest_vec);
 
         while let Some(node) = candidates.pop() {
             let curr_node = node.0;
@@ -890,10 +863,11 @@ where
             let neighbors = self.get_unlocked_neighbors(curr_node, curr_level);
 
             for &neighbor in neighbors.iter() {
-                if !visited_table.get(neighbor) {
-                    visited_table.set(neighbor);
+                if !visited_table.contains(&neighbor) {
+                    visited_table.insert(neighbor);
 
-                    let distance_to_neighbor = query_evaluator.compute_distance(neighbor);
+                    let distance_to_neighbor =
+                        query_evaluator.compute_distance(&self.dataset, neighbor);
                     let neighbor_node = Node(distance_to_neighbor, neighbor);
 
                     add_neighbor_to_heaps(
@@ -905,7 +879,6 @@ where
                 }
             }
         }
-        visited_table.advance();
     }
 
     /// Shrinks the neighbor list to ensure it contains only the most relevant neighbors, up to a

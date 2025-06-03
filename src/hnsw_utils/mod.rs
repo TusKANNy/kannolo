@@ -1,18 +1,17 @@
 use std::{
-    arch::x86_64::{_mm_prefetch, _MM_HINT_ET1},
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
     sync::Mutex,
 };
 
-use visited_table::VisitedTable;
-
-use crate::quantizer::QueryEvaluator;
+use crate::{
+    quantizer::{Quantizer, QueryEvaluator},
+    Dataset,
+};
 
 pub mod config_hnsw;
 pub mod hnsw_builder;
 pub mod level;
-pub mod visited_table;
 
 #[derive(Debug, Clone, Copy, PartialOrd)]
 
@@ -184,14 +183,19 @@ pub fn add_neighbors_to_heaps(
 /// assert_eq!(nearest_vec, 1);
 /// ```
 #[inline]
-pub fn compute_closest_from_neighbors<'a>(
-    query_evaluator: &impl QueryEvaluator<'a>,
+pub fn compute_closest_from_neighbors<'a, Q, D, E>(
+    dataset: &D,
+    query_evaluator: &E,
     neighbors: &[usize],
     nearest_vec: &mut usize,
     dis_nearest_vec: &mut f32,
-) {
+) where
+    Q: Quantizer<DatasetType = D>, // 1) your quantizer’s associated type must be exactly D
+    D: Dataset<Q>,                 // 2) dataset must implement Dataset<Q>
+    E: QueryEvaluator<'a, Q = Q>,  // 3) evaluator’s Q must be your Q
+{
     for &neighbor in neighbors {
-        let distance_neighbor = query_evaluator.compute_distance(neighbor);
+        let distance_neighbor = query_evaluator.compute_distance(dataset, neighbor);
 
         if distance_neighbor < *dis_nearest_vec {
             *nearest_vec = neighbor;
@@ -272,41 +276,6 @@ pub fn insert_into_topk(
     topk.lock()
         .unwrap()
         .splice(start_index..start_index + k, query_topk);
-}
-
-/// Prefetches data for specific neighbor indices to optimize cache performance during processing.
-///
-/// This function prefetches data from two vectors `visited_table` and `id_permutation` based on the neighbor indices
-/// provided. It uses different prefetching hints for each vector to optimize the performance depending on whether
-/// the data is read or written.
-///
-/// # Parameters
-/// - `neighbors`: A slice of `usize` representing the indices of the neighbor vectors to be prefetched. These indices
-///   determine which entries in the `visited_table` and `id_permutation` vectors are targeted for prefetching.
-/// - `visited_table`: A reference to a `VisitedTable` that contains the visit status vector. This vector is used to
-///   check whether a vector has been visited or not. Prefetching hints used for this vector are `_MM_HINT_ET1`, which
-///   is suitable for data that will be both read and written.
-/// - `id_permutation`: A slice of `usize` representing the mapping of vector IDs to access the dataset and retrieve the vector.
-///    Prefetching hints used for this vector are `_MM_HINT_T1`, which is optimized for data that will be read but not written.
-///
-/// # Safety
-/// This function uses unsafe Rust code to perform prefetching. It assumes that the pointers derived from `visited_table`
-/// and `id_permutation` are valid and that the indices in `neighbors` are within the bounds of these vectors. Ensure
-/// that the provided indices do not cause out-of-bounds access to avoid undefined behavior.
-#[inline]
-pub fn prefetch_neighbors(
-    neighbors: &[usize],
-    visited_table: &VisitedTable,
-    // id_permutation: &[usize],
-) {
-    for &neighbor in neighbors.iter() {
-        unsafe {
-            let ptr = visited_table.get_visit_status().as_ptr().add(neighbor);
-            _mm_prefetch(ptr as *const i8, _MM_HINT_ET1);
-            // let ptr_1 = id_permutation.as_ptr().add(neighbor);
-            // _mm_prefetch(ptr_1 as *const i8, _MM_HINT_T1)
-        }
-    }
 }
 
 #[inline]
@@ -1001,9 +970,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     /// from a set of multiple neighbor vectors.
     #[test]
     fn test_compute_closest_from_neighbors_updates_nearest() {
-        let query_vector: &[f32; 2] = &[1.0, 1.0];
-
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
 
@@ -1018,6 +986,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,
@@ -1033,8 +1002,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     /// and correctly identifies it as the nearest.
     #[test]
     fn test_compute_closest_from_neighbors_single_neighbor() {
-        let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[2.0, 2.0];
 
@@ -1049,6 +1018,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,
@@ -1065,8 +1035,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     /// not replace it with other equidistant neighbors.
     #[test]
     fn test_compute_closest_from_neighbors_equidistant_neighbors() {
-        let query_vector: &[f32; 2] = &[0.0, 0.0];
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         // Neighbor vectors that are equidistant from the query except for the first one
         let neighbor_vectors = &[2.0, 5.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
@@ -1082,6 +1052,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,
@@ -1097,8 +1068,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     /// ensuring that the nearest neighbor remains unchanged.
     #[test]
     fn test_compute_closest_from_neighbors_no_neighbors() {
-        let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[];
 
@@ -1112,6 +1083,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,
@@ -1129,8 +1101,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
     /// ensuring that no changes are made to the nearest neighbor if none are closer.
     #[test]
     fn test_compute_closest_from_neighbors_max_distance() {
-        let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         let neighbor_vectors = &[f32::INFINITY, f32::INFINITY, -f32::INFINITY, -f32::INFINITY];
 
@@ -1145,6 +1117,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,
@@ -1163,8 +1136,8 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
 
     #[test]
     fn test_compute_closest_from_neighbors_exact_match() {
-        let query_vector: &[f32; 2] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector.as_slice());
+        let query_vector: &[f32] = &[1.0, 1.0];
+        let query = DenseVector1D::new(query_vector);
 
         // One neighbor is exactly as the query vecor
         let neighbor_vectors = &[2.0, 2.0, 1.0, 1.0];
@@ -1180,6 +1153,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let mut dis_nearest_vec = f32::MAX;
 
         compute_closest_from_neighbors(
+            &dataset,
             &evaluator,
             &neighbors,
             &mut nearest_vec,

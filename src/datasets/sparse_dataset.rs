@@ -76,14 +76,19 @@ where
     quantizer: Q,
 }
 
-impl<'a, Q, C: Container> Dataset<'a, Q> for SparseDataset<Q, C>
+impl<Q, C: Container> Dataset<Q> for SparseDataset<Q, C>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
     C::Type<Q::OutputItem>: AsRef<[Q::OutputItem]>,
     C::Type<u16>: AsRef<[u16]>,
     C::Type<usize>: AsRef<[usize]>,
 {
-    type DataType = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
+    type DataType<'a>
+        = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>
+    where
+        Q: 'a,
+        C: 'a,
+        Q::OutputItem: 'a;
 
     #[inline]
     fn new(quantizer: Q, _d: usize) -> Self {
@@ -92,7 +97,7 @@ where
             components: C::default::<u16>(),
             offsets: C::with_initial_value(0),
             n_vecs: 0,
-            d: 0,
+            d: quantizer.m(),
             quantizer,
         }
     }
@@ -108,8 +113,12 @@ where
     }
 
     #[inline]
-    fn data(&'a self) -> Self::DataType {
-        SparseVector1D::new(self.components.as_ref(), self.values.as_ref())
+    fn data<'a>(&'a self) -> Self::DataType<'a> {
+        SparseVector1D::new(
+            self.components.as_ref(),
+            self.values.as_ref(),
+            self.d as usize,
+        )
     }
 
     #[inline]
@@ -136,18 +145,18 @@ where
     }
 
     #[inline]
-    fn get(&'a self, index: usize) -> Self::DataType {
+    fn get<'a>(&'a self, index: usize) -> Self::DataType<'a> {
         assert!(index < self.len(), "Index out of bounds.");
 
         let v_components =
             &self.components.as_ref()[Self::vector_range(self.offsets.as_ref(), index)];
         let v_values = &self.values.as_ref()[Self::vector_range(self.offsets.as_ref(), index)];
 
-        SparseVector1D::new(v_components, v_values)
+        SparseVector1D::new(v_components, v_values, self.d)
     }
 
     #[inline]
-    fn compute_distance_by_id(&'a self, idx1: usize, idx2: usize) -> f32
+    fn compute_distance_by_id(&self, idx1: usize, idx2: usize) -> f32
     where
         Q::OutputItem: Float,
     {
@@ -165,13 +174,16 @@ where
     }
 
     #[inline]
-    fn iter(&'a self) -> impl Iterator<Item = Self::DataType> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a,
+    {
         SparseDatasetIter::new(self)
     }
 
     #[inline]
-    fn search<H: OnlineTopKSelector>(
-        &'a self,
+    fn search<'a, H: OnlineTopKSelector>(
+        &self,
         query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
@@ -189,7 +201,7 @@ where
         }
 
         let evaluator = self.query_evaluator(query);
-        let distances = evaluator.compute_distances(0..self.len());
+        let distances = evaluator.compute_distances(&self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
     }
 }
@@ -245,7 +257,7 @@ where
         let v_components = &self.components.as_ref()[offset..offset + len];
         let v_values = &self.values.as_ref()[offset..offset + len];
 
-        SparseVector1D::new(v_components, v_values)
+        SparseVector1D::new(v_components, v_values, self.d)
     }
 
     #[must_use]
@@ -266,18 +278,21 @@ where
     }
 }
 
-impl<'a, Q, C> GrowableDataset<'a, Q> for SparseDataset<Q, C>
+impl<Q, C> GrowableDataset<Q> for SparseDataset<Q, C>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
     Q::OutputItem: Copy + Default,
     C: Container<Type<Q::OutputItem> = Vec<Q::OutputItem>>,
     C: Container<Type<u16> = Vec<u16>>,
     C: Container<Type<usize> = Vec<usize>>,
 {
-    type InputDataType = SparseVector1D<&'a [u16], &'a [Q::InputItem]>;
+    type InputDataType<'a>
+        = SparseVector1D<&'a [u16], &'a [Q::InputItem]>
+    where
+        Q::InputItem: 'a;
 
     #[inline]
-    fn push(&mut self, vec: &Self::InputDataType) {
+    fn push<'a>(&mut self, vec: &Self::InputDataType<'a>) {
         let (components, values) = (vec.components_as_slice(), vec.values_as_slice());
         assert_eq!(
             components.len(),
@@ -311,20 +326,28 @@ where
     }
 }
 
-impl<'a, Q, C> SparseDataset<Q, C>
+impl<Q, C> SparseDataset<Q, C>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
     C: Container<Type<Q::OutputItem> = Vec<Q::OutputItem>>,
     C: Container<Type<u16> = Vec<u16>>,
     C: Container<Type<usize> = Vec<usize>>,
 {
-    pub fn read_bin_file(fname: &str) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
-        Self::read_bin_file_limit(fname, None)
+    /// Reads a binary file and returns a SparseDataset.
+    /// Arguments:
+    /// * `fname`: The name of the file to read.
+    /// * `d`: The dimensionality of the dataset.
+    pub fn read_bin_file(
+        fname: &str,
+        d: usize,
+    ) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
+        Self::read_bin_file_limit(fname, None, d)
     }
 
     pub fn read_bin_file_f16(
         fname: &str,
         limit: Option<usize>,
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f16>>> {
         let path = Path::new(fname);
         let f = File::open(path)?;
@@ -363,7 +386,7 @@ where
                 values.push(f16::from_f32(v));
             }
 
-            data.push(&SparseVector1D::new(&components, &values));
+            data.push(&SparseVector1D::new(&components, &values, d));
         }
 
         Ok(data)
@@ -372,6 +395,7 @@ where
     pub fn read_bin_file_limit(
         fname: &str,
         limit: Option<usize>,
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
         let path = Path::new(fname);
         let f = File::open(path)?;
@@ -410,7 +434,7 @@ where
                 values.push(v);
             }
 
-            data.push(&SparseVector1D::new(&components, &values));
+            data.push(&SparseVector1D::new(&components, &values, d));
         }
 
         Ok(data)
@@ -525,10 +549,11 @@ where
         components: &[u16],
         values: &[f16],
         offsets: &[usize],
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f16>>> {
         let n_vecs = offsets.len() - 1;
-        let quantizer = SparsePlainQuantizer::<f16>::new(n_vecs, DistanceType::DotProduct);
-        let mut dataset = SparseDataset::new(quantizer, 0);
+        let quantizer = SparsePlainQuantizer::<f16>::new(d, DistanceType::DotProduct);
+        let mut dataset = SparseDataset::new(quantizer, d);
 
         for i in 0..n_vecs {
             let start = offsets[i];
@@ -536,7 +561,7 @@ where
             let vec_components = &components[start..end];
             let vec_values = &values[start..end];
 
-            dataset.push(&SparseVector1D::new(vec_components, vec_values));
+            dataset.push(&SparseVector1D::new(vec_components, vec_values, d));
         }
 
         Ok(dataset)
@@ -549,10 +574,11 @@ where
         components: &[u16],
         values: &[f32],
         offsets: &[usize],
+        d: usize,
     ) -> IoResult<SparseDataset<SparsePlainQuantizer<f32>>> {
         let n_vecs = offsets.len() - 1;
-        let quantizer = SparsePlainQuantizer::<f32>::new(n_vecs, DistanceType::DotProduct);
-        let mut dataset = SparseDataset::new(quantizer, 0);
+        let quantizer = SparsePlainQuantizer::<f32>::new(d, DistanceType::DotProduct);
+        let mut dataset = SparseDataset::new(quantizer, d);
 
         for i in 0..n_vecs {
             let start = offsets[i];
@@ -560,7 +586,7 @@ where
             let vec_components = &components[start..end];
             let vec_values = &values[start..end];
 
-            dataset.push(&SparseVector1D::new(vec_components, vec_values));
+            dataset.push(&SparseVector1D::new(vec_components, vec_values, d));
         }
 
         Ok(dataset)
@@ -615,6 +641,7 @@ where
     offsets: &'a [usize],
     components: &'a [u16],
     values: &'a [Q::OutputItem],
+    d: usize,
 }
 
 impl<'a, Q> SparseDatasetIter<'a, Q>
@@ -634,6 +661,7 @@ where
             offsets: &dataset.offsets()[1..],
             components: dataset.components(),
             values: dataset.values(),
+            d: dataset.d,
         }
     }
 }
@@ -657,7 +685,7 @@ where
 
         self.last_offset = next_offset;
 
-        Some(SparseVector1D::new(cur_components, cur_values))
+        Some(SparseVector1D::new(cur_components, cur_values, self.d))
     }
 }
 
@@ -671,6 +699,7 @@ where
     offsets: &'a [usize],
     components: &'a [u16],
     values: &'a [Q::OutputItem],
+    d: usize,
 }
 
 impl<'a, Q, C> IntoParallelIterator for &'a SparseDataset<Q, C>
@@ -690,6 +719,7 @@ where
             offsets: &self.offsets()[1..],
             components: &self.components(),
             values: &self.values(),
+            d: self.d,
         }
     }
 }
@@ -761,7 +791,7 @@ where
 
         self.last_offset = last_offset;
 
-        Some(SparseVector1D::new(cur_components, cur_values))
+        Some(SparseVector1D::new(cur_components, cur_values, self.d))
     }
 }
 
@@ -773,6 +803,7 @@ where
     offsets: &'a [usize],
     components: &'a [u16],
     values: &'a [Q::OutputItem],
+    d: usize,
 }
 
 impl<'a, Q> Producer for SparseDatasetProducer<'a, Q>
@@ -789,6 +820,7 @@ where
             offsets: self.offsets,
             components: self.components,
             values: self.values,
+            d: self.d,
         }
     }
 
@@ -810,12 +842,14 @@ where
                 offsets: left_offsets,
                 components: left_components,
                 values: left_values,
+                d: self.d,
             },
             SparseDatasetProducer {
                 last_offset: right_last_offset,
                 offsets: right_offsets,
                 components: right_components,
                 values: right_values,
+                d: self.d,
             },
         )
     }
@@ -831,6 +865,7 @@ where
             offsets: iter.offsets,
             components: iter.components,
             values: iter.values,
+            d: iter.d,
         }
     }
 }

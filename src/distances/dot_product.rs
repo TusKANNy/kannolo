@@ -1,5 +1,6 @@
 use crate::simd_utils::horizontal_sum_256;
 use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
+use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
 use itertools::izip;
 use std::arch::x86_64::*;
 use std::iter::zip;
@@ -7,31 +8,23 @@ use std::iter::zip;
 use half::f16;
 
 #[inline]
-pub fn dense_dot_product<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
+pub fn dense_dot_product<T>(query: &[T], document: &[T]) -> f32
 where
-    T: AsRef<[U]> + AsRefItem<Item = U>,
-    U: Float,
+    T: Float,
 {
     dense_dot_product_unrolled(query, document)
 }
 
 #[inline]
-pub fn dense_dot_product_unrolled<T, U>(
-    query: &DenseVector1D<T>,
-    document: &DenseVector1D<T>,
-) -> f32
+pub fn dense_dot_product_unrolled<T>(query: &[T], document: &[T]) -> f32
 where
-    T: AsRef<[U]> + AsRefItem<Item = U>,
-    U: Float,
+    T: Float,
 {
     const N_LANES: usize = 8;
     let mut r = [0.0; N_LANES];
 
     let chunks = query.len() / N_LANES;
-    for (q_chunk, v_chunk) in zip(
-        query.values_as_slice().chunks_exact(N_LANES),
-        document.values_as_slice().chunks_exact(N_LANES),
-    ) {
+    for (q_chunk, v_chunk) in zip(query.chunks_exact(N_LANES), document.chunks_exact(N_LANES)) {
         for i in 0..N_LANES {
             let d = q_chunk[i].to_f32().unwrap() * v_chunk[i].to_f32().unwrap();
             r[i] += d;
@@ -39,25 +32,17 @@ where
     }
 
     r.iter().sum::<f32>()
-        + dense_dot_product_general(
-            &DenseVector1D::new(&query.values_as_slice()[N_LANES * chunks..]),
-            &DenseVector1D::new(&document.values_as_slice()[N_LANES * chunks..]),
-        )
+        + dense_dot_product_general(&query[N_LANES * chunks..], &document[N_LANES * chunks..])
 }
 
 #[inline]
-pub fn dense_dot_product_general<T, U>(query: &DenseVector1D<T>, document: &DenseVector1D<T>) -> f32
+pub fn dense_dot_product_general<T>(query: &[T], document: &[T]) -> f32
 where
-    T: AsRef<[U]> + AsRefItem<Item = U>,
-    U: Float,
+    T: Float,
 {
-    query
-        .values_as_slice()
-        .iter()
-        .zip(document.values_as_slice())
-        .fold(0.0, |acc, (a, b)| {
-            acc + (a.to_f32().unwrap() * b.to_f32().unwrap())
-        })
+    query.iter().zip(document).fold(0.0, |acc, (a, b)| {
+        acc + (a.to_f32().unwrap() * b.to_f32().unwrap())
+    })
 }
 
 // Sparse

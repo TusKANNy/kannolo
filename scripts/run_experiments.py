@@ -150,7 +150,7 @@ def build_index(configs, experiment_dir):
             decoded_line = line.decode()
             print(decoded_line, end='')  # Print each line as it is produced
             build_output.write(decoded_line)  # Write each line to the output file
-            if decoded_line.startswith("Time to build ") and decoded_line.strip().endswith("(before serializing)"):
+            if decoded_line.startswith("Time to build:") and decoded_line.strip().endswith("s (before serializing)"):
                 building_time = int(decoded_line.split()[3])
         build_process.stdout.close()
         build_process.wait()
@@ -298,7 +298,9 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
         for line in iter(query_process.stdout.readline, b''):
             decoded_line = line.decode()
             if decoded_line.startswith("[######] Average Query Time"):
-                query_time = int(decoded_line.strip().split("[######] Average Query Time: ")[1])
+                match = re.search(r"Average Query Time: (\d+)", decoded_line)
+                if match:
+                    query_time = int(match.group(1))
 
             match = re.search(pattern, decoded_line)
             if match:

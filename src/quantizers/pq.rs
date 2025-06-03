@@ -52,7 +52,7 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
     type InputItem = f32;
     type OutputItem = u8;
 
-    type DatasetType<'a> = DenseDataset<Self>;
+    type DatasetType = DenseDataset<Self>;
 
     type Evaluator<'a>
         = QueryEvaluatorPQ<'a, M>
@@ -128,7 +128,7 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
     }
 }
 
-impl<'a, const M: usize> ProductQuantizer<M> {
+impl<const M: usize> ProductQuantizer<M> {
     #[inline]
     pub fn from_pretrained(
         d: usize,
@@ -479,7 +479,6 @@ impl<'a, const M: usize> ProductQuantizer<M> {
 }
 
 pub struct QueryEvaluatorPQ<'a, const M: usize> {
-    dataset: &'a <<Self as QueryEvaluator<'a>>::Q as Quantizer>::DatasetType<'a>,
     _query: <Self as QueryEvaluator<'a>>::QueryType,
     distance_table: Vec<f32>,
 }
@@ -489,7 +488,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
     type QueryType = DenseVector1D<&'a [f32]>;
 
     #[inline]
-    fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {
+    fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
         let distance_table = match dataset.quantizer().distance() {
             DistanceType::Euclidean => dataset.quantizer().compute_euclidean_distance_table(&query),
             DistanceType::DotProduct => dataset.quantizer().compute_dot_product_table(&query),
@@ -497,21 +496,19 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
 
         Self {
             _query: query,
-            dataset,
-            distance_table,
+            distance_table: distance_table,
         }
     }
 
     #[inline]
-    fn compute_distance(&self, index: usize) -> f32 {
-        let code = self.dataset.get(index);
+    fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
+        let code = dataset.get(index);
 
-        let distance = self
-            .dataset
+        let distance = dataset
             .quantizer()
             .compute_distance(&self.distance_table, code.values_as_slice());
 
-        match self.dataset.quantizer().distance() {
+        match dataset.quantizer().distance() {
             DistanceType::DotProduct => -distance,
             _ => distance,
         }
@@ -520,9 +517,10 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
     #[inline]
     fn compute_distances(
         &self,
+        dataset: &<Self::Q as Quantizer>::DatasetType,
         indexes: impl IntoIterator<Item = usize>,
     ) -> impl Iterator<Item = f32> {
-        let codes: Vec<_> = indexes.into_iter().map(|id| self.dataset.get(id)).collect();
+        let codes: Vec<_> = indexes.into_iter().map(|id| dataset.get(id)).collect();
 
         let mut accs = vec![0.0; codes.len()];
 
@@ -548,7 +546,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
                         .distance_table
                         .get_unchecked(pointer + *code4.get_unchecked(i) as usize);
                 }
-                pointer += self.dataset.quantizer().ksub();
+                pointer += dataset.quantizer().ksub();
             }
         }
 
@@ -563,11 +561,11 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
                         .distance_table
                         .get_unchecked(pointer + *code.values_as_slice().get_unchecked(i) as usize);
                 }
-                pointer += self.dataset.quantizer().ksub();
+                pointer += dataset.quantizer().ksub();
             }
         }
 
-        if self.dataset.quantizer().distance() == DistanceType::DotProduct {
+        if dataset.quantizer().distance() == DistanceType::DotProduct {
             accs.iter_mut().for_each(|d| *d = -*d);
         }
 

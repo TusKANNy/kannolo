@@ -56,6 +56,11 @@ fn main() {
     let k = args.k;
     let ef_search = args.ef_search;
 
+    let index: GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>> =
+        IndexSerializer::load_index(index_path.as_str());
+
+    let d = index.dim();
+
     println!("Reading Queries");
     let (components, values, offsets) =
         SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
@@ -63,14 +68,14 @@ fn main() {
             None,
         )
         .unwrap();
-    let queries =
-        SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(&components, &values, &offsets)
-            .unwrap();
 
-    println!("Reading Queries");
-
-    let index: GraphIndex<'_, SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>> =
-        IndexSerializer::load_index(index_path.as_str());
+    let queries = SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(
+        &components,
+        &values,
+        &offsets,
+        d,
+    )
+    .unwrap();
 
     println!("Starting search");
     let num_queries = queries.len();
@@ -111,7 +116,7 @@ fn main() {
 
     let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
 
-    println!("[######] Average Query Time: {avg_time_search_per_query}");
+    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
 
     index.print_space_usage_byte();
 

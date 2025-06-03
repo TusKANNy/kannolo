@@ -21,12 +21,17 @@ where
 }
 
 /// immutable
-impl<'a, Q, B> Dataset<'a, Q> for DenseDataset<Q, B>
+impl<Q, B> Dataset<Q> for DenseDataset<Q, B>
 where
-    Q: Quantizer<DatasetType<'a> = Self> + 'a,
+    Q: Quantizer<DatasetType = Self>,
     B: AsRef<[Q::OutputItem]> + Default,
 {
-    type DataType = DenseVector1D<&'a [Q::OutputItem]>;
+    type DataType<'a>
+        = DenseVector1D<&'a [Q::OutputItem]>
+    where
+        Q: 'a,
+        B: 'a,
+        Q::OutputItem: 'a;
 
     #[inline]
     fn new(quantizer: Q, d: usize) -> Self {
@@ -49,7 +54,7 @@ where
     }
 
     #[inline]
-    fn data(&'a self) -> Self::DataType {
+    fn data<'a>(&'a self) -> Self::DataType<'a> {
         DenseVector1D::new(self.data.as_ref())
     }
 
@@ -74,38 +79,47 @@ where
     }
 
     #[inline]
-    fn get(&'a self, index: usize) -> Self::DataType {
+    fn get<'a>(&'a self, index: usize) -> Self::DataType<'a> {
         assert!(index < self.len(), "Index out of bounds.");
 
-        // m is the dim for plain, and is the number of subspaces for quantizers
         let m = self.quantizer.m();
+
         let start = index * m;
         let end = start + m;
 
         DenseVector1D::new(&self.data.as_ref()[start..end])
     }
 
-    fn compute_distance_by_id(&'a self, idx1: usize, idx2: usize) -> f32
+    fn compute_distance_by_id(&self, idx1: usize, idx2: usize) -> f32
     where
         Q::OutputItem: Float,
     {
-        let document1 = self.get(idx1);
-        let document2 = self.get(idx2);
+        let document1_slice = self.get(idx1);
+        let document1_slice = document1_slice.values_as_slice();
+        let document2_slice = self.get(idx2);
+        let document2_slice = document2_slice.values_as_slice();
         match self.quantizer().distance() {
-            DistanceType::Euclidean => dense_euclidean_distance_unrolled(&document1, &document2),
-            DistanceType::DotProduct => -dense_dot_product_unrolled(&document1, &document2),
+            DistanceType::Euclidean => {
+                dense_euclidean_distance_unrolled(document1_slice, document2_slice)
+            }
+            DistanceType::DotProduct => {
+                -dense_dot_product_unrolled(document1_slice, document2_slice)
+            }
         }
     }
 
     #[inline]
-    fn iter(&'a self) -> impl Iterator<Item = Self::DataType> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a,
+    {
         // 1 is the batch size
         DenseDatasetIter::new(self, 1)
     }
 
     #[inline]
-    fn search<H: OnlineTopKSelector>(
-        &'a self,
+    fn search<'a, H: OnlineTopKSelector>(
+        &self,
         query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         heap: &mut H,
     ) -> Vec<(f32, usize)>
@@ -125,7 +139,7 @@ where
         }
 
         let evaluator = self.query_evaluator(query);
-        let distances = evaluator.compute_distances(0..self.len());
+        let distances = evaluator.compute_distances(&self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
     }
 }
@@ -183,15 +197,18 @@ where
 }
 
 /// mutable
-impl<'a, Q> GrowableDataset<'a, Q> for DenseDataset<Q, Vec<Q::OutputItem>>
+impl<Q> GrowableDataset<Q> for DenseDataset<Q, Vec<Q::OutputItem>>
 where
-    Q: Quantizer<DatasetType<'a> = DenseDataset<Q>> + 'a,
+    Q: Quantizer<DatasetType = DenseDataset<Q>>,
     Q::OutputItem: Copy + Default,
 {
-    type InputDataType = DenseVector1D<&'a [Q::InputItem]>;
+    type InputDataType<'a>
+        = DenseVector1D<&'a [Q::InputItem]>
+    where
+        Q::InputItem: 'a;
 
     #[inline]
-    fn push(&mut self, vec: &Self::InputDataType) {
+    fn push<'a>(&mut self, vec: &Self::InputDataType<'a>) {
         assert_eq!(
             vec.len() % self.d,
             0,
@@ -238,7 +255,7 @@ where
 
 impl<'a, Q, B> IntoIterator for &'a DenseDataset<Q, B>
 where
-    Q: Quantizer<DatasetType<'a> = DenseDataset<Q, B>>,
+    Q: Quantizer<DatasetType = DenseDataset<Q, B>>,
     B: AsRef<[Q::OutputItem]> + Default,
 {
     type Item = DenseVector1D<&'a [Q::OutputItem]>;
@@ -286,7 +303,7 @@ where
 {
     pub fn new<B>(dataset: &'a DenseDataset<Q, B>, batch_size: usize) -> Self
     where
-        Q: Quantizer<DatasetType<'a> = DenseDataset<Q, B>>,
+        Q: Quantizer<DatasetType = DenseDataset<Q, B>>,
         B: AsRef<[Q::OutputItem]> + Default,
     {
         Self {

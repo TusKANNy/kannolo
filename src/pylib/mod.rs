@@ -12,13 +12,11 @@ use half::f16;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
-use rayon;
 
 /// A Python-exposed dense index built with a plain quantizer (no quantization).
 #[pyclass]
 pub struct DensePlainHNSW {
-    // The index requires a 'static reference to the dataset.
-    index: GraphIndex<'static, DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
+    index: GraphIndex<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
 }
 
 #[pymethods]
@@ -53,19 +51,16 @@ impl DensePlainHNSW {
         let quantizer = PlainQuantizer::<f32>::new(dim, distance);
 
         // Build the dense dataset.
-        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
-
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(boxed_dataset);
+        let dataset: DenseDataset<PlainQuantizer<f32>> =
+            DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
         let config = ConfigHnsw::new()
             .num_neighbors(m)
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -104,19 +99,15 @@ impl DensePlainHNSW {
         let quantizer = PlainQuantizer::<f32>::new(dim, distance);
 
         // Build the dense dataset.
-        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
-
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(boxed_dataset);
+        let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
         let config = ConfigHnsw::new()
             .num_neighbors(m)
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -248,8 +239,7 @@ impl DensePlainHNSW {
 /// A Python-exposed dense index built with a plain quantizer (no quantization).
 #[pyclass]
 pub struct DensePlainHNSWf16 {
-    // The index requires a 'static reference to the dataset.
-    index: GraphIndex<'static, DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
+    index: GraphIndex<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
 }
 
 #[pymethods]
@@ -286,19 +276,15 @@ impl DensePlainHNSWf16 {
         let quantizer = PlainQuantizer::<f16>::new(dim, distance);
 
         // Build the dense dataset.
-        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
-
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f16>> = Box::leak(boxed_dataset);
+        let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
         let config = ConfigHnsw::new()
             .num_neighbors(m)
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -342,19 +328,15 @@ impl DensePlainHNSWf16 {
         let quantizer = PlainQuantizer::<f16>::new(dim, distance);
 
         // Build the dense dataset.
-        let boxed_dataset = Box::new(DenseDataset::from_vec(data_vec, dim, quantizer.clone()));
-
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f16>> = Box::leak(boxed_dataset);
+        let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
         let config = ConfigHnsw::new()
             .num_neighbors(m)
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -492,7 +474,7 @@ impl DensePlainHNSWf16 {
 #[pyclass]
 pub struct SparsePlainHNSW {
     // The index type specialized for sparse datasets with SparsePlainQuantizer.
-    index: GraphIndex<'static, SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
+    index: GraphIndex<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
 }
 
 #[pymethods]
@@ -500,13 +482,15 @@ impl SparsePlainHNSW {
     /// Build a sparse plain index from a dataset file.
     /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
+    /// - `d`: dimensionality of the data
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_file(
         data_file: &str,
+        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -523,19 +507,17 @@ impl SparsePlainHNSW {
         };
 
         // Read the sparse dataset from file.
-        let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f32>>::read_bin_file(data_file).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error reading dataset: {:?}",
-                    e
-                ))
-            })?,
-        );
-        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f32>> =
-            Box::leak(boxed_dataset);
+        let dataset: SparseDataset<SparsePlainQuantizer<f32>> = SparseDataset::<
+            SparsePlainQuantizer<f32>,
+        >::read_bin_file(
+            data_file, d
+        )
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading dataset: {:?}", e))
+        })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f32>::new(static_dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
         let config = ConfigHnsw::new()
@@ -543,10 +525,8 @@ impl SparsePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -554,15 +534,20 @@ impl SparsePlainHNSW {
     /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
     /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
+    /// - `components`: a 1D NumPy array (i32) of component indices.
+    /// - `values`: a 1D NumPy array (f32) of values corresponding to the components.
+    /// - `offsets`: a 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
+    /// - `d`: dimensionality of the vector space
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i32>,
+        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -593,24 +578,18 @@ impl SparsePlainHNSW {
         };
 
         // Read the sparse dataset from file.
-        let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(
-                components_vec.as_slice(),
-                values_slice,
-                offsets_vec.as_slice(),
-            )
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error reading dataset: {:?}",
-                    e
-                ))
-            })?,
-        );
-        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f32>> =
-            Box::leak(boxed_dataset);
+        let dataset = SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(
+            components_vec.as_slice(),
+            values_slice,
+            offsets_vec.as_slice(),
+            d,
+        )
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading dataset: {:?}", e))
+        })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f32>::new(static_dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
         let config = ConfigHnsw::new()
@@ -618,10 +597,8 @@ impl SparsePlainHNSW {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -642,11 +619,12 @@ impl SparsePlainHNSW {
         Ok(SparsePlainHNSW { index })
     }
 
-    /// Single-query search using sparse query parts.
+    /// Single-query search using sparse query.
     ///
     /// Parameters:
     /// - `query_components`: a 1D NumPy array (i32) of component indices for the query.
     /// - `query_values`: a 1D NumPy array (f32) of values corresponding to the components.
+    /// - `d`: dimensionality of the vector space.
     /// - `k`: number of nearest neighbors to return.
     /// - `ef_search`: candidate pool size for the search.
     ///
@@ -657,6 +635,7 @@ impl SparsePlainHNSW {
         &self,
         query_components: numpy::PyReadonlyArray1<i32>,
         query_values: numpy::PyReadonlyArray1<f32>,
+        d: usize,
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
@@ -677,6 +656,7 @@ impl SparsePlainHNSW {
             &comp_vec,
             &values_slice,
             &offsets_vec,
+            d,
         )
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
@@ -724,20 +704,23 @@ impl SparsePlainHNSW {
         })
     }
 
-    /// Search the sparse index with a single query.
-    /// The query is provided as two arrays:
-    /// - `indices`: a 1D array (e.g. of i32) of token indices
-    /// - `values`: a 1D array of f32 values corresponding to the tokens.
+    /// Search the sparse index with a batch of queries read from a file.
+    ///
+    /// Parameters:
+    /// - `query_file`: path to the binary dataset file containing the queries.
+    /// - `d`: dimensionality of the vector space.
+    /// - `k`: number of nearest neighbors to return.
     ///
     /// Returns a list of tuples `(score, doc_id)`.
     pub fn search_batch(
         &self,
         query_file: &str,
+        d: usize,
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         // Read the queries from the binary file.
-        let queries = SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file(query_file)
+        let queries = SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file(query_file, d)
             .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading query file: {:?}",
@@ -781,8 +764,8 @@ impl SparsePlainHNSW {
 /// A Python-exposed sparse index built with a plain quantizer.
 #[pyclass]
 pub struct SparsePlainHNSWf16 {
-    // The index type specialized for sparse datasets with SparsePlainQuantizer.
-    index: GraphIndex<'static, SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>,
+    // The index type specialized for sparse datasets with SparsePlainQuantizer and f16 values.
+    index: GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>,
 }
 
 #[pymethods]
@@ -790,13 +773,15 @@ impl SparsePlainHNSWf16 {
     /// Build a sparse plain index from a binary dataset file.
     /// The file is assumed to be in binary format.
     /// - `data_file`: path to the binary dataset file
+    /// - `d`: dimensionality of the vector space
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_file(
         data_file: &str,
+        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -813,20 +798,17 @@ impl SparsePlainHNSWf16 {
         };
 
         // Read the sparse dataset from file.
-        let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_f16(data_file, None)
+        let dataset =
+            SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_f16(data_file, None, d)
                 .map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error reading dataset: {:?}",
                         e
                     ))
-                })?,
-        );
-        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f16>> =
-            Box::leak(boxed_dataset);
+                })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f16>::new(static_dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
         let config = ConfigHnsw::new()
@@ -834,26 +816,29 @@ impl SparsePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSWf16 { index })
     }
 
     /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
-    /// The file is assumed to be in binary format.
-    /// - `data_file`: path to the binary dataset file
+    ///
+    /// Parameters:
+    /// - `components`: a 1D NumPy array (i32) of component indices.
+    /// - `values`: a 1D NumPy array (f32) of values corresponding to the components.
+    /// - `offsets`: a 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
+    /// - `d`: dimensionality of the vector space
     /// - `m`: number of neighbors per node
     /// - `ef_construction`: candidate pool size during construction
     /// - `metric`: either "l2" or "ip"
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i32>,
+        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -889,24 +874,18 @@ impl SparsePlainHNSWf16 {
         };
 
         // Read the sparse dataset from file.
-        let boxed_dataset = Box::new(
-            SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(
-                components_vec.as_slice(),
-                values_vec.as_slice(),
-                offsets_vec.as_slice(),
-            )
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error reading dataset: {:?}",
-                    e
-                ))
-            })?,
-        );
-        let static_dataset: &'static SparseDataset<SparsePlainQuantizer<f16>> =
-            Box::leak(boxed_dataset);
+        let dataset = SparseDataset::<SparsePlainQuantizer<f16>>::from_vecs_f16(
+            components_vec.as_slice(),
+            values_vec.as_slice(),
+            offsets_vec.as_slice(),
+            d,
+        )
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading dataset: {:?}", e))
+        })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f16>::new(static_dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
         let config = ConfigHnsw::new()
@@ -914,10 +893,8 @@ impl SparsePlainHNSWf16 {
             .ef_construction(ef_construction)
             .build();
 
-        let num_threads = rayon::current_num_threads();
-
         // Build the index.
-        let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -938,11 +915,12 @@ impl SparsePlainHNSWf16 {
         Ok(SparsePlainHNSWf16 { index })
     }
 
-    /// Single-query search using sparse query parts.
+    /// Single-query search using sparse query.
     ///
     /// Parameters:
     /// - `query_components`: a 1D NumPy array (i32) of component indices for the query.
     /// - `query_values`: a 1D NumPy array (f32) of values corresponding to the components.
+    /// - `d`: dimensionality of the vector space.
     /// - `k`: number of nearest neighbors to return.
     /// - `ef_search`: candidate pool size for the search.
     ///
@@ -953,6 +931,7 @@ impl SparsePlainHNSWf16 {
         &self,
         query_components: numpy::PyReadonlyArray1<i32>,
         query_values: numpy::PyReadonlyArray1<f32>,
+        d: usize,
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
@@ -979,6 +958,7 @@ impl SparsePlainHNSWf16 {
             &comp_vec,
             &values_f16,
             &offsets_vec,
+            d,
         )
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
@@ -1020,21 +1000,24 @@ impl SparsePlainHNSWf16 {
         })
     }
 
-    /// Search the sparse index with a single query.
-    /// The query is provided as two arrays:
-    /// - `indices`: a 1D array (e.g. of i32) of token indices
-    /// - `values`: a 1D array of f32 values corresponding to the tokens.
+    /// Search the sparse index with a batch of queries read from a file.
+    ///
+    /// Parameters:
+    /// - `query_file`: path to the binary dataset file containing the queries.
+    /// - `d`: dimensionality of the vector space.
+    /// - `k`: number of nearest neighbors to return.
     ///
     /// Returns a list of tuples `(score, doc_id)`.
     pub fn search_batch(
         &self,
         query_file: &str,
+        d: usize,
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         // Read the queries from the binary file.
         let queries =
-            SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_f16(query_file, None)
+            SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_f16(query_file, None, d)
                 .map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error reading query file: {:?}",
@@ -1077,16 +1060,16 @@ impl SparsePlainHNSWf16 {
 
 // PQ
 enum DensePQHNSWEnum {
-    PQ8(GraphIndex<'static, DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>>),
-    PQ16(GraphIndex<'static, DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>>),
-    PQ32(GraphIndex<'static, DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>>),
-    PQ48(GraphIndex<'static, DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>>),
-    PQ64(GraphIndex<'static, DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>>),
-    PQ96(GraphIndex<'static, DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>>),
-    PQ128(GraphIndex<'static, DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>>),
-    PQ192(GraphIndex<'static, DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>>),
-    PQ256(GraphIndex<'static, DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>>),
-    PQ384(GraphIndex<'static, DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>>),
+    PQ8(GraphIndex<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>>),
+    PQ16(GraphIndex<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>>),
+    PQ32(GraphIndex<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>>),
+    PQ48(GraphIndex<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>>),
+    PQ64(GraphIndex<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>>),
+    PQ96(GraphIndex<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>>),
+    PQ128(GraphIndex<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>>),
+    PQ192(GraphIndex<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>>),
+    PQ256(GraphIndex<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>>),
+    PQ384(GraphIndex<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>>),
 }
 
 /// The Python-exposed PQ index.
@@ -1139,74 +1122,68 @@ impl DensePQHNSW {
             .build();
 
         // Create a base dataset (using a plain quantizer as a placeholder).
-        let base_dataset = Box::new(DenseDataset::from_vec(
-            data_vec,
-            dim,
-            PlainQuantizer::<f32>::new(dim, distance),
-        ));
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(base_dataset);
+        let dataset =
+            DenseDataset::from_vec(data_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
         // Sample training data from the dataset.
         let mut rng = StdRng::seed_from_u64(523);
         let mut training_vec: Vec<f32> = Vec::new();
-        for vec in static_dataset.iter().choose_multiple(&mut rng, sample_size) {
+        for vec in dataset.iter().choose_multiple(&mut rng, sample_size) {
             training_vec.extend(vec.values_as_slice());
         }
         let training_dataset =
             DenseDataset::from_vec(training_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
-        let num_threads = rayon::current_num_threads();
-
         // Dispatch based on m_pq.
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1262,74 +1239,68 @@ impl DensePQHNSW {
             .build();
 
         // Create a base dataset (using a plain quantizer as a placeholder).
-        let base_dataset = Box::new(DenseDataset::from_vec(
-            data_vec,
-            dim,
-            PlainQuantizer::<f32>::new(dim, distance),
-        ));
-        let static_dataset: &'static DenseDataset<PlainQuantizer<f32>> = Box::leak(base_dataset);
+        let dataset =
+            DenseDataset::from_vec(data_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
         // Sample training data from the dataset.
         let mut rng = StdRng::seed_from_u64(523);
         let mut training_vec: Vec<f32> = Vec::new();
-        for vec in static_dataset.iter().choose_multiple(&mut rng, sample_size) {
+        for vec in dataset.iter().choose_multiple(&mut rng, sample_size) {
             training_vec.extend(vec.values_as_slice());
         }
         let training_dataset =
             DenseDataset::from_vec(training_vec, dim, PlainQuantizer::<f32>::new(dim, distance));
 
-        let num_threads = rayon::current_num_threads();
-
         // Dispatch based on m_pq.
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(static_dataset, &config, quantizer, num_threads);
+                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {

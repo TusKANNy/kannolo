@@ -30,17 +30,15 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
     type InputItem = T;
     type OutputItem = T;
 
-    type DatasetType<'a>
-        = DenseDataset<Self>
-    where
-        T: 'a;
+    type DatasetType = DenseDataset<Self>;
+
     type Evaluator<'a>
         = QueryEvaluatorPlain<'a, Self::InputItem>
     where
         Self::InputItem: Float
-            + 'a
             + distances::euclidean_distance::EuclideanDistance<T>
-            + distances::dot_product::DotProduct<T>;
+            + distances::dot_product::DotProduct<T>
+            + 'a;
 
     #[inline]
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
@@ -65,11 +63,10 @@ impl<T: Copy + Default + PartialOrd + Sync + Send> Quantizer for PlainQuantizer<
 pub struct QueryEvaluatorPlain<
     'a,
     T: Float
-        + 'a
         + distances::euclidean_distance::EuclideanDistance<T>
-        + distances::dot_product::DotProduct<T>,
+        + distances::dot_product::DotProduct<T>
+        + 'a,
 > {
-    dataset: &'a <<Self as QueryEvaluator<'a>>::Q as Quantizer>::DatasetType<'a>,
     query: <Self as QueryEvaluator<'a>>::QueryType,
 }
 
@@ -83,26 +80,31 @@ where
     type QueryType = DenseVector1D<&'a [T]>;
 
     #[inline]
-    fn new(dataset: &'a <Self::Q as Quantizer>::DatasetType<'a>, query: Self::QueryType) -> Self {
-        Self { dataset, query }
+    fn new(query: Self::QueryType, _dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
+        Self { query }
     }
 
-    fn compute_distance(&self, index: usize) -> f32 {
-        let document = self.dataset.get(index);
-        match self.dataset.quantizer().distance() {
-            DistanceType::Euclidean => dense_euclidean_distance_unrolled(&self.query, &document),
-            DistanceType::DotProduct => -dense_dot_product_unrolled(&self.query, &document),
+    fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
+        let document_slice = dataset.get(index);
+        let document_slice = document_slice.values_as_slice();
+        let query_slice = self.query.values_as_slice();
+        match dataset.quantizer().distance() {
+            DistanceType::Euclidean => {
+                dense_euclidean_distance_unrolled(query_slice, document_slice)
+            }
+            DistanceType::DotProduct => -dense_dot_product_unrolled(query_slice, document_slice),
         }
     }
 
     #[inline]
     fn compute_four_distances(
         &self,
+        dataset: &<Self::Q as Quantizer>::DatasetType,
         indexes: impl IntoIterator<Item = usize>,
     ) -> impl Iterator<Item = f32> {
-        let chunk: Vec<_> = indexes.into_iter().map(|id| self.dataset.get(id)).collect();
+        let chunk: Vec<_> = indexes.into_iter().map(|id| dataset.get(id)).collect();
         let query_slice = self.query.values_as_slice();
-        let quantizer = self.dataset.quantizer();
+        let quantizer = dataset.quantizer();
 
         // Process exactly 4 vectors
         let v0 = chunk[0].values_as_slice();

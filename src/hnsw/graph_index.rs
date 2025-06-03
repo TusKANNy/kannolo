@@ -33,23 +33,23 @@ use std::marker::PhantomData;
 /// - `_phantom`: A `PhantomData` marker that indicates the type `Q` is used in the context of the struct,
 ///    ensuring proper type safety without actually storing a value of type `Q`.
 #[derive(Serialize, Deserialize)]
-pub struct GraphIndex<'a, D, Q>
+pub struct GraphIndex<D, Q>
 where
-    D: Dataset<'a, Q>,
-    Q: Quantizer<DatasetType<'a> = D> + 'a,
+    D: Dataset<Q>,
+    Q: Quantizer<DatasetType = D>,
 {
     levels: Box<[Level]>,
     dataset: D,
     num_neighbors_per_vec: usize,
     id_permutation: Box<[usize]>,
     entry_vec: usize,
-    _phantom: PhantomData<&'a Q>,
+    _phantom: PhantomData<Q>,
 }
 
-impl<'a, D, Q> GraphIndex<'a, D, Q>
+impl<D, Q> GraphIndex<D, Q>
 where
-    D: Dataset<'a, Q> + GrowableDataset<'a, Q>,
-    Q: Quantizer<DatasetType<'a> = D>,
+    D: Dataset<Q> + GrowableDataset<Q>,
+    Q: Quantizer<DatasetType = D>,
 {
     /// Constructs a new `GraphIndex` by building an HNSW graph from a given dataset, configuration, and quantizer.
     ///
@@ -112,29 +112,26 @@ where
     ///
     /// // At this point, the `hnsw_index` is ready for performing nearest neighbor searches.
     /// ```
-    pub fn from_dataset<SD, IQ>(
+    pub fn from_dataset<'a, SD, IQ>(
         source_dataset: &'a SD,
         config: &ConfigHnsw,
         quantizer: Q,
-        num_threads: usize,
     ) -> Self
     where
-        SD: Dataset<'a, IQ> + Sync,
-
-        IQ: IdentityQuantizer<DatasetType<'a> = SD, T: Float> + Sync + 'a,
+        SD: Dataset<IQ> + Sync,
+        IQ: IdentityQuantizer<DatasetType = SD, T: Float> + Sync + 'a,
         // This constraint is necessary because the vector returned by the dataset's get function is of type Datatype.
         // The query evaluator, however, requires a vector of type Querytype.
         <IQ as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <SD as Dataset<'a, IQ>>::DataType>,
-
+            QueryEvaluator<'a, QueryType = <SD as Dataset<IQ>>::DataType<'a>>,
         // This constraint is necessary because the `push` function of the new_dataset
         // expects input types of InputDataType, while we iterate over types of DataType from the source_dataset.
-        D: GrowableDataset<'a, Q, InputDataType = <SD as Dataset<'a, IQ>>::DataType>,
+        D: GrowableDataset<Q, InputDataType<'a> = <SD as Dataset<IQ>>::DataType<'a>>,
+        <Q as Quantizer>::InputItem: 'a,
     {
         let mut hnsw_builder = HnswBuilder::new(config.get_num_neighbors_per_vec(), source_dataset);
 
-        let (levels, id_permutation, entry_vector) =
-            hnsw_builder.compute_graph(config, num_threads);
+        let (levels, id_permutation, entry_vector) = hnsw_builder.compute_graph(config);
 
         let mut encoded_dataset = D::new(quantizer, source_dataset.dim());
 
@@ -191,11 +188,14 @@ where
     }
 }
 
-impl<'a, D, Q> GraphIndex<'a, D, Q>
+impl<D, Q> GraphIndex<D, Q>
 where
-    D: Dataset<'a, Q> + Sync,
-    Q: Quantizer<InputItem: Float, DatasetType<'a> = D> + Sync,
+    D: Dataset<Q> + Sync,
+    Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
 {
+    pub fn dim(&self) -> usize {
+        self.dataset.dim()
+    }
     /// Performs a nearest neighbor search for a given set of query vectors on the HNSW graph.
     ///
     /// This function searches for the `k` nearest neighbors for each vector in the provided query dataset.
@@ -253,24 +253,25 @@ where
     ///
     /// // `results` now contains the nearest neighbors for each query vector.
     /// ```
-    pub fn search<QD, QQ>(
-        &'a self,
-        query: QD::DataType,
+    pub fn search<'a, QD, QQ>(
+        &self,
+        query: QD::DataType<'a>,
         k: usize,
         config: &ConfigHnsw,
     ) -> Vec<(f32, usize)>
     where
         // The query dataset type (QD) could be directly of type D, but this would not work if D is a Dataset
         // with a ProductQuantizer, this because queries is a dataset with a PlainQuantizer.
-        QD: Dataset<'a, QQ> + Sync,
-        QQ: Quantizer<DatasetType<'a> = QD> + 'a + Sync,
+        QD: Dataset<QQ> + Sync,
+        QQ: Quantizer<DatasetType = QD> + Sync,
         // This constraint is necessary because the find_k_nearest_neighbors function takes an input parameter
         // of type QueryType, which is an associated type of the QueryEvaluator associated with the quantizer Q.
         // However, the queries are of type DataType, which is an associated type of the dataset QD.
         <Q as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <QD as Dataset<'a, QQ>>::DataType>,
+            QueryEvaluator<'a, QueryType = <QD as Dataset<QQ>>::DataType<'a>>,
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
+        <Q as Quantizer>::InputItem: 'a,
     {
         let query_topk = self.find_k_nearest_neighbors(query, k, config);
 
@@ -303,8 +304,6 @@ where
     /// - `query_vec`: The query vector for which the nearest neighbors are being searched.
     /// - `k`: The number of nearest neighbors to retrieve.
     /// - `config`: A reference to `ConfigHnsw`, which holds configuration parameters for the search.
-    /// - `visited_table`: A mutable reference to `VisitedTable`, which keeps track of visited nodes to
-    ///   avoid redundant searches.
     ///
     /// # Returns
     ///
@@ -312,8 +311,8 @@ where
     /// is the distance to the neighbor, and the second element is the neighbor's ID.
     /// The results are sorted in ascending order of distance, with the closest vectors appearing first.
 
-    pub fn find_k_nearest_neighbors(
-        &'a self,
+    pub fn find_k_nearest_neighbors<'a>(
+        &self,
         query_vec: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
         k: usize,
         config: &ConfigHnsw,
@@ -327,11 +326,16 @@ where
 
         // Start from the entry point
         let mut nearest_vec = self.entry_vec;
-        let mut dis_nearest_vec = query_evaluator.compute_distance(nearest_vec);
+        let mut dis_nearest_vec = query_evaluator.compute_distance(&self.dataset, nearest_vec);
 
         // Greedy search through the upper levels
         for level in self.levels.iter().skip(1).rev() {
-            level.greedy_update_nearest(&query_evaluator, &mut nearest_vec, &mut dis_nearest_vec);
+            level.greedy_update_nearest(
+                &self.dataset,
+                &query_evaluator,
+                &mut nearest_vec,
+                &mut dis_nearest_vec,
+            );
         }
 
         let ef = std::cmp::max(config.get_ef_search(), k);
@@ -360,7 +364,6 @@ where
     /// - `starting_node`: The initial candidate node from which the search starts.
     /// - `query_evaluator`: Evaluates the distance between the query vector and nodes in the graph.
     /// - `ef`: The number of neighbors to consider during the search, affecting the size of heaps.
-    /// - `visited_table`: Keeps track of nodes that have been visited to avoid redundant evaluations.
     /// - `level`: The current graph level where the search is conducted.
     ///
     /// # Description
@@ -381,27 +384,32 @@ where
     /// - The `candidates` heap is empty.
     /// - The distance of the current node exceeds the maximum distance in the `top_candidates` heap.
     ///
-    fn search_from_candidates_unbounded(
+    fn search_from_candidates_unbounded<'a, E>(
         &self,
         starting_node: Node,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         ef: usize,
-        level: &'a Level,
-    ) -> BinaryHeap<Node> {
+        level: &Level,
+    ) -> BinaryHeap<Node>
+    where
+        E: QueryEvaluator<'a, Q = Q>,  // 1) tie evaluator’s Q = our Q
+        Q: Quantizer<DatasetType = D>, // 2) ensure our Q’s DatasetType = D
+        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
+            + DotProduct<<Q as Quantizer>::InputItem>,
+    {
         // max-heap
         let mut top_candidates: BinaryHeap<Node> = BinaryHeap::new();
         // min-heap
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
 
-        let mut visited_table = HashSet::default();
+        let mut visited_table = HashSet::with_capacity(ef * 32); //HashSet::default(), too many rehasehes!
 
         top_candidates.push(starting_node);
         candidates.push(Reverse(starting_node));
 
         visited_table.insert(starting_node.id_vec());
 
-        while !candidates.is_empty() {
-            let node = candidates.peek().unwrap().0;
+        while let Some(Reverse(node)) = candidates.peek() {
             let id_candidate = node.id_vec();
             let distance_candidate = node.distance();
 
@@ -453,13 +461,14 @@ where
     ///   `process_neighbors` is used.
     /// 5. **Final Handling**: Any remaining neighbors that did not form a complete batch are processed
     ///    and their distances are computed and added.
-    fn process_neighbors<F>(
+    fn process_neighbors<'a, E, F>(
         &self,
-        neighbors: &'a [usize],
+        neighbors: &[usize],
         visited_table: &mut HashSet<usize>,
-        query_evaluator: &impl QueryEvaluator<'a>,
+        query_evaluator: &E,
         mut add_distances_fn: F,
     ) where
+        E: QueryEvaluator<'a, Q = Q>,
         F: FnMut(f32, usize),
     {
         let mut counter = 0;
@@ -477,7 +486,8 @@ where
             }
 
             if counter == 4 {
-                let distances = query_evaluator.compute_four_distances(ids.iter().copied());
+                let distances =
+                    query_evaluator.compute_four_distances(&self.dataset, ids.iter().copied());
                 for (dis_neigh, &neighbor) in distances.zip(ids.iter()) {
                     add_distances_fn(dis_neigh, neighbor);
                 }
@@ -487,7 +497,7 @@ where
 
         // Add the remaining neighbors, if there are any left
         for neighbor in ids.iter().take(counter) {
-            let distance_neighbor: f32 = query_evaluator.compute_distance(*neighbor);
+            let distance_neighbor: f32 = query_evaluator.compute_distance(&self.dataset, *neighbor);
             add_distances_fn(distance_neighbor, *neighbor);
         }
     }

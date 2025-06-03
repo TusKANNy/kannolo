@@ -255,7 +255,7 @@ fn main() {
 
     let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
 
-    println!("[######] Average Query Time: {avg_time_search_per_query}");
+    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
 
     let output_path = args.output_path.unwrap();
     let mut output_file = File::create(output_path).unwrap();

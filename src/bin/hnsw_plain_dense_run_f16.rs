@@ -110,7 +110,7 @@ fn main() {
 
     let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
 
-    println!("[######] Average Query Time: {avg_time_search_per_query}");
+    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
 
     index.print_space_usage_byte();
 

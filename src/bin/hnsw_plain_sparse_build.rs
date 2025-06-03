@@ -59,25 +59,38 @@ fn main() {
         }
     };
 
-    let num_threads_construction = rayon::current_num_threads();
-
     // Set parameters for the HNSW index
     let config = ConfigHnsw::new()
         .num_neighbors(num_neighbors)
         .ef_construction(ef_construction)
         .build();
 
-    let dataset: SparseDataset<SparsePlainQuantizer<f16>> =
-        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_f16(data_path.as_str(), None)
-            .unwrap();
+    let (components, values, offsets) =
+        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
+            data_path.as_str(),
+            None,
+        )
+        .unwrap();
+
+    let d = *components.iter().max().unwrap() as usize + 1;
+
+    let dataset: SparseDataset<SparsePlainQuantizer<f16>> = SparseDataset::<
+        SparsePlainQuantizer<f16>,
+    >::from_vecs_f16(
+        &components, &values, &offsets, d
+    )
+    .unwrap();
 
     let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
 
     let start_time = Instant::now();
-    let index: GraphIndex<'_, SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>> =
-        GraphIndex::from_dataset(&dataset, &config, quantizer, num_threads_construction);
+    let index: GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>> =
+        GraphIndex::from_dataset(&dataset, &config, quantizer);
     let duration = start_time.elapsed();
-    println!("Time to build {} (before serializing)", duration.as_secs());
+    println!(
+        "Time to build: {} s (before serializing)",
+        duration.as_secs()
+    );
 
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }

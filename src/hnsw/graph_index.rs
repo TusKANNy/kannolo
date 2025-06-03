@@ -479,11 +479,11 @@ where
 
         for &neighbor in neighbors.iter() {
             let visited = visited_table.contains(&neighbor);
-            visited_table.insert(neighbor);
 
             ids[counter] = neighbor;
 
             if !visited {
+                visited_table.insert(neighbor);
                 counter += 1;
             }
 

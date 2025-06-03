@@ -411,14 +411,13 @@ where
 
         visited_table.insert(starting_node.id_vec());
 
-        while let Some(Reverse(node)) = candidates.peek() {
+        while let Some(Reverse(node)) = candidates.pop() {
             let id_candidate = node.id_vec();
             let distance_candidate = node.distance();
 
             if distance_candidate > top_candidates.peek().unwrap().distance() {
                 break;
             }
-            candidates.pop();
 
             let neighbors = level.get_neighbors_from_id(id_candidate);
 

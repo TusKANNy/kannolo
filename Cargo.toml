@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."

@@ -61,6 +61,20 @@ index = SparsePlainHNSW.build_from_file(data_path, m, efConstruction, "ip")
 
 Alternatively, it is possible to build indexes directly with numpy arrays using the  ```build_from_array()``` function for dense data and the ```build_from_arrays()``` function for sparse data, instead of loading from file. 
 
+### Save/Load Index
+
+To save your index, run:
+
+```python
+index.save(your_index_path)
+```
+
+If, instead of building a (dense plain) index, you want to load a previously serialized one, run:
+
+```python
+index = DensePlainHNSW.load(your_index_path)
+```
+
 ### Search
 
 Set search parameters

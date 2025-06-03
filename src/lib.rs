@@ -6,8 +6,6 @@
 #![feature(array_chunks)]
 #![feature(allocator_api)]
 
-pub mod topk_selectors;
-
 use pyo3::types::PyModuleMethods;
 
 pub mod pylib;

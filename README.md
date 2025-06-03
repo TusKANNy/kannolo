@@ -84,18 +84,18 @@ By downloading and using this software, you agree to cite the under-noted paper 
 ECIR 2025
 ```bibtex
 @InProceedings{10.1007/978-3-031-88717-8_29,
-author="Leonardo Delfino and
-        Domenico Erriquez and
-        Silvio Martinico and
-        Franco Maria Nardini and
-        Cosimo Rulli and
-        Rossano Venturini",
-title="kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search",
-booktitle="Advances in Information Retrieval",
-year="2025",
-publisher="Springer Nature Switzerland",
-pages="400--406",
-isbn="978-3-031-88717-8"
+author =    "Leonardo Delfino and
+             Domenico Erriquez and
+             Silvio Martinico and
+             Franco Maria Nardini and
+             Cosimo Rulli and
+             Rossano Venturini",
+title =     "kANNolo: Sweet and Smooth Approximate k-Nearest Neighbors Search",
+booktitle = "Advances in Information Retrieval",
+year =      "2025",
+publisher = "Springer Nature Switzerland",
+pages =     "400--406",
+isbn =      "978-3-031-88717-8"
 }
 ```
 

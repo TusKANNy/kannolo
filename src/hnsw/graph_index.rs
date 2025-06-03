@@ -1,6 +1,4 @@
 use crate::quantizer::{IdentityQuantizer, Quantizer, QueryEvaluator};
-use crate::topk_selectors::topk_heap::TopkHeap;
-use crate::topk_selectors::OnlineTopKSelector;
 use crate::{hnsw_utils::*, DistanceType};
 use crate::{Dataset, Float, GrowableDataset};
 use crate::{DotProduct, EuclideanDistance};
@@ -321,7 +319,6 @@ where
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
     {
-        let mut topk_heap = TopkHeap::new(k);
         let query_evaluator = self.dataset.query_evaluator(query_vec);
 
         // Start from the entry point
@@ -341,23 +338,26 @@ where
         let ef = std::cmp::max(config.get_ef_search(), k);
 
         // Search on ground level
-        let mut top_candidates = self.search_from_candidates_unbounded(
+        let top_candidates = self.search_from_candidates_unbounded(
             Node(dis_nearest_vec, nearest_vec),
             &query_evaluator,
             ef,
             &self.levels[0],
         );
-        while top_candidates.len() > k {
-            top_candidates.pop();
-        }
-        while let Some(node) = top_candidates.pop() {
-            topk_heap.push_with_id(node.distance(), node.id_vec());
-        }
 
-        topk_heap.topk()
+        let mut topk = top_candidates
+            .iter()
+            .map(|node| (node.distance(), node.id_vec()))
+            .collect::<Vec<_>>();
+
+        topk.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        topk.truncate(k);
+
+        topk
     }
 
-    /// Performs an unbounded search at the ground level of the HNSW graph to find the nearest neighbors for the given query.
+    /// Performs an unbounded search at the ground level of the HNSW graph to find the nearest
+    /// neighbors for the given query.
     ///
     /// # Parameters
     ///
@@ -368,7 +368,8 @@ where
     ///
     /// # Description
     ///
-    /// This function performs an unbounded search starting from a single candidate node. It maintains two heaps:
+    /// This function performs an unbounded search starting from a single candidate node.
+    /// It maintains two heaps:
     /// - **`top_candidates`**: A max-heap that stores the top candidates found so far, ordered by their distance
     ///     from the query vector.
     /// - **`candidates`**: A min-heap that holds nodes to be evaluated, ordered by their distance from the query vector.
@@ -376,7 +377,8 @@ where
     /// The function proceeds as follows:
     /// 1. Initializes both heaps with the starting node and marks it as visited.
     /// 2. Iteratively pops nodes from the `candidates` heap.
-    /// 3. If the distance of the current node is greater than the maximum distance in `top_candidates`, the search stops.
+    /// 3. If the distance of the current node is greater than the maximum distance in `top_candidates`,
+    /// the search stops.
     /// 4. Otherwise, retrieves the neighbors of the current node and updates the heaps with these neighbors
     ///    if they haven’t been visited.
     ///
@@ -397,12 +399,12 @@ where
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
     {
-        // max-heap
+        // max-heap: We want to extract worst candidate first
         let mut top_candidates: BinaryHeap<Node> = BinaryHeap::new();
-        // min-heap
+        // min-heap: We want to extract best candidate first to visit it
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
 
-        let mut visited_table = HashSet::with_capacity(ef * 32); //HashSet::default(), too many rehasehes!
+        let mut visited_table = HashSet::with_capacity(ef * 32); //HashSet::default(), avoid too many rehashes!
 
         top_candidates.push(starting_node);
         candidates.push(Reverse(starting_node));

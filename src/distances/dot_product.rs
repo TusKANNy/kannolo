@@ -1,6 +1,5 @@
 use crate::simd_utils::horizontal_sum_256;
 use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
-use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
 use itertools::izip;
 use std::arch::x86_64::*;
 use std::iter::zip;

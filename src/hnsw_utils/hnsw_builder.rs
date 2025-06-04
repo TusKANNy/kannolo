@@ -168,10 +168,7 @@ where
     ///   so the IDs in the range from indices `96` to `99` are processed. This results in processing the IDs `[5, 10, 23, 60]`.
     /// - At level 1, `end` is updated to `96`, and `begin` would be `86`, so the IDs from indices `86` to `95` are processed.
     /// - At level 0, `end` is updated to `86`, and `begin` would be `0`, so the IDs from indices `0` to `85` are processed.
-    pub fn compute_graph(
-        &mut self,
-        config: &ConfigHnsw,
-    ) -> (Vec<Level>, Vec<usize>, usize) {
+    pub fn compute_graph(&mut self, config: &ConfigHnsw) -> (Vec<Level>, Vec<usize>, usize) {
         let num_vectors = self.dataset.len();
         self.assign_level(num_vectors);
 

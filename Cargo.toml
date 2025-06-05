@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."
@@ -34,6 +34,7 @@ ordered-float = "4.2.0"
 rustc-hash = "2.1.0"
 pyo3 = { version = "0.24.0", features = ["extension-module"] } #NOTE: pyo3 and numpy require the same version at the moment
 numpy = "0.24.0"
+nohash-hasher = "0.2.0"
 
 [features]
 

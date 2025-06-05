@@ -7,6 +7,7 @@ use crate::{DotProduct, EuclideanDistance};
 use config_hnsw::ConfigHnsw;
 use hnsw_builder::HnswBuilder;
 use level::Level;
+use nohash_hasher::BuildNoHashHasher;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -402,7 +403,8 @@ where
         // min-heap
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
 
-        let mut visited_table = HashSet::with_capacity(ef * 32); //HashSet::default(), too many rehasehes!
+        let mut visited_table: HashSet<usize, BuildNoHashHasher<usize>> =
+            HashSet::with_capacity_and_hasher(200 + 32 * ef, BuildNoHashHasher::default());
 
         top_candidates.push(starting_node);
         candidates.push(Reverse(starting_node));
@@ -464,7 +466,7 @@ where
     fn process_neighbors<'a, E, F>(
         &self,
         neighbors: &[usize],
-        visited_table: &mut HashSet<usize>,
+        visited_table: &mut HashSet<usize, BuildNoHashHasher<usize>>,
         query_evaluator: &E,
         mut add_distances_fn: F,
     ) where

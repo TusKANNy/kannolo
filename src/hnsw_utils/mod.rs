@@ -13,8 +13,7 @@ pub mod config_hnsw;
 pub mod hnsw_builder;
 pub mod level;
 
-#[derive(Debug, Clone, Copy, PartialOrd)]
-
+#[derive(Debug, Clone, Copy)]
 pub struct Node(pub f32, pub usize);
 
 impl Node {
@@ -23,6 +22,12 @@ impl Node {
     }
     pub fn id_vec(&self) -> usize {
         self.1
+    }
+}
+
+impl PartialOrd for Node {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.distance().partial_cmp(&other.distance())
     }
 }
 
@@ -62,8 +67,7 @@ impl Eq for Node {}
 /// - `min_heap`: A mutable reference to a `BinaryHeap` of `Reverse<Node>` objects.
 /// - `max_heap`: A mutable reference to a `BinaryHeap` of `Node` objects.
 /// - `node`: The `Node` to be potentially added to the heaps.
-/// - `ef_parameter`: The maximum number of elements that should be maintained in the heaps during the
-///    construction and search processes.
+/// - `ef_parameter`: The maximum number of elements that should be maintained in the heaps during the construction and search processes.
 ///
 /// # Example
 /// ```rust
@@ -134,12 +138,10 @@ pub fn add_neighbors_to_heaps(
 /// provided `QueryEvaluator`. It updates the closest neighbor and its distance if a closer neighbor is found.
 ///
 /// # Parameters
-/// - `query_evaluator`: A reference to an object implementing the `QueryEvaluator` trait.
-///    This object provides the method to compute the distance between the query vector and each neighbor.
+/// - `query_evaluator`: A reference to an object implementing the `QueryEvaluator` trait. This object provides the method to compute the distance between the query vector and each neighbor.
 /// - `neighbors`: A slice of `usize` representing the indices of the neighbors to be evaluated.
 /// - `nearest_vec`: A mutable reference to a `usize` variable that will be updated to the index of the closest neighbor found.
-/// - `dis_nearest_vec`: A mutable reference to a `f32` variable that will be updated to the distance of
-///    the closest neighbor found.
+/// - `dis_nearest_vec`: A mutable reference to a `f32` variable that will be updated to the distance of tthe closest neighbor found.
 ///
 /// # Description
 /// The function iterates over each neighbor in the `neighbors` slice. For each neighbor, it computes the
@@ -213,13 +215,13 @@ pub fn compute_closest_from_neighbors<'a, Q, D, E>(
 ///
 /// # Parameters
 /// - `topk`: A `Mutex<Vec<(f32, usize)>>` representing a shared vector of top-k results
-///    for multiple queries. Each element is a tuple `(distance, index)`.
+///   for multiple queries. Each element is a tuple `(distance, index)`.
 /// - `query_topk`: A vector of tuples `(f32, usize)` containing the top-k results for a
-///    single query. Each tuple represents a closest vector.
+///   single query. Each tuple represents a closest vector.
 /// - `index`: The index of the query whose results are being inserted into the shared vector.
-///    This `index` determines the segment in the `topk` vector where the `query_topk` results will be placed.
+///   This `index` determines the segment in the `topk` vector where the `query_topk` results will be placed.
 /// - `k`: The number of top results to manage per query. This defines both the size of `query_topk`
-///    and the length of the segment in `topk` that will be replaced.
+///   and the length of the segment in `topk` that will be replaced.
 ///
 /// # Description
 /// - If `query_top_k` does not have a length of `k`, it is resized to `k`, with any additional elements

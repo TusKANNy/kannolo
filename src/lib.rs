@@ -112,7 +112,7 @@ impl<U> AsRefItem for Box<[U]> {
     }
 }
 
-impl<'a, U> AsRefItem for &'a [U] {
+impl<U> AsRefItem for &[U] {
     type Item = U;
 
     #[inline(always)]
@@ -121,7 +121,7 @@ impl<'a, U> AsRefItem for &'a [U] {
     }
 }
 
-impl<'a, U> AsRefItem for &'a mut [U] {
+impl<U> AsRefItem for &mut [U] {
     type Item = U;
 
     #[inline(always)]
@@ -135,6 +135,9 @@ pub trait Vector1D {
     type ValuesType;
 
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn components_as_slice(&self) -> &[Self::ComponentsType];
     fn values_as_slice(&self) -> &[Self::ValuesType];
 }
@@ -196,12 +199,7 @@ where
 {
     #[inline]
     pub fn new(components: V, values: T, d: usize) -> Self {
-        let max_component_id = components
-            .as_ref_item()
-            .iter()
-            .max()
-            .map(|&x| x)
-            .unwrap_or(0);
+        let max_component_id = components.as_ref_item().iter().max().copied().unwrap_or(0);
         SparseVector1D {
             components,
             values,

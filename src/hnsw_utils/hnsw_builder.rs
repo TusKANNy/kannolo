@@ -168,10 +168,7 @@ where
     ///   so the IDs in the range from indices `96` to `99` are processed. This results in processing the IDs `[5, 10, 23, 60]`.
     /// - At level 1, `end` is updated to `96`, and `begin` would be `86`, so the IDs from indices `86` to `95` are processed.
     /// - At level 0, `end` is updated to `86`, and `begin` would be `0`, so the IDs from indices `0` to `85` are processed.
-    pub fn compute_graph(
-        &mut self,
-        config: &ConfigHnsw,
-    ) -> (Vec<Level>, Vec<usize>, usize) {
+    pub fn compute_graph(&mut self, config: &ConfigHnsw) -> (Vec<Level>, Vec<usize>, usize) {
         let num_vectors = self.dataset.len();
         self.assign_level(num_vectors);
 
@@ -770,7 +767,7 @@ where
     /// # Arguments
     ///
     /// - `candidate_neighbors`: A mutable reference to a max-heap (`BinaryHeap`) of `Node` objects representing
-    ///    the selected neighbors.
+    ///   the selected neighbors.
     /// - `begin`: The start index (inclusive) of the range in the neighbor list where neighbors will be updated.
     /// - `end`: The end index (exclusive) of the range in the neighbor list where neighbors will be updated.
     ///
@@ -804,17 +801,17 @@ where
     /// /// # Arguments
     ///
     /// - `closest_vectors`: A mutable reference to a max-heap (`BinaryHeap`) of `Node` objects.
-    ///    This heap is initially empty and will be populated with the closest vectors found during the search.
+    ///   This heap is initially empty and will be populated with the closest vectors found during the search.
     /// - `query_evaluator`: An implementation of the `QueryEvaluator` trait that provides the method to compute
-    ///    the distance between the query vector and the vectors already added to the graph.
+    ///   the distance between the query vector and the vectors already added to the graph.
     /// - `nearest_vec`: The index of the nearest vector found in the highest levels that acts as the starting
-    ///    node from which the search begins.
+    ///   node from which the search begins.
     /// - `dis_nearest_vec`: The distance of the nearest vector found so far to the query vector.
     /// - `curr_level`: The current level in the HNSW graph where the search is being conducted.
     /// - `visited_table`: A mutable reference to the `VisitedTable`, which keeps track of the vectors that have
-    ///    already been visited during the search.
+    ///   already been visited during the search.
     /// - `config`: A reference to the `ConfigHnsw` structure, which contains configuration parameters for the search
-    ///    process, such as the `ef_construction` value.
+    ///   process, such as the `ef_construction` value.
     ///
     /// # Description
     ///
@@ -1139,7 +1136,7 @@ where
     ///   A larger `level_mult` causes probabilities to drop more slowly, spreading vectors across more levels.
     ///   A smaller `level_mult` leads to a faster drop-off, concentrating most vectors in the lower levels.
     /// - `num_neighbors_per_vec`: The base number of neighbors assigned to each vector at levels above 0.
-    ///    Level 0 is assigned twice this number of neighbors.
+    ///   Level 0 is assigned twice this number of neighbors.
     /// # Example
     ///
     /// After calling this function with a `level_mult` of `1.0` and `num_neighbors_per_vec` of `16`,

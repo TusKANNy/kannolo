@@ -16,7 +16,6 @@ impl IndexSerializer {
     pub fn load_index<T: DeserializeOwned>(filename: &str) -> T {
         let filepath = PathBuf::from(filename);
         let serialized: Vec<u8> = fs::read(filepath).unwrap();
-        let index = bincode::deserialize::<T>(&serialized).unwrap();
-        index
+        bincode::deserialize::<T>(&serialized).unwrap()
     }
 }

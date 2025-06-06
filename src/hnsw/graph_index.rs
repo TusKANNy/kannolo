@@ -472,10 +472,10 @@ where
         E: QueryEvaluator<'a, Q = Q>,
         F: FnMut(f32, usize),
     {
-        let mut counter = 0;
         // Stores the IDs of the neighbors whose distances will be computed
         let mut ids: Vec<usize> = vec![0; 4];
 
+        let mut counter = 0;
         for &neighbor in neighbors.iter() {
             let visited = visited_table.contains(&neighbor);
 

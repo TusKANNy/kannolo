@@ -10,10 +10,10 @@ use super::{compute_closest_from_neighbors, hnsw_builder::HnswBuilder};
 ///
 /// # Fields
 /// - `neighbors`: A list of all neighbors for vectors at this level. The neighbors for each vector
-///    are stored in a contiguous block.
+///   are stored in a contiguous block.
 /// - `offsets`: An index mapping each vector ID to its starting position in the `neighbors` list.
-///    The `offsets[id_vec]` provides the starting index in `neighbors` where the neighbors of
-///    the vector with `id_vec` begin.
+///   The `offsets[id_vec]` provides the starting index in `neighbors` where the neighbors of
+///   the vector with `id_vec` begin.
 ///
 #[derive(Serialize, Deserialize)]
 pub struct Level {
@@ -27,14 +27,14 @@ impl Level {
     /// # Parameters
     ///
     /// - `hnsw_builder`: A reference to an `HnswBuilder` which contains the information about the HNSW graph,
-    ///    including the levels assigned to each node and the neighbor assigned to each vector.
+    ///   including the levels assigned to each node and the neighbor assigned to each vector.
     /// - `curr_level`: The current level in the HNSW graph for which this `Level` instance is being created.
     /// - `processed_ids`: A mutable reference to a vector which store the IDs of the nodes processed until the
-    ///    current level.
+    ///   current level.
     /// - `new_to_original`: A mutable reference to a vector that will be populated with the mapping
-    ///    from the new IDs to their original IDs.
+    ///   from the new IDs to their original IDs.
     /// - `original_to_new`: A mutable reference to an array that will be populated with the mapping
-    ///    from original IDs to new IDs.
+    ///   from original IDs to new IDs.
     ///
     /// # Description
     ///
@@ -127,7 +127,7 @@ impl Level {
     ///
     /// # Arguments
     /// - `query_evaluator`: A reference to an object implementing the `QueryEvaluator` trait.
-    ///    This object provides the method to compute the distance between the query vector and each neighbor.
+    ///   This object provides the method to compute the distance between the query vector and each neighbor.
     /// - `nearest_vec`: A mutable reference to a `usize` variable that will be updated to the index of the closest neighbor found.
     /// - `dis_nearest_vec`: A mutable reference to a `f32` variable that will be updated to the distance of the closest neighbor found.
     /// - `id_permutation`: A boxed slice of IDs that maps each ID to its position in the dataset. This permutation allows

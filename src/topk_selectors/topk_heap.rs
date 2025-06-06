@@ -123,13 +123,13 @@ impl TopkHeap {
         self.distances[0]
     }
 
-    pub fn peek(&self) -> Option<f32> {
-        if self.distances.is_empty() {
-            None
-        } else {
-            Some(self.distances[0])
-        }
-    }
+    // pub fn peek(&self) -> Option<f32> {
+    //     if self.distances.is_empty() {
+    //         None
+    //     } else {
+    //         Some(self.distances[0])
+    //     }
+    // }
 }
 
 impl OnlineTopKSelector for TopkHeap {

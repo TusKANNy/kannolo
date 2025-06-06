@@ -103,6 +103,7 @@ pub enum MatrixLayout {
 /// // c now contains the result of -2.0 * a * b + 0.0 * c
 /// ```
 #[inline]
+#[allow(unused_variables)] // The variables `transpose_a` and `transpose_b` are not used if `use_cblas` is not set.
 pub fn sgemm(
     layout: MatrixLayout,
     transpose_a: bool,

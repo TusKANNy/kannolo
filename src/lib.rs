@@ -27,6 +27,7 @@ pub mod clustering {
 }
 
 pub mod quantizers;
+pub mod visited_set;
 pub use quantizers::decoder;
 pub use quantizers::encoder;
 pub use quantizers::plain_quantizer;

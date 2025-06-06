@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."
@@ -26,6 +26,7 @@ hdf5 = "0.8.1"
 anyhow = "1.0.86"
 ann_dataset = "0.1.3"
 clap = { version = "4.3.19", features = ["derive"]}
+bitvec = "1.0.1"
 
 
 bincode = "1.3.3"

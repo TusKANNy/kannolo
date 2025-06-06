@@ -1,9 +1,11 @@
 use crate::quantizer::{IdentityQuantizer, Quantizer, QueryEvaluator};
 use crate::topk_selectors::topk_heap::TopkHeap;
 use crate::topk_selectors::OnlineTopKSelector;
+use crate::visited_set::set::VisitedSet;
 use crate::{hnsw_utils::*, DistanceType};
 use crate::{Dataset, Float, GrowableDataset};
 use crate::{DotProduct, EuclideanDistance};
+use bitvec::prelude::BitVec;
 use config_hnsw::ConfigHnsw;
 use hnsw_builder::HnswBuilder;
 use level::Level;
@@ -403,8 +405,7 @@ where
         // min-heap
         let mut candidates: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
 
-        let mut visited_table: HashSet<usize, BuildNoHashHasher<usize>> =
-            HashSet::with_capacity_and_hasher(200 + 32 * ef, BuildNoHashHasher::default());
+        let mut visited_table = create_visited_set(self.dataset.len(), ef);
 
         top_candidates.push(starting_node);
         candidates.push(Reverse(starting_node));
@@ -424,7 +425,7 @@ where
 
             self.process_neighbors(
                 neighbors,
-                &mut visited_table,
+                &mut *visited_table,
                 query_evaluator,
                 |dis_neigh, neighbor| {
                     add_neighbor_to_heaps(
@@ -466,7 +467,7 @@ where
     fn process_neighbors<'a, E, F>(
         &self,
         neighbors: &[usize],
-        visited_table: &mut HashSet<usize, BuildNoHashHasher<usize>>,
+        visited_table: &mut dyn VisitedSet,
         query_evaluator: &E,
         mut add_distances_fn: F,
     ) where
@@ -478,7 +479,7 @@ where
         let mut ids: Vec<usize> = vec![0; 4];
 
         for &neighbor in neighbors.iter() {
-            let visited = visited_table.contains(&neighbor);
+            let visited = visited_table.contains(neighbor);
             visited_table.insert(neighbor);
 
             ids[counter] = neighbor;
@@ -530,5 +531,16 @@ where
         );
 
         forward + permutation + additional + levels
+    }
+}
+
+pub fn create_visited_set(dataset_size: usize, ef: usize) -> Box<dyn VisitedSet> {
+    if dataset_size <= 2_000_000 || (dataset_size <= 10_000_000 && ef >= 400) {
+        Box::new(BitVec::repeat(false, dataset_size))
+    } else {
+        Box::new(HashSet::with_capacity_and_hasher(
+            200 + 32 * ef,
+            BuildNoHashHasher::default(),
+        ))
     }
 }

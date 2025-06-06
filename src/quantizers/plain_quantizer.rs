@@ -111,7 +111,7 @@ where
         let v1 = chunk[1].values_as_slice();
         let v2 = chunk[2].values_as_slice();
         let v3 = chunk[3].values_as_slice();
-        let vector_batch = [&v0[..], &v1[..], &v2[..], &v3[..]];
+        let vector_batch = [v0, v1, v2, v3];
 
         let dist = match quantizer.distance() {
             DistanceType::Euclidean => euclidean_distance_batch_4(query_slice, vector_batch),

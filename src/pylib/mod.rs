@@ -654,7 +654,7 @@ impl SparsePlainHNSW {
         // Build a sparse query dataset from the parts.
         let query_dataset = SparseDataset::<SparsePlainQuantizer<f32>>::from_vecs_f32(
             &comp_vec,
-            &values_slice,
+            values_slice,
             &offsets_vec,
             d,
         )

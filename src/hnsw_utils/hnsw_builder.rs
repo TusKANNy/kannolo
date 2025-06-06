@@ -186,7 +186,7 @@ where
                 ids_per_level.iter().take(end).skip(begin).collect();
             ids_curr_level.shuffle(&mut rng);
 
-            if self.entry_vector.is_none() && level as u8 == self.max_level {
+            if self.entry_vector.is_none() && level == self.max_level {
                 // it assign as entry_vector the first id that got assigned the highest level
                 self.entry_vector = Some(*ids_curr_level[0]);
             }
@@ -392,7 +392,7 @@ where
         let query_evaluator = self.dataset.query_evaluator(vector);
 
         let mut curr_level = self.max_level;
-        let mut dis_nearest_vec = query_evaluator.compute_distance(&self.dataset, nearest_vec);
+        let mut dis_nearest_vec = query_evaluator.compute_distance(self.dataset, nearest_vec);
 
         {
             let _lock = &locks[id_vec].lock().unwrap();
@@ -864,7 +864,7 @@ where
                     visited_table.insert(neighbor);
 
                     let distance_to_neighbor =
-                        query_evaluator.compute_distance(&self.dataset, neighbor);
+                        query_evaluator.compute_distance(self.dataset, neighbor);
                     let neighbor_node = Node(distance_to_neighbor, neighbor);
 
                     add_neighbor_to_heaps(

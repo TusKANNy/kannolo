@@ -94,7 +94,7 @@ impl EuclideanDistance<f16> for f16 {
         for (q_chunk, v_chunk) in zip(query.chunks_exact(N_LANES), values.chunks_exact(N_LANES)) {
             for i in 0..N_LANES {
                 let diff = q_chunk[i] - v_chunk[i];
-                r[i] = r[i] + diff * diff;
+                r[i] += diff * diff;
             }
         }
 
@@ -216,5 +216,5 @@ where
     }
 
     r.iter().fold(0.0, |acc, &val| acc + val)
-        + dense_euclidean_distance_general(&query[N_LANES * chunks..], &&values[N_LANES * chunks..])
+        + dense_euclidean_distance_general(&query[N_LANES * chunks..], &values[N_LANES * chunks..])
 }

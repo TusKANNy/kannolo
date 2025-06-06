@@ -646,13 +646,11 @@ mod tests_insert_into_topk {
 
         insert_into_topk(&topk, topk_query.clone(), index, k);
 
-        let expected = vec![
-            (0.5, 5),
+        let expected = [(0.5, 5),
             (1.5, 6),
             (2.5, 7),
             (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-        ];
+            (f32::MAX, usize::MAX)];
 
         let start_index = index * k;
 
@@ -678,7 +676,7 @@ mod tests_insert_into_topk {
 
         insert_into_topk(&topk, topk_query.clone(), index, k);
 
-        let expected = vec![(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1)];
+        let expected = [(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1)];
 
         let start_index = index * k;
 
@@ -728,13 +726,11 @@ mod tests_insert_into_topk {
 
         insert_into_topk(&topk, topk_query.clone(), index, k);
 
-        let expected = vec![
-            (0.5, 5),
+        let expected = [(0.5, 5),
             (1.5, 6),
             (f32::MAX, usize::MAX),
             (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-        ];
+            (f32::MAX, usize::MAX)];
 
         let start_index = index * k;
 
@@ -839,7 +835,7 @@ mod tests_add_neighbors_to_heaps {
         let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
         let ef_parameter = 3;
 
-        let nodes = vec![Node(10.0, 1), Node(5.0, 2), Node(7.0, 3)];
+        let nodes = [Node(10.0, 1), Node(5.0, 2), Node(7.0, 3)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -864,7 +860,7 @@ mod tests_add_neighbors_to_heaps {
         let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
         let ef_parameter = 3;
 
-        let nodes = vec![Node(10.0, 1), Node(5.0, 2), Node(7.0, 3), Node(3.0, 4)];
+        let nodes = [Node(10.0, 1), Node(5.0, 2), Node(7.0, 3), Node(3.0, 4)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -888,7 +884,7 @@ mod tests_add_neighbors_to_heaps {
         let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = vec![Node(5.0, 1), Node(3.0, 2)];
+        let nodes = [Node(5.0, 1), Node(3.0, 2)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -916,7 +912,7 @@ mod tests_add_neighbors_to_heaps {
         let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
         let ef_parameter = 1;
 
-        let nodes = vec![Node(5.0, 1), Node(3.0, 2), Node(2.0, 3)];
+        let nodes = [Node(5.0, 1), Node(3.0, 2), Node(2.0, 3)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -940,7 +936,7 @@ mod tests_add_neighbors_to_heaps {
         let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = vec![Node(5.0, 1), Node(3.0, 2)];
+        let nodes = [Node(5.0, 1), Node(3.0, 2)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);

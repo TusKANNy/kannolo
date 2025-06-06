@@ -242,7 +242,7 @@ impl<'a> Encoder for PQEncoder16<'a> {
     }
 }
 
-impl<'a, T> Encoder for &'a mut T
+impl<T> Encoder for &mut T
 where
     T: Encoder + ?Sized,
 {

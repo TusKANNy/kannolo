@@ -61,7 +61,7 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
 
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
         let n = input_vectors.len() / self.d();
-        let code_size = (self.nbits() * M + 7) / 8;
+        let code_size = (self.nbits() * M).div_ceil(8);
 
         assert!(
             output_vectors.len() >= M * n,
@@ -201,15 +201,15 @@ impl<const M: usize> ProductQuantizer<M> {
             current_centroids.data().values_as_slice().to_vec()
         };
 
-        let centroids = (0..M).into_par_iter().map(|i| run_kmeans(i)).reduce(
-            || Vec::new(),
+        
+
+        (0..M).into_par_iter().map(run_kmeans).reduce(
+            Vec::new,
             |mut acc, x| {
                 acc.extend_from_slice(&x);
                 acc
             },
-        );
-
-        centroids
+        )
     }
 
     #[inline]
@@ -257,8 +257,8 @@ impl<const M: usize> ProductQuantizer<M> {
             }
         }
 
-        let final_distance = distance[0] + distance[1] + distance[2] + distance[3];
-        final_distance
+        
+        distance[0] + distance[1] + distance[2] + distance[3]
     }
 
     #[inline]
@@ -326,7 +326,7 @@ impl<const M: usize> ProductQuantizer<M> {
         }
 
         // Compute the squared L2 norm for the first query vector segment.
-        let query_norm = compute_vector_norm_squared(&query_vec, self.dsub());
+        let query_norm = compute_vector_norm_squared(query_vec, self.dsub());
 
         for j in 0..self.ksub() {
             distances[j] += query_norm;
@@ -496,7 +496,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
 
         Self {
             _query: query,
-            distance_table: distance_table,
+            distance_table,
         }
     }
 

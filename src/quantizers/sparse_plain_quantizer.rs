@@ -70,7 +70,7 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
 
     #[inline]
     fn new(query: Self::QueryType, _dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
-        let mut dense_query = vec![T::zero(); query.d as usize];
+        let mut dense_query = vec![T::zero(); query.d];
         for (&i, &v) in query
             .components_as_slice()
             .iter()

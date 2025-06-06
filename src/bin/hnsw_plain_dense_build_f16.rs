@@ -67,7 +67,7 @@ fn main() {
     let (docs_vec, d) = read_numpy_f32_flatten_2d(data_path.to_string());
     let docs_vec = docs_vec
         .into_iter()
-        .map(|x| half::f16::from_f32(x))
+        .map(half::f16::from_f32)
         .collect();
     let dataset =
         DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<half::f16>::new(d, distance));

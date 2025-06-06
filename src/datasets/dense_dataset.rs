@@ -139,7 +139,7 @@ where
         }
 
         let evaluator = self.query_evaluator(query);
-        let distances = evaluator.compute_distances(&self, 0..self.len());
+        let distances = evaluator.compute_distances(self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
     }
 }

@@ -117,7 +117,7 @@ where
         SparseVector1D::new(
             self.components.as_ref(),
             self.values.as_ref(),
-            self.d as usize,
+            self.d,
         )
     }
 
@@ -138,9 +138,9 @@ where
     }
 
     fn get_space_usage_bytes(&self) -> usize {
-        let components = self.components.as_ref().len() * std::mem::size_of::<u16>();
-        let values = self.values.as_ref().len() * std::mem::size_of::<Q::OutputItem>();
-        let offsets = self.offsets.as_ref().len() * std::mem::size_of::<usize>();
+        let components = std::mem::size_of_val(self.components.as_ref());
+        let values = std::mem::size_of_val(self.values.as_ref());
+        let offsets = std::mem::size_of_val(self.offsets.as_ref());
         components + values + offsets + self.quantizer.get_space_usage_bytes()
     }
 
@@ -201,7 +201,7 @@ where
         }
 
         let evaluator = self.query_evaluator(query);
-        let distances = evaluator.compute_distances(&self, 0..self.len());
+        let distances = evaluator.compute_distances(self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
     }
 }
@@ -717,8 +717,8 @@ where
         ParSparseDatasetIter {
             last_offset: self.offsets()[0],
             offsets: &self.offsets()[1..],
-            components: &self.components(),
-            values: &self.values(),
+            components: self.components(),
+            values: self.values(),
             d: self.d,
         }
     }

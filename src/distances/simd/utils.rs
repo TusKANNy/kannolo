@@ -184,7 +184,7 @@ pub unsafe fn horizontal_sum_256(v: __m256) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::arch::x86_64::*;
+    
 
     /// Tests the `squared_l2_dist_128` function for computing squared L2 distance between 128-bit SIMD vectors.
     ///

@@ -67,12 +67,12 @@ macro_rules! read_vecs_file {
 
 #[inline]
 pub fn read_fvecs_file(fname: &str) -> IoResult<(Vec<f32>, usize, usize)> {
-    read_vecs_file!(fname, f32, |bytes| f32::from_le_bytes(bytes))
+    read_vecs_file!(fname, f32, f32::from_le_bytes)
 }
 
 #[inline]
 pub fn read_ivecs_file(fname: &str) -> IoResult<(Vec<u32>, usize, usize)> {
-    read_vecs_file!(fname, u32, |bytes| u32::from_le_bytes(bytes))
+    read_vecs_file!(fname, u32, u32::from_le_bytes)
 }
 
 pub fn read_tsv_file(fname: &str) -> IoResult<(Vec<Vec<u32>>, usize)> {
@@ -141,7 +141,7 @@ pub fn read_dataset(
         let file = hdf5::File::open(path)?;
         let dataset = file.dataset(label)?;
         let shape = dataset.shape();
-        let data: Vec<T> = dataset.read_raw::<T>()?.into();
+        let data: Vec<T> = dataset.read_raw::<T>()?;
 
         Ok((data, shape[1]))
     }

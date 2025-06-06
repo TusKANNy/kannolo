@@ -26,7 +26,7 @@ impl<'a> Decoder for PQDecoder8<'a> {
     }
 }
 
-impl<'a, T> Decoder for &'a mut T
+impl<T> Decoder for &mut T
 where
     T: Decoder + ?Sized,
 {

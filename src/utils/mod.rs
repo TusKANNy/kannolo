@@ -206,9 +206,9 @@ pub fn warm_up() {
         transpose_b,
         alpha,
         beta,
-        m as usize,
-        k as usize,
-        n as usize,
+        m,
+        k,
+        n,
         a.as_ptr(),
         k as isize,
         b.as_ptr(),
@@ -274,7 +274,7 @@ impl BenchmarkResult {
         avg_time_search_per_query: u128,
     ) -> Self {
         Self {
-            m: m,
+            m,
             ef_construction,
             ef_search,
             upper_beam,
@@ -370,7 +370,7 @@ pub fn save_to_tsv(
     let mut wtr = WriterBuilder::new().delimiter(b'\t').from_writer(file);
 
     // Write header (optional)
-    wtr.write_record(&["ef_search", "Accuracy@10", "Avg_query_time"])
+    wtr.write_record(["ef_search", "Accuracy@10", "Avg_query_time"])
         .unwrap();
 
     // Write rows by iterating through the vectors

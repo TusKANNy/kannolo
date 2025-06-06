@@ -23,7 +23,7 @@ where
         Q::Evaluator<'a>: QueryEvaluator<'a, Q = Q>,
         Q::InputItem: Float + EuclideanDistance<Q::InputItem> + DotProduct<Q::InputItem>,
     {
-        <Q::Evaluator<'a>>::new(query, &self)
+        <Q::Evaluator<'a>>::new(query, self)
     }
 
     fn quantizer(&self) -> &Q;

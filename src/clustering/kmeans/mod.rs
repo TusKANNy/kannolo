@@ -24,7 +24,7 @@ impl KMeans {
     fn imbalance_factor(histograms: &[f32], k: usize) -> f32 {
         let unfairness_factor = dot_product_unrolled_avx(histograms, histograms);
         let total: f32 = histograms.iter().sum();
-        return unfairness_factor * k as f32 / (total * total);
+        unfairness_factor * k as f32 / (total * total)
     }
 
     /// Computes the centroids of the clustering as the mean of vectors assigned to each cluster.
@@ -193,10 +193,10 @@ impl KMeans {
         // clustering-related
         let mut best_centroids = PlainDenseDataset::with_dim_plain(d);
         let mut assignments: Vec<(f32, usize)>;
-        let w = weights.as_ref().map(|vec| vec.as_slice());
+        let w = weights.as_deref();
 
         for redo in 0..self.n_redo {
-            let mut index = PlainDenseDataset::from_random_sample(&dataset, k);
+            let mut index = PlainDenseDataset::from_random_sample(dataset, k);
 
             let mut obj;
             let mut average_imbalance_factor = 0.0;
@@ -209,7 +209,7 @@ impl KMeans {
 
                 obj = assignments.iter().map(|&(value, _)| value).sum();
                 let (n_split, histograms, centroids) =
-                    KMeans::update_and_split(&dataset, w, k, &assignments);
+                    KMeans::update_and_split(dataset, w, k, &assignments);
 
                 let imbalance_factor = KMeans::imbalance_factor(&histograms, k);
 

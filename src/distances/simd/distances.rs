@@ -26,7 +26,7 @@ pub unsafe fn compute_distance_table_ip_d4(
         for j in (0..centroid_groups * 8).step_by(8) {
             let [v0, v1, v2, v3] = transpose_8x4(
                 _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(8)),
                 _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
             );
@@ -81,7 +81,7 @@ pub unsafe fn compute_distance_table_ip_d8(
             // Each centroid consists of 8 contiguous floats.
             let [v0, v1, v2, v3, v4, v5, v6, v7] = transpose_8x8(
                 _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(8)),
                 _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
@@ -136,7 +136,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     // Load centroids data into AVX2 registers
     let centroids_avx = [
         _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-        _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+        _mm256_loadu_ps(centroids_ptr.add(8)),
         _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
         _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
     ];
@@ -927,7 +927,7 @@ mod tests {
             compute_distances_d1(&mut distances, &query_vec, &centroids, centroids.len());
         }
 
-        let expected_distances = vec![4.0, 1.0, 0.0, 1.0, 4.0];
+        let expected_distances = [4.0, 1.0, 0.0, 1.0, 4.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(
@@ -959,7 +959,7 @@ mod tests {
             compute_distances_d12(&mut distances, &query_vec, &centroids, 3);
         }
 
-        let expected_distances = vec![506.0, 506.0, 506.0];
+        let expected_distances = [506.0, 506.0, 506.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(
@@ -991,7 +991,7 @@ mod tests {
 
         compute_distances_general(&mut distances, &query_vec, &centroids, ksub, n_centroids);
 
-        let expected_distances = vec![0.0, 64.0];
+        let expected_distances = [0.0, 64.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(

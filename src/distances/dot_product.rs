@@ -1,10 +1,10 @@
 use crate::simd_utils::horizontal_sum_256;
 use crate::{AsRefItem, DenseVector1D, Float, SparseVector1D, Vector1D};
+use half::f16;
 use itertools::izip;
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::iter::zip;
-
-use half::f16;
 
 #[inline]
 pub fn dense_dot_product<T>(query: &[T], document: &[T]) -> f32
@@ -240,6 +240,7 @@ impl DotProduct<f32> for f32 {
 }
 
 impl DotProduct<f16> for f16 {
+    #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,f16c")]
     unsafe fn dot_product_unrolled_avx2(query: &[f16], document: &[f16]) -> f32 {
         const N_LANES: usize = 8;
@@ -280,6 +281,7 @@ impl DotProduct<f16> for f16 {
         simd_sum + remainder_sum
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,f16c")]
     unsafe fn dot_product_batch_4(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
         // We process 8 half-precision values (each 16 bits) at a time.

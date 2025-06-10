@@ -39,6 +39,7 @@ pub trait EuclideanDistance<U> {
 
 impl EuclideanDistance<f16> for f16 {
     #[inline]
+    #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma,f16c")]
     unsafe fn euclidean_distance_batch_4(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
         const N_LANES: usize = 8; // 8 half values per 128-bit register (8*16 = 128)

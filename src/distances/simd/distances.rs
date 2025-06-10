@@ -3,7 +3,11 @@ use super::utils::{
     horizontal_sum_128, horizontal_sum_256, squared_l2_dist_128, squared_l2_dist_256,
 };
 use crate::utils::compute_squared_l2_distance;
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
 
 /* ********** SIMD OPTIMIZED FUNCTIONS ********** */
 

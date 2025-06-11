@@ -1,5 +1,5 @@
 use crate::plain_quantizer::PlainQuantizer;
-use crate::{dot_product_unrolled, read_fvecs_file, DenseDataset, DistanceType};
+use crate::{dot_product_simd, read_fvecs_file, DenseDataset, DistanceType};
 use core::hash::Hash;
 use csv::WriterBuilder;
 use rand::thread_rng;
@@ -222,7 +222,7 @@ pub fn warm_up() {
 pub fn vectors_norm(vectors: &[f32], d: usize) -> Vec<f32> {
     vectors
         .chunks_exact(d)
-        .map(|v| dot_product_unrolled(v, v))
+        .map(|v| dot_product_simd(v, v))
         .collect()
 }
 

@@ -7,20 +7,19 @@ use std::iter::zip;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
- #[cfg(target_arch = "aarch64")]
+#[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
 
-
+/// Computes the dot product of two dense vectors, unrolling the loop for performance.
+///
+/// # Arguments
+/// /// * `query` - The first dense vector.
+/// /// * `vector` - The second dense vector.
+///
+/// # Returns
+/// /// The dot product as a `f32`.
 #[inline]
-pub fn dense_dot_product<T>(query: &[T], document: &[T]) -> f32
-where
-    T: Float,
-{
-    dense_dot_product_unrolled(query, document)
-}
-
-#[inline]
-pub fn dense_dot_product_unrolled<T>(query: &[T], document: &[T]) -> f32
+pub fn dense_dot_product_unrolled<T>(query: &[T], vector: &[T]) -> f32
 where
     T: Float,
 {
@@ -28,7 +27,7 @@ where
     let mut r = [0.0; N_LANES];
 
     let chunks = query.len() / N_LANES;
-    for (q_chunk, v_chunk) in zip(query.chunks_exact(N_LANES), document.chunks_exact(N_LANES)) {
+    for (q_chunk, v_chunk) in zip(query.chunks_exact(N_LANES), vector.chunks_exact(N_LANES)) {
         for i in 0..N_LANES {
             let d = q_chunk[i].to_f32().unwrap() * v_chunk[i].to_f32().unwrap();
             r[i] += d;
@@ -36,19 +35,35 @@ where
     }
 
     r.iter().sum::<f32>()
-        + dense_dot_product_general(&query[N_LANES * chunks..], &document[N_LANES * chunks..])
+        + dense_dot_product_general(&query[N_LANES * chunks..], &vector[N_LANES * chunks..])
 }
 
+/// Computes the dot product of two dense vectors, handling general cases without unrolling.
+///
+/// # Arguments
+/// /// * `query` - The first dense vector.
+/// * `vector` - The second dense vector.
+///
+/// # Returns
+/// /// The dot product as a `f32`.
 #[inline]
-pub fn dense_dot_product_general<T>(query: &[T], document: &[T]) -> f32
+pub fn dense_dot_product_general<T>(query: &[T], vector: &[T]) -> f32
 where
     T: Float,
 {
-    query.iter().zip(document).fold(0.0, |acc, (a, b)| {
+    query.iter().zip(vector).fold(0.0, |acc, (a, b)| {
         acc + (a.to_f32().unwrap() * b.to_f32().unwrap())
     })
 }
 
+/// Computes the dot product of a query vector with four dense vectors, unrolling the loop for performance.
+///
+/// # Arguments
+/// /// * `query` - The query vector.
+/// * `vectors` - An array of four dense vectors.
+///
+/// # Returns
+/// /// An array of four `f32` values representing the dot products with each of the four vectors.
 #[inline]
 pub fn dense_dot_product_batch_4_unrolled<T>(query: &[T], vectors: [&[T]; 4]) -> [f32; 4]
 where
@@ -99,6 +114,14 @@ where
     [sum0, sum1, sum2, sum3]
 }
 
+/// Computes the dot product of a query vector with four dense vectors, handling general cases without unrolling.
+///
+/// # Arguments
+/// /// * `query` - The query vector.
+/// /// * `vectors` - An array of four dense vectors.
+///
+/// # Returns
+/// /// An array of four `f32` values representing the dot products with each of the four vectors.
 #[inline]
 pub fn dense_dot_product_batch_4_general<T>(query: &[T], vectors: [&[T]; 4]) -> [f32; 4]
 where
@@ -115,11 +138,18 @@ where
     sums
 }
 
-// Sparse
+/// Computes the dot product of a dense vector with a sparse vector.
+///
+/// # Arguments
+/// /// * `query` - The dense vector.
+/// /// * `sparse_vector` - The sparse vector.
+///
+/// # Returns
+/// /// The dot product as a `f32`.
 #[inline]
 pub fn dot_product_dense_sparse<T1, T, U, F>(
     query: &DenseVector1D<T1>,
-    array: &SparseVector1D<U, T>,
+    sparse_vector: &SparseVector1D<U, T>,
 ) -> f32
 where
     T1: AsRefItem<Item = F>,
@@ -132,10 +162,10 @@ where
     let mut result = [0.0; N_LANES];
     let query_slice = query.values_as_slice();
 
-    let chunk_iter = array
+    let chunk_iter = sparse_vector
         .components_as_slice()
         .iter()
-        .zip(array.values_as_slice())
+        .zip(sparse_vector.values_as_slice())
         .array_chunks::<N_LANES>();
 
     for chunk in chunk_iter {
@@ -166,12 +196,12 @@ where
         };
     }
 
-    let l = array.components_as_slice().len();
+    let l = sparse_vector.components_as_slice().len();
     let rem = l % N_LANES;
 
-    for (&i, &v) in array.components_as_slice()[l - rem..]
+    for (&i, &v) in sparse_vector.components_as_slice()[l - rem..]
         .iter()
-        .zip(&array.values_as_slice()[l - rem..])
+        .zip(&sparse_vector.values_as_slice()[l - rem..])
     {
         result[0] += unsafe {
             (*query_slice.get_unchecked(i as usize)).to_f32().unwrap() * v.to_f32().unwrap()
@@ -181,6 +211,14 @@ where
     result.iter().sum()
 }
 
+/// Computes the dot product of two sparse vectors, using merge-intersection.
+///
+/// # Arguments
+/// /// * `query` - The first sparse vector.
+/// /// * `vector` - The second sparse vector.
+///
+/// # Returns
+/// /// The dot product as a `f32`.
 #[inline]
 #[must_use]
 pub fn sparse_dot_product_with_merge<F, U, T>(
@@ -222,39 +260,60 @@ where
 }
 
 /* simd */
+
+/// Computes the dot product of a query vector with a dense vector, using SIMD intrinsics.
+///
+/// # Arguments
+/// /// * `query` - The query vector.
+/// /// * `vector` - The dense vector.
+///
+/// # Returns
+/// /// The dot product as a `f32`.
 #[inline]
-pub fn dot_product_batch_4<T>(query: &[T], values: [&[T]; 4]) -> [f32; 4]
+pub fn dot_product_simd<T>(query: &[T], vector: &[T]) -> f32
 where
     T: Float + DotProduct<T>,
 {
-    unsafe { T::dot_product_batch_4(query, values) }
+    unsafe { T::dot_product_simd(query, vector) }
 }
 
+/// Computes the dot product of a query vector with four dense vectors, using SIMD intrinsics.
+///
+/// # Arguments
+/// /// * `query` - The query vector.
+/// /// * `vectors` - An array of four dense vectors.
+///
+/// # Returns
+/// /// An array of four `f32` values representing the dot products with each of the four vectors.
 #[inline]
-pub fn dot_product_unrolled<T>(query: &[T], values: &[T]) -> f32
+pub fn dot_product_batch_4_simd<T>(query: &[T], vectors: [&[T]; 4]) -> [f32; 4]
 where
     T: Float + DotProduct<T>,
 {
-    unsafe { T::dot_product_unrolled(query, values) }
+    unsafe { T::dot_product_batch_4_simd(query, vectors) }
 }
 
 pub trait DotProduct<U> {
-    unsafe fn dot_product_unrolled(query: &[U], values: &[U]) -> f32;
-    unsafe fn dot_product_batch_4(query: &[U], values: [&[U]; 4]) -> [f32; 4];
+    unsafe fn dot_product_simd(query: &[U], vector: &[U]) -> f32;
+    unsafe fn dot_product_batch_4_simd(query: &[U], vectors: [&[U]; 4]) -> [f32; 4];
 }
 
+/// Implements the `DotProduct` trait for `f32`, providing SIMD-optimized dot product computations.
 impl DotProduct<f32> for f32 {
-    unsafe fn dot_product_unrolled(query: &[f32], values: &[f32]) -> f32 {
+    unsafe fn dot_product_simd(query: &[f32], values: &[f32]) -> f32 {
         // x86_64 + runtime check for AVX2
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("avx2") {
                 #[target_feature(enable = "avx2")]
-                unsafe fn dot_product_unrolled_avx(query: &[f32], values: &[f32]) -> f32 {
+                unsafe fn dot_product_avx(query: &[f32], values: &[f32]) -> f32 {
                     const N_LANES: usize = 8;
                     let mut sum = _mm256_setzero_ps();
                     let chunks = query.len() / N_LANES;
-                    for (q_chunk, v_chunk) in query.chunks_exact(N_LANES).zip(values.chunks_exact(N_LANES)) {
+                    for (q_chunk, v_chunk) in query
+                        .chunks_exact(N_LANES)
+                        .zip(values.chunks_exact(N_LANES))
+                    {
                         let qv = _mm256_loadu_ps(q_chunk.as_ptr());
                         let vv = _mm256_loadu_ps(v_chunk.as_ptr());
                         sum = _mm256_add_ps(sum, _mm256_mul_ps(qv, vv));
@@ -268,13 +327,13 @@ impl DotProduct<f32> for f32 {
                         .fold(0.0, |acc, (&a, &b)| acc + a * b);
                     simd_sum + rem
                 }
-                return dot_product_unrolled_avx(query, values);
+                return dot_product_avx(query, values);
             }
         }
         // aarch64 NEON path
         #[cfg(target_arch = "aarch64")]
         {
-            unsafe fn dot_product_unrolled_neon(query: &[f32], values: &[f32]) -> f32 {
+            unsafe fn dot_product_neon(query: &[f32], values: &[f32]) -> f32 {
                 const N_LANES: usize = 4;
                 let mut sum_v = vdupq_n_f32(0.0);
                 let chunks = query.len() / N_LANES;
@@ -293,18 +352,21 @@ impl DotProduct<f32> for f32 {
                 }
                 acc
             }
-            return dot_product_unrolled_neon(query, values);
+            return dot_product_neon(query, values);
         }
         // Scalar fallback
         dense_dot_product_unrolled(query, values)
     }
 
-    unsafe fn dot_product_batch_4(query: &[f32], vectors: [&[f32]; 4]) -> [f32; 4] {
+    unsafe fn dot_product_batch_4_simd(query: &[f32], vectors: [&[f32]; 4]) -> [f32; 4] {
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") {
                 #[target_feature(enable = "avx2", enable = "fma")]
-                unsafe fn dot_product_batch_4_avx2(query: &[f32], vectors: [&[f32]; 4]) -> [f32; 4] {
+                unsafe fn dot_product_batch_4_avx2(
+                    query: &[f32],
+                    vectors: [&[f32]; 4],
+                ) -> [f32; 4] {
                     const N_LANES: usize = 8;
                     let mut sum0 = _mm256_setzero_ps();
                     let mut sum1 = _mm256_setzero_ps();
@@ -380,20 +442,22 @@ impl DotProduct<f32> for f32 {
             }
             return dot_product_batch_4_neon(query, vectors);
         }
-        // fallback scalar
+        // Sscalar fallback
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }
 
-
+/// Implements the `DotProduct` trait for `f16`, providing SIMD-optimized dot product computations.
 impl DotProduct<f16> for f16 {
-    unsafe fn dot_product_unrolled(query: &[f16], values: &[f16]) -> f32 {
+    unsafe fn dot_product_simd(query: &[f16], values: &[f16]) -> f32 {
         // x86_64 + runtime check for AVX2+F16C
         #[cfg(target_arch = "x86_64")]
         {
-            if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("f16c") {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("f16c")
+            {
                 #[target_feature(enable = "avx2,f16c")]
-                unsafe fn dot_product_unrolled_avx2(query: &[f16], document: &[f16]) -> f32 {
+                unsafe fn dot_product_avx2(query: &[f16], document: &[f16]) -> f32 {
                     const N_LANES: usize = 8;
                     let mut sum = _mm256_setzero_ps();
 
@@ -431,17 +495,17 @@ impl DotProduct<f16> for f16 {
 
                     simd_sum + remainder_sum
                 }
-                return dot_product_unrolled_avx2(query, values);
+                return dot_product_avx2(query, values);
             }
         }
 
-        // --- aarch64 native FP16 NEON path (nightly + hardware must support) ---
+        // aarch64 native FP16 NEON path
         #[cfg(target_arch = "aarch64")]
         {
             if is_aarch64_feature_detected!("fp16") {
                 // Use FP16 NEON intrinsics
                 #[target_feature(enable = "neon,fp16")]
-                unsafe fn dot_product_unrolled_neon(query: &[f16], values: &[f16]) -> f32 {
+                unsafe fn dot_product_neon(query: &[f16], values: &[f16]) -> f32 {
                     use core::arch::aarch64::*;
                     const N: usize = 4; // float16x4 -> float32x4
                     let len = query.len();
@@ -463,12 +527,12 @@ impl DotProduct<f16> for f16 {
                     }
                     acc
                 }
-                return dot_product_unrolled_neon(query, values);
+                return dot_product_neon(query, values);
             }
             // Else: no FP16 support; fall through to “convert-then-NEON-f32” or scalar
             // Option A: convert small chunks to f32 and use NEON f32:
             #[target_feature(enable = "neon")]
-            unsafe fn dot_product_unrolled_neon_via_f32(query: &[f16], values: &[f16]) -> f32 {
+            unsafe fn dot_product_neon_via_f32(query: &[f16], values: &[f16]) -> f32 {
                 use core::arch::aarch64::*;
                 const CHUNK: usize = 4;
                 let len = query.len();
@@ -494,20 +558,25 @@ impl DotProduct<f16> for f16 {
                 acc
             }
             // You may benchmark neon_via_f32 vs scalar to decide; here we choose neon_via_f32:
-            return dot_product_unrolled_neon_via_f32(query, values);
+            return dot_product_neon_via_f32(query, values);
         }
 
         // Scalar fallback
         dense_dot_product_unrolled(query, values)
     }
 
-    unsafe fn dot_product_batch_4(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
+    unsafe fn dot_product_batch_4_simd(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
         // x86_64 + runtime check for AVX2+F16C
         #[cfg(target_arch = "x86_64")]
         {
-            if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("f16c") {
+            if std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("f16c")
+            {
                 #[target_feature(enable = "avx2,f16c,fma")]
-                unsafe fn dot_product_batch_4_avx2(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
+                unsafe fn dot_product_batch_4_avx2(
+                    query: &[f16],
+                    vectors: [&[f16]; 4],
+                ) -> [f32; 4] {
                     // We process 8 half-precision values (each 16 bits) at a time.
                     const N_LANES: usize = 8;
 
@@ -561,7 +630,10 @@ impl DotProduct<f16> for f16 {
         {
             if is_aarch64_feature_detected!("fp16") {
                 #[target_feature(enable = "neon,fp16")]
-                unsafe fn dot_product_batch_4_neon(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
+                unsafe fn dot_product_batch_4_neon(
+                    query: &[f16],
+                    vectors: [&[f16]; 4],
+                ) -> [f32; 4] {
                     use core::arch::aarch64::*;
                     const N: usize = 4;
                     let len = query.len();
@@ -574,10 +646,14 @@ impl DotProduct<f16> for f16 {
                         let base = i * N;
                         let qh = vld1_f16(query.as_ptr().add(base) as *const f16);
                         let qv = vcvt_f32_f16(qh);
-                        let v0v = vcvt_f32_f16(vld1_f16(vectors[0].as_ptr().add(base) as *const f16));
-                        let v1v = vcvt_f32_f16(vld1_f16(vectors[1].as_ptr().add(base) as *const f16));
-                        let v2v = vcvt_f32_f16(vld1_f16(vectors[2].as_ptr().add(base) as *const f16));
-                        let v3v = vcvt_f32_f16(vld1_f16(vectors[3].as_ptr().add(base) as *const f16));
+                        let v0v =
+                            vcvt_f32_f16(vld1_f16(vectors[0].as_ptr().add(base) as *const f16));
+                        let v1v =
+                            vcvt_f32_f16(vld1_f16(vectors[1].as_ptr().add(base) as *const f16));
+                        let v2v =
+                            vcvt_f32_f16(vld1_f16(vectors[2].as_ptr().add(base) as *const f16));
+                        let v3v =
+                            vcvt_f32_f16(vld1_f16(vectors[3].as_ptr().add(base) as *const f16));
                         sum0 = vaddq_f32(sum0, vmulq_f32(qv, v0v));
                         sum1 = vaddq_f32(sum1, vmulq_f32(qv, v1v));
                         sum2 = vaddq_f32(sum2, vmulq_f32(qv, v2v));
@@ -601,7 +677,10 @@ impl DotProduct<f16> for f16 {
             }
             // else via-f32 NEON:
             #[target_feature(enable = "neon")]
-            unsafe fn dot_product_batch_4_neon_via_f32(query: &[f16], vectors: [&[f16]; 4]) -> [f32; 4] {
+            unsafe fn dot_product_batch_4_neon_via_f32(
+                query: &[f16],
+                vectors: [&[f16]; 4],
+            ) -> [f32; 4] {
                 use core::arch::aarch64::*;
                 const CHUNK: usize = 4;
                 let len = query.len();
@@ -623,14 +702,14 @@ impl DotProduct<f16> for f16 {
                     let base = chunk_idx * CHUNK;
                     // convert f16 → f32 for query and each vector
                     for j in 0..CHUNK {
-                        qf[j]  = query[base + j].to_f32();
+                        qf[j] = query[base + j].to_f32();
                         v0f[j] = vectors[0][base + j].to_f32();
                         v1f[j] = vectors[1][base + j].to_f32();
                         v2f[j] = vectors[2][base + j].to_f32();
                         v3f[j] = vectors[3][base + j].to_f32();
                     }
                     // load into NEON registers
-                    let qv  = vld1q_f32(qf.as_ptr());
+                    let qv = vld1q_f32(qf.as_ptr());
                     let v0v = vld1q_f32(v0f.as_ptr());
                     let v1v = vld1q_f32(v1f.as_ptr());
                     let v2v = vld1q_f32(v2f.as_ptr());
@@ -665,7 +744,3 @@ impl DotProduct<f16> for f16 {
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }
-
-
-
-

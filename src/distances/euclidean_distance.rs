@@ -1,10 +1,10 @@
-use crate::distances::dot_product_unrolled;
+use crate::distances::dot_product_simd;
 use crate::simd_utils::horizontal_sum_256;
 use half::f16;
 use itertools::izip;
-use std::iter::zip;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+use std::iter::zip;
 
 use crate::Float;
 
@@ -12,7 +12,7 @@ use crate::Float;
 pub fn vectors_norm(vectors: &[f32], d: usize) -> Vec<f32> {
     vectors
         .chunks_exact(d)
-        .map(|v| dot_product_unrolled(v, v))
+        .map(|v| dot_product_simd(v, v))
         .collect()
 }
 

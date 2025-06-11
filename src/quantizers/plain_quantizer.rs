@@ -1,7 +1,9 @@
-use crate::distances::{self, dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
+use crate::distances::{self, dense_euclidean_distance_unrolled};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{dot_product_batch_4, dot_product_unrolled, euclidean_distance_batch_4, DenseVector1D, Vector1D};
+use crate::{
+    dot_product_batch_4_simd, dot_product_simd, euclidean_distance_batch_4, DenseVector1D, Vector1D,
+};
 use crate::{Dataset, DistanceType, Float};
 
 use crate::datasets::dense_dataset::DenseDataset;
@@ -92,7 +94,7 @@ where
             DistanceType::Euclidean => {
                 dense_euclidean_distance_unrolled(query_slice, document_slice)
             }
-            DistanceType::DotProduct => -dot_product_unrolled(query_slice, document_slice),
+            DistanceType::DotProduct => -dot_product_simd(query_slice, document_slice),
         }
     }
 
@@ -116,7 +118,7 @@ where
         let dist = match quantizer.distance() {
             DistanceType::Euclidean => euclidean_distance_batch_4(query_slice, vector_batch),
             DistanceType::DotProduct => {
-                let dps = dot_product_batch_4(query_slice, vector_batch); // Negate distances
+                let dps = dot_product_batch_4_simd(query_slice, vector_batch); // Negate distances
                 [-dps[0], -dps[1], -dps[2], -dps[3]]
             }
         };

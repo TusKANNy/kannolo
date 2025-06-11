@@ -1,5 +1,5 @@
 use bitvec::prelude::BitVec;
-use nohash_hasher::{BuildNoHashHasher, NoHashHasher};
+use nohash_hasher::BuildNoHashHasher;
 use std::collections::HashSet;
 
 pub trait VisitedSet {

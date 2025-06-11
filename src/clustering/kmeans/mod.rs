@@ -1,4 +1,4 @@
-use crate::{dot_product_unrolled_avx, Dataset};
+use crate::{dot_product_unrolled, Dataset};
 use crate::{PlainDenseDataset, Vector1D};
 use std::time::Instant;
 
@@ -22,7 +22,7 @@ impl KMeans {
     ///
     #[inline]
     fn imbalance_factor(histograms: &[f32], k: usize) -> f32 {
-        let unfairness_factor = dot_product_unrolled_avx(histograms, histograms);
+        let unfairness_factor = dot_product_unrolled(histograms, histograms);
         let total: f32 = histograms.iter().sum();
         return unfairness_factor * k as f32 / (total * total);
     }

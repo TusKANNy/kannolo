@@ -1,3 +1,4 @@
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 /// Computes the squared L2 distance (element-wise) between two 128-bit SIMD vectors.

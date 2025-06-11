@@ -1,7 +1,7 @@
 use crate::distances::{self, dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{dot_product_batch_4, euclidean_distance_batch_4, DenseVector1D, Vector1D};
+use crate::{dot_product_batch_4, dot_product_unrolled, euclidean_distance_batch_4, DenseVector1D, Vector1D};
 use crate::{Dataset, DistanceType, Float};
 
 use crate::datasets::dense_dataset::DenseDataset;
@@ -92,7 +92,7 @@ where
             DistanceType::Euclidean => {
                 dense_euclidean_distance_unrolled(query_slice, document_slice)
             }
-            DistanceType::DotProduct => -dense_dot_product_unrolled(query_slice, document_slice),
+            DistanceType::DotProduct => -dot_product_unrolled(query_slice, document_slice),
         }
     }
 

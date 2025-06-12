@@ -1,4 +1,6 @@
+#[cfg(target_arch = "x86_64")]
 use super::transpose::{transpose_8x2, transpose_8x4, transpose_8x8};
+#[cfg(target_arch = "x86_64")]
 use super::utils::{
     horizontal_sum_128, horizontal_sum_256, squared_l2_dist_128, squared_l2_dist_256,
 };
@@ -11,6 +13,7 @@ use std::arch::aarch64::*;
 
 /* ********** SIMD OPTIMIZED FUNCTIONS ********** */
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_ip_d4(
     distance_table: &mut [f32],
     query: &[f32],
@@ -59,6 +62,7 @@ pub unsafe fn compute_distance_table_ip_d4(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_ip_d8(
     distance_table: &mut [f32],
     query: &[f32],
@@ -126,6 +130,7 @@ pub unsafe fn compute_distance_table_ip_d8(
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f32; 8] {
     let mut distances = [0.0; 8];
 
@@ -172,6 +177,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     distances
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: usize) -> usize {
     let mut curr_idx = 0;
@@ -245,6 +251,7 @@ unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: 
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_avx2_d2(
     distance_table: &mut [f32],
     query: &[f32],
@@ -305,6 +312,7 @@ pub unsafe fn compute_distance_table_avx2_d2(
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_avx2_d4(
     distance_table: &mut [f32],
     query: &[f32],
@@ -387,6 +395,7 @@ pub unsafe fn compute_distance_table_avx2_d4(
 ///    - Uses scalar operations to compute the distance and update the minimum distance and index.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn find_nearest_centroid_avx2_d8(
     query_vec: &[f32],
     centroids: &[f32],
@@ -544,6 +553,7 @@ unsafe fn find_nearest_centroid_avx2_d8(
 ///      distances are computed individually using scalar operations.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d1(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -616,6 +626,7 @@ unsafe fn compute_distances_d1(
 ///    - Stores the total distances in `distances`.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d12(
     distances: &mut [f32],
     query_vec: &[f32],

@@ -1,6 +1,6 @@
 #![feature(iter_array_chunks)]
-#![feature(stdarch_x86_avx512)]
-#![feature(stdarch_x86_mm_shuffle)]
+#![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_avx512))]
+#![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_mm_shuffle))]
 #![feature(portable_simd)]
 #![feature(thread_id_value)]
 #![feature(array_chunks)]

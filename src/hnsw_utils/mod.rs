@@ -295,13 +295,19 @@ pub fn prefetch_read_T2<T>(data: &[T], offset: usize) {
     //#[cfg(all(feature = "prefetch", any(target_arch = "x86", target_arch = "x86_64")))]
     {
         #[cfg(target_arch = "x86")]
-        use std::arch::x86::{_mm_prefetch, _MM_HINT_T2};
+        {
+            use std::arch::x86::{_mm_prefetch, _MM_HINT_T2};
+            unsafe {
+                _mm_prefetch(_p, _MM_HINT_T2);
+            }
+        }
 
         #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T2};
-
-        unsafe {
-            _mm_prefetch(_p, _MM_HINT_T2);
+        {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T2};
+            unsafe {
+                _mm_prefetch(_p, _MM_HINT_T2);
+            }
         }
     }
 }

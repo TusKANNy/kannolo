@@ -2,6 +2,7 @@
 use std::arch::x86_64::*;
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __m256) {
     let r0 = _mm256_permute2f128_ps(i0, i1, 0b0010_0000);
     let r1 = _mm256_permute2f128_ps(i0, i1, 0b0011_0001);
@@ -34,6 +35,8 @@ pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __
 /// # Example
 ///
 /// ```
+///
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
 /// use crate::distances::simd::transpose::transpose_8x4;
 ///
@@ -50,6 +53,7 @@ pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [__m256; 4] {
     // let's say we have the following data stored in the registers:
     // i0:  00 01 02 03 10 11 12 13
@@ -127,6 +131,7 @@ pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [
 /// ```
 /// use crate::distances::simd::transpose::transpose_8x8;
 ///
+/// #[cfg(target_arch = "x86_64")]
 /// #[cfg(target_feature = "avx2")]
 /// {
 ///     use std::arch::x86_64::*;
@@ -147,6 +152,7 @@ pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x8(
     i0: __m256,
     i1: __m256,
@@ -258,6 +264,7 @@ mod tests {
     /// corresponding row in the expected result, indicating a failure in the
     /// transposition logic of the `transpose_8x4` function.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_transpose_8x4() {
         unsafe {
             let i0 = _mm256_set_ps(13.0, 12.0, 11.0, 10.0, 3.0, 2.0, 1.0, 0.0);
@@ -314,6 +321,7 @@ mod tests {
     /// corresponding row in the expected result, indicating a failure in the
     /// transposition logic of the `transpose_8x8` function.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_transpose_8x8() {
         unsafe {
             let i0 = _mm256_set_ps(7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0);

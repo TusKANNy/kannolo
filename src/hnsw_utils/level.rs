@@ -97,21 +97,17 @@ impl Level {
         for &original_id in processed_ids.iter() {
             let neighbors_id = hnsw_builder.get_neighbors_from_level(original_id, curr_level);
 
-            // Filter out `None` values, map original IDs to new IDs, and collect them.
-            let real_neighbors_curr_vec: Vec<usize> = neighbors_id
-                .iter()
-                .map(|mutex| mutex.lock().unwrap())
-                .filter_map(|neighbor| *neighbor)
-                .map(|id| original_to_new[id])
-                .collect();
-
-            let num_neighbors = real_neighbors_curr_vec.len();
-
-            neighbors.extend(real_neighbors_curr_vec);
+            // Filter out `None` values, map original IDs to new IDs, and append them to neighbors.
+            neighbors.extend(
+                neighbors_id
+                    .iter()
+                    .map(|mutex| mutex.lock().unwrap())
+                    .filter_map(|neighbor| *neighbor)
+                    .map(|id| original_to_new[id]),
+            );
 
             // Update the offsets to indicate where the neighbors for the next vector begin.
-            let last_pos_offset = offsets.last().unwrap();
-            offsets.push(last_pos_offset + num_neighbors);
+            offsets.push(neighbors.len());
         }
 
         Self {

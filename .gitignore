@@ -273,6 +273,9 @@ $RECYCLE.BIN/
 *.csv
 *.tsv
 
+# allow requirements.txt in scripts/
+!scripts/requirements.txt
+
 # serialized indexes
 /index_hnsw_serialized
 

@@ -17,7 +17,7 @@ struct Args {
     #[clap(short, long, value_parser)]
     index_file: String,
 
-    /// The query seismic file.
+    /// The query file.
     #[clap(short, long, value_parser)]
     query_file: String,
 

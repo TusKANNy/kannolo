@@ -15,7 +15,7 @@ use kannolo::{read_numpy_f32_flatten_2d, DenseDataset, Vector1D};
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    /// The path of the dataset seismic file. Only one between data_file and index_file must be provided.
+    /// The path of the dataset file. Only one between data_file and index_file must be provided.
     /// If both are provided, the index_file will be used.
     #[clap(short, long, value_parser)]
     data_file: String,

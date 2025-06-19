@@ -12,7 +12,7 @@ n-runs =        1       # Number of runs. PLEASE think carefully how increasing
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         true   # Need to build the index or the index is already built?
-metric =        ""
+metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
 data =          "~/knn_datasets/dense_datasets/sift1M" # data base path
@@ -31,7 +31,7 @@ index =         "ecir_2025_sift1m" # index file name
 [indexing_parameters]
 m =            16
 efc =          150
-metric =       "l2"
+metric =       "l2" # distance/similarity metric of the index, either "l2" or "ip"
 
 [query]
     [query.efs_10]

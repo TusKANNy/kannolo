@@ -320,7 +320,7 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
 
     gt_file = os.path.join(configs['folder']['data'], configs['filename']['groundtruth'])
     metric = configs['settings']['metric']
-    return query_time, compute_accuracy(output_file, gt_file), compute_metric(configs, output_file, gt_file, metric), memory_usage
+    return query_time, compute_accuracy(output_file, gt_file), compute_accuracy(output_file, gt_file), memory_usage
 
 
 def get_machine_info(configs, experiment_folder):

@@ -44,10 +44,6 @@ struct Args {
     #[clap(long, value_parser)]
     #[arg(default_value_t = 1)]
     n_run: usize,
-
-    #[clap(long, value_parser)]
-    #[arg(default_value_t = false)]
-    warmup: bool,
 }
 
 fn main() {
@@ -77,20 +73,6 @@ fn main() {
     config.set_ef_search(ef_search);
 
     println!("N queries {num_queries}");
-
-    if args.warmup {
-        // println!("Running warmup!!");
-
-        // let warmup_queries = SparseDataset::<SparsePlainQuantizer<f32>>::read_bin_file_f16(
-        //     "/data2/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data/queries.bin",
-        //     None,
-        // )
-        // .unwrap();
-        // for _ in 0..5 {
-        //     let useless_results = index.search(&warmup_queries, k, &config, num_threads_search);
-        //     println!("{:?}", useless_results[100]);
-        // }
-    }
 
     // Search
     let mut total_time_search = 0;

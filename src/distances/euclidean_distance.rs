@@ -1,12 +1,15 @@
 use crate::distances::dot_product_simd;
-#[cfg(target_arch = "x86_64")]
-use crate::simd_utils::horizontal_sum_256;
 
 use half::f16;
 use itertools::izip;
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+
 use std::iter::zip;
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::{vaddq_f32, vaddvq_f32, vdupq_n_f32, vld1q_f32, vmulq_f32, vsubq_f32};
+
+#[cfg(target_arch = "aarch64")]
+use crate::utils::conv_f16_to_f32;
 
 use crate::Float;
 
@@ -186,6 +189,7 @@ impl EuclideanDistance<f32> for f32 {
         // aarch64 NEON path
         #[cfg(target_arch = "aarch64")]
         {
+            #[target_feature(enable = "neon")]
             unsafe fn neon_inner(query: &[f32], values: &[f32]) -> f32 {
                 use core::arch::aarch64::*;
                 const N_LANES: usize = 4;
@@ -210,6 +214,10 @@ impl EuclideanDistance<f32> for f32 {
             return neon_inner(query, values);
         }
         // scalar fallback
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_euclidean_distance_unrolled(query, values)
     }
 
@@ -284,6 +292,7 @@ impl EuclideanDistance<f32> for f32 {
         // aarch64 NEON
         #[cfg(target_arch = "aarch64")]
         {
+            #[target_feature(enable = "neon")]
             unsafe fn neon_inner(query: &[f32], vectors: [&[f32]; 4]) -> [f32; 4] {
                 use core::arch::aarch64::*;
                 const N_LANES: usize = 4;
@@ -337,6 +346,10 @@ impl EuclideanDistance<f32> for f32 {
             return neon_inner(query, vectors);
         }
         // scalar fallback
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_euclidean_distance_batch_4_unrolled(query, vectors)
     }
 }
@@ -383,38 +396,51 @@ impl EuclideanDistance<f16> for f16 {
         #[cfg(target_arch = "aarch64")]
         {
             // via f32 NEON
-            #[target_feature(enable = "neon")]
-            unsafe fn euclidean_distance_neon(query: &[f16], values: &[f16]) -> f32 {
-                use core::arch::aarch64::*;
-                const CHUNK: usize = 4;
+            pub unsafe fn euclidean_distance_neon(query: &[f16], values: &[f16]) -> f32 {
+                assert_eq!(query.len(), values.len());
                 let len = query.len();
-                let chunks = len / CHUNK;
-                let mut sum_v = vdupq_n_f32(0.0);
-                let mut qf = [0f32; CHUNK];
-                let mut vf = [0f32; CHUNK];
-                for ci in 0..chunks {
-                    let base = ci * CHUNK;
-                    for j in 0..CHUNK {
-                        qf[j] = query[base + j].to_f32();
-                        vf[j] = values[base + j].to_f32();
-                    }
-                    let qv = vld1q_f32(qf.as_ptr());
-                    let vv = vld1q_f32(vf.as_ptr());
-                    let diff = vsubq_f32(qv, vv);
-                    sum_v = vaddq_f32(sum_v, vmulq_f32(diff, diff));
+                let chunks = len / 4;
+
+                // 1) Allocate f32 buffers
+                let mut qf: Vec<f32> = Vec::with_capacity(len);
+                let mut vf: Vec<f32> = Vec::with_capacity(len);
+
+                unsafe {
+                    qf.set_len(len);
+                    vf.set_len(len);
                 }
+
+                // 2) Convert inside the function
+                conv_f16_to_f32(query, &mut qf);
+                conv_f16_to_f32(values, &mut vf);
+
+                // 3) NEON‐accelerated distance on the converted data
+                let mut sum_v = vdupq_n_f32(0.0);
+                for ci in 0..chunks {
+                    let base = ci * 4;
+                    let qv = vld1q_f32(qf.as_ptr().add(base));
+                    let vv = vld1q_f32(vf.as_ptr().add(base));
+                    let d = vsubq_f32(qv, vv);
+                    sum_v = vaddq_f32(sum_v, vmulq_f32(d, d));
+                }
+                // horizontal sum of SIMD lanes
                 let mut acc = vaddvq_f32(sum_v);
-                for i in (chunks * CHUNK)..len {
-                    let qf = query[i].to_f32();
-                    let vf = values[i].to_f32();
-                    let d = qf - vf;
+
+                // tail loop
+                for i in (chunks * 4)..len {
+                    let d = qf[i] - vf[i];
                     acc += d * d;
                 }
+
                 acc
             }
             return euclidean_distance_neon(query, values);
         }
         // fallback scalar
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_euclidean_distance_unrolled(query, values)
     }
 
@@ -526,74 +552,73 @@ impl EuclideanDistance<f16> for f16 {
                 vectors: [&[f16]; 4],
             ) -> [f32; 4] {
                 use core::arch::aarch64::*;
-                const CHUNK: usize = 4;
+
                 let len = query.len();
+                // prepare full-length f32 buffers
+                let mut qf: Vec<f32> = Vec::with_capacity(len);
+                let mut v0f: Vec<f32> = Vec::with_capacity(len);
+                let mut v1f: Vec<f32> = Vec::with_capacity(len);
+                let mut v2f: Vec<f32> = Vec::with_capacity(len);
+                let mut v3f: Vec<f32> = Vec::with_capacity(len);
+                // safety: we set_len immediately after reserve
+                unsafe {
+                    qf.set_len(len);
+                    v0f.set_len(len);
+                    v1f.set_len(len);
+                    v2f.set_len(len);
+                    v3f.set_len(len);
+                }
+
+                // 1) do all the f16→f32 conversions up-front in big loops
+                conv_f16_to_f32(query, &mut qf);
+                conv_f16_to_f32(vectors[0], &mut v0f);
+                conv_f16_to_f32(vectors[1], &mut v1f);
+                conv_f16_to_f32(vectors[2], &mut v2f);
+                conv_f16_to_f32(vectors[3], &mut v3f);
+
+                // 2) now do your NEON-accelerated distance in 4×4 chunks
+                const CHUNK: usize = 4;
                 let chunks = len / CHUNK;
 
-                // NEON accumulators for each of the 4 distances
                 let mut sum0 = vdupq_n_f32(0.0);
-                let mut sum1 = vdupq_n_f32(0.0);
-                let mut sum2 = vdupq_n_f32(0.0);
-                let mut sum3 = vdupq_n_f32(0.0);
-
-                // Temporary buffers for conversion f16 -> f32
-                let mut qf = [0f32; CHUNK];
-                let mut v0f = [0f32; CHUNK];
-                let mut v1f = [0f32; CHUNK];
-                let mut v2f = [0f32; CHUNK];
-                let mut v3f = [0f32; CHUNK];
+                let mut sum1 = sum0;
+                let mut sum2 = sum0;
+                let mut sum3 = sum0;
 
                 for ci in 0..chunks {
                     let base = ci * CHUNK;
-                    // convert CHUNK half values to f32 for query and each vector
-                    for j in 0..CHUNK {
-                        qf[j] = query[base + j].to_f32();
-                        v0f[j] = vectors[0][base + j].to_f32();
-                        v1f[j] = vectors[1][base + j].to_f32();
-                        v2f[j] = vectors[2][base + j].to_f32();
-                        v3f[j] = vectors[3][base + j].to_f32();
-                    }
-                    // load into NEON registers
-                    let qv = vld1q_f32(qf.as_ptr());
-                    let v0v = vld1q_f32(v0f.as_ptr());
-                    let v1v = vld1q_f32(v1f.as_ptr());
-                    let v2v = vld1q_f32(v2f.as_ptr());
-                    let v3v = vld1q_f32(v3f.as_ptr());
+                    let qv = vld1q_f32(qf.as_ptr().add(base));
+                    let v0v = vld1q_f32(v0f.as_ptr().add(base));
+                    let v1v = vld1q_f32(v1f.as_ptr().add(base));
+                    let v2v = vld1q_f32(v2f.as_ptr().add(base));
+                    let v3v = vld1q_f32(v3f.as_ptr().add(base));
 
-                    // compute squared differences and accumulate
                     let d0 = vsubq_f32(qv, v0v);
-                    sum0 = vaddq_f32(sum0, vmulq_f32(d0, d0));
+                    sum0 = vmlaq_f32(sum0, d0, d0);
                     let d1 = vsubq_f32(qv, v1v);
-                    sum1 = vaddq_f32(sum1, vmulq_f32(d1, d1));
+                    sum1 = vmlaq_f32(sum1, d1, d1);
                     let d2 = vsubq_f32(qv, v2v);
-                    sum2 = vaddq_f32(sum2, vmulq_f32(d2, d2));
+                    sum2 = vmlaq_f32(sum2, d2, d2);
                     let d3 = vsubq_f32(qv, v3v);
-                    sum3 = vaddq_f32(sum3, vmulq_f32(d3, d3));
+                    sum3 = vmlaq_f32(sum3, d3, d3);
                 }
 
-                // horizontal sum of NEON accumulators
+                // horizontal sums
                 let mut out0 = vaddvq_f32(sum0);
                 let mut out1 = vaddvq_f32(sum1);
                 let mut out2 = vaddvq_f32(sum2);
                 let mut out3 = vaddvq_f32(sum3);
 
-                // remainder scalar loop
+                // tail
                 for i in (chunks * CHUNK)..len {
-                    let qfv = query[i].to_f32();
-                    let v0fv = vectors[0][i].to_f32();
-                    let d0 = qfv - v0fv;
+                    let qfv = qf[i];
+                    let d0 = qfv - v0f[i];
                     out0 += d0 * d0;
-
-                    let v1fv = vectors[1][i].to_f32();
-                    let d1 = qfv - v1fv;
+                    let d1 = qfv - v1f[i];
                     out1 += d1 * d1;
-
-                    let v2fv = vectors[2][i].to_f32();
-                    let d2 = qfv - v2fv;
+                    let d2 = qfv - v2f[i];
                     out2 += d2 * d2;
-
-                    let v3fv = vectors[3][i].to_f32();
-                    let d3 = qfv - v3fv;
+                    let d3 = qfv - v3f[i];
                     out3 += d3 * d3;
                 }
 
@@ -602,6 +627,10 @@ impl EuclideanDistance<f16> for f16 {
             return euclidean_distance_batch_4_neon(query, vectors);
         }
         // fallback scalar
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_euclidean_distance_batch_4_unrolled(query, vectors)
     }
 }

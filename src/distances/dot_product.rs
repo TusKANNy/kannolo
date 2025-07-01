@@ -10,9 +10,10 @@ use std::arch::x86_64::*;
 use crate::simd_utils::horizontal_sum_256;
 
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+use std::arch::aarch64::{vaddq_f32, vaddvq_f32, vdupq_n_f32, vld1q_f32, vmulq_f32};
+
 #[cfg(target_arch = "aarch64")]
-use std::arch::is_aarch64_feature_detected;
+use crate::utils::conv_f16_to_f32;
 
 /// Computes the dot product of two dense vectors, unrolling the loop for performance.
 ///
@@ -313,6 +314,7 @@ impl DotProduct<f32> for f32 {
         // aarch64 NEON path
         #[cfg(target_arch = "aarch64")]
         {
+            #[target_feature(enable = "neon")]
             unsafe fn dot_product_neon(query: &[f32], values: &[f32]) -> f32 {
                 const N_LANES: usize = 4;
                 let mut sum_v = vdupq_n_f32(0.0);
@@ -335,6 +337,10 @@ impl DotProduct<f32> for f32 {
             return dot_product_neon(query, values);
         }
         // Scalar fallback
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_dot_product_unrolled(query, values)
     }
 
@@ -383,6 +389,7 @@ impl DotProduct<f32> for f32 {
         }
         #[cfg(target_arch = "aarch64")]
         {
+            #[target_feature(enable = "neon")]
             unsafe fn dot_product_batch_4_neon(query: &[f32], vectors: [&[f32]; 4]) -> [f32; 4] {
                 const N_LANES: usize = 4;
                 let mut sum0 = vdupq_n_f32(0.0);
@@ -422,7 +429,11 @@ impl DotProduct<f32> for f32 {
             }
             return dot_product_batch_4_neon(query, vectors);
         }
-        // Sscalar fallback
+        // Scalar fallback
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }
@@ -479,42 +490,55 @@ impl DotProduct<f16> for f16 {
             }
         }
 
-        // aarch64 native FP16 NEON path
         #[cfg(target_arch = "aarch64")]
         {
-            // Else: no FP16 support; fall through to “convert-then-NEON-f32” or scalar
-            // Option A: convert small chunks to f32 and use NEON f32:
             #[target_feature(enable = "neon")]
             unsafe fn dot_product_neon_via_f32(query: &[f16], values: &[f16]) -> f32 {
-                use core::arch::aarch64::*;
-                const CHUNK: usize = 4;
                 let len = query.len();
-                let chunks = len / CHUNK;
+                let chunks = len / 4;
+
+                // 1) Allocate and initialize f32 buffers with explicit typing
+                let mut qf: Vec<f32> = Vec::with_capacity(len);
+                let mut vf: Vec<f32> = Vec::with_capacity(len);
+                // SAFETY: we're about to write to all slots
+                unsafe {
+                    qf.set_len(len);
+                    vf.set_len(len);
+                }
+
+                // 2) Convert half→single precision in big loops (auto‐vectorized)
+                for i in 0..len {
+                    qf[i] = query[i].to_f32();
+                    vf[i] = values[i].to_f32();
+                }
+
+                // 3) NEON dot‐product on the f32 data
                 let mut sum_v = vdupq_n_f32(0.0);
-                // temporary stack buffers
-                let mut qf = [0f32; CHUNK];
-                let mut vf = [0f32; CHUNK];
-                for i in 0..chunks {
-                    let base = i * CHUNK;
-                    for j in 0..CHUNK {
-                        qf[j] = query[base + j].to_f32();
-                        vf[j] = values[base + j].to_f32();
-                    }
-                    let qv = vld1q_f32(qf.as_ptr());
-                    let vv = vld1q_f32(vf.as_ptr());
+                for ci in 0..chunks {
+                    let base = ci * 4;
+                    let qv = vld1q_f32(qf.as_ptr().add(base));
+                    let vv = vld1q_f32(vf.as_ptr().add(base));
                     sum_v = vaddq_f32(sum_v, vmulq_f32(qv, vv));
                 }
+                // horizontal sum
                 let mut acc = vaddvq_f32(sum_v);
-                for i in (chunks * CHUNK)..len {
-                    acc += query[i].to_f32() * values[i].to_f32();
+
+                // 4) Handle any remainder scalarly
+                for i in (chunks * 4)..len {
+                    acc += qf[i] * vf[i];
                 }
+
                 acc
             }
-            // You may benchmark neon_via_f32 vs scalar to decide; here we choose neon_via_f32:
+
             return dot_product_neon_via_f32(query, values);
         }
 
         // Scalar fallback
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_dot_product_unrolled(query, values)
     }
 
@@ -578,75 +602,82 @@ impl DotProduct<f16> for f16 {
             }
         }
 
-        // aarch64 FP16 NEON or via-f32 or scalar
         #[cfg(target_arch = "aarch64")]
         {
-            // else via-f32 NEON:
             #[target_feature(enable = "neon")]
             unsafe fn dot_product_batch_4_neon_via_f32(
                 query: &[f16],
                 vectors: [&[f16]; 4],
             ) -> [f32; 4] {
-                use core::arch::aarch64::*;
-                const CHUNK: usize = 4;
                 let len = query.len();
-                let chunks = len / CHUNK;
-                // accumulators as NEON registers
-                let mut sum0 = vdupq_n_f32(0.0);
-                let mut sum1 = vdupq_n_f32(0.0);
-                let mut sum2 = vdupq_n_f32(0.0);
-                let mut sum3 = vdupq_n_f32(0.0);
+                let chunks = len / 4;
 
-                // temp buffers for conversion
-                let mut qf = [0f32; CHUNK];
-                let mut v0f = [0f32; CHUNK];
-                let mut v1f = [0f32; CHUNK];
-                let mut v2f = [0f32; CHUNK];
-                let mut v3f = [0f32; CHUNK];
-
-                for chunk_idx in 0..chunks {
-                    let base = chunk_idx * CHUNK;
-                    // convert f16 → f32 for query and each vector
-                    for j in 0..CHUNK {
-                        qf[j] = query[base + j].to_f32();
-                        v0f[j] = vectors[0][base + j].to_f32();
-                        v1f[j] = vectors[1][base + j].to_f32();
-                        v2f[j] = vectors[2][base + j].to_f32();
-                        v3f[j] = vectors[3][base + j].to_f32();
-                    }
-                    // load into NEON registers
-                    let qv = vld1q_f32(qf.as_ptr());
-                    let v0v = vld1q_f32(v0f.as_ptr());
-                    let v1v = vld1q_f32(v1f.as_ptr());
-                    let v2v = vld1q_f32(v2f.as_ptr());
-                    let v3v = vld1q_f32(v3f.as_ptr());
-                    // accumulate
-                    sum0 = vaddq_f32(sum0, vmulq_f32(qv, v0v));
-                    sum1 = vaddq_f32(sum1, vmulq_f32(qv, v1v));
-                    sum2 = vaddq_f32(sum2, vmulq_f32(qv, v2v));
-                    sum3 = vaddq_f32(sum3, vmulq_f32(qv, v3v));
+                // 1) Allocate f32 buffers with explicit typing
+                let mut qf: Vec<f32> = Vec::with_capacity(len);
+                let mut v0f: Vec<f32> = Vec::with_capacity(len);
+                let mut v1f: Vec<f32> = Vec::with_capacity(len);
+                let mut v2f: Vec<f32> = Vec::with_capacity(len);
+                let mut v3f: Vec<f32> = Vec::with_capacity(len);
+                unsafe {
+                    qf.set_len(len);
+                    v0f.set_len(len);
+                    v1f.set_len(len);
+                    v2f.set_len(len);
+                    v3f.set_len(len);
                 }
 
-                // horizontal sums of vector accumulators
+                // 2) Convert all half-precision data to single-precision
+                conv_f16_to_f32(query, &mut qf);
+                conv_f16_to_f32(vectors[0], &mut v0f);
+                conv_f16_to_f32(vectors[1], &mut v1f);
+                conv_f16_to_f32(vectors[2], &mut v2f);
+                conv_f16_to_f32(vectors[3], &mut v3f);
+
+                // 3) NEON‐accelerated dot‐product on the f32 data
+                let mut sum0 = vdupq_n_f32(0.0);
+                let mut sum1 = sum0;
+                let mut sum2 = sum0;
+                let mut sum3 = sum0;
+
+                for ci in 0..chunks {
+                    let base = ci * 4;
+                    let qv = vld1q_f32(qf.as_ptr().add(base));
+                    let a0 = vld1q_f32(v0f.as_ptr().add(base));
+                    let a1 = vld1q_f32(v1f.as_ptr().add(base));
+                    let a2 = vld1q_f32(v2f.as_ptr().add(base));
+                    let a3 = vld1q_f32(v3f.as_ptr().add(base));
+
+                    sum0 = vaddq_f32(sum0, vmulq_f32(qv, a0));
+                    sum1 = vaddq_f32(sum1, vmulq_f32(qv, a1));
+                    sum2 = vaddq_f32(sum2, vmulq_f32(qv, a2));
+                    sum3 = vaddq_f32(sum3, vmulq_f32(qv, a3));
+                }
+
+                // horizontal sum of each accumulator
                 let mut out0 = vaddvq_f32(sum0);
                 let mut out1 = vaddvq_f32(sum1);
                 let mut out2 = vaddvq_f32(sum2);
                 let mut out3 = vaddvq_f32(sum3);
 
-                // remainder elements
-                for i in (chunks * CHUNK)..len {
-                    let qfv = query[i].to_f32();
-                    out0 += qfv * vectors[0][i].to_f32();
-                    out1 += qfv * vectors[1][i].to_f32();
-                    out2 += qfv * vectors[2][i].to_f32();
-                    out3 += qfv * vectors[3][i].to_f32();
+                // 4) Handle any remaining elements scalar
+                for i in (chunks * 4)..len {
+                    let qfv = qf[i];
+                    out0 += qfv * v0f[i];
+                    out1 += qfv * v1f[i];
+                    out2 += qfv * v2f[i];
+                    out3 += qfv * v3f[i];
                 }
+
                 [out0, out1, out2, out3]
             }
             return dot_product_batch_4_neon_via_f32(query, vectors);
         }
 
         // fallback scalar
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "avx2"),
+            target_arch = "aarch64"
+        )))]
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }

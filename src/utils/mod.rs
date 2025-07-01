@@ -2,6 +2,7 @@ use crate::plain_quantizer::PlainQuantizer;
 use crate::{dot_product_simd, read_fvecs_file, DenseDataset, DistanceType};
 use core::hash::Hash;
 use csv::WriterBuilder;
+use half::f16;
 use rand::thread_rng;
 use rand::Rng;
 use std::collections::HashSet;
@@ -242,6 +243,29 @@ pub fn compute_squared_l2_distance(query_vec: &[f32], centroids: &[f32], length:
             diff * diff // Squared difference
         })
         .sum() // Sum of all squared differences
+}
+
+pub fn conv_f16_to_f32(src: &[f16], dst: &mut [f32]) {
+    let len = src.len();
+    let chunks = len / 8;
+
+    // process 8 at a time
+    for i in 0..chunks {
+        let base = i * 8;
+        dst[base + 0] = src[base + 0].to_f32();
+        dst[base + 1] = src[base + 1].to_f32();
+        dst[base + 2] = src[base + 2].to_f32();
+        dst[base + 3] = src[base + 3].to_f32();
+        dst[base + 4] = src[base + 4].to_f32();
+        dst[base + 5] = src[base + 5].to_f32();
+        dst[base + 6] = src[base + 6].to_f32();
+        dst[base + 7] = src[base + 7].to_f32();
+    }
+
+    // tail
+    for i in (chunks * 8)..len {
+        dst[i] = src[i].to_f32();
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

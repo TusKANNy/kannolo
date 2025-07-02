@@ -185,6 +185,8 @@ impl EuclideanDistance<f32> for f32 {
                 }
                 return avx2_inner(query, values);
             }
+            // Fallback to scalar if AVX2 is not available
+            return dense_euclidean_distance_unrolled(query, values);
         }
         // aarch64 NEON path
         #[cfg(target_arch = "aarch64")]
@@ -288,6 +290,8 @@ impl EuclideanDistance<f32> for f32 {
                 }
                 return avx2_inner(query, vectors);
             }
+            // Fallback to scalar if AVX2 is not available
+            return dense_euclidean_distance_batch_4_unrolled(query, vectors);
         }
         // aarch64 NEON
         #[cfg(target_arch = "aarch64")]
@@ -391,6 +395,8 @@ impl EuclideanDistance<f16> for f16 {
                 }
                 return euclidean_distance_avx2(query, values);
             }
+            // Fallback to scalar if AVX2+F16C is not available
+            return dense_euclidean_distance_unrolled(query, values);
         }
         // aarch64 NEON: use convert+f32 NEON
         #[cfg(target_arch = "aarch64")]
@@ -542,6 +548,8 @@ impl EuclideanDistance<f16> for f16 {
                 }
                 return euclidean_distance_batch_4_avx2(query, vectors);
             }
+            // Fallback to scalar if AVX2+F16C is not available
+            return dense_euclidean_distance_batch_4_unrolled(query, vectors);
         }
         // aarch64 via f32 NEON
         #[cfg(target_arch = "aarch64")]

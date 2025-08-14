@@ -60,14 +60,85 @@ Please install the required Python's libraries with the following command:
 pip install -r scripts/requirements.txt
 ```
 
-The script will build an index using the parameters in the `[indexing_parameters]` section of the TOML file.  
+The script will build an index using the unified binary parameters specified at the top level of the TOML file (`build-command`, `vector-type`, `precision`, `quantizer`, `graph-type`) and the traditional indexing parameters in the `[indexing_parameters]` section (`m`, `efc`, `metric`).  
 The index is saved in the directory `~/knn_indexes/dense_datasets/sift1M`.  
-You can change directory names by modifying the `[folders]` section in the TOML file.
+You can change directory names by modifying the `[folder]` section in the TOML file.
 
 Next, the script will query the same index with different parameters, as specified in the `[query]` section.  
 These parameters provide different trade-offs between query time and accuracy.
 
 **Important**: if your machine is NUMA, the NUMA setting in the TOML file should be UNcommented and should be configured according to your hardware for better performance. 
+
+## TOML Configuration Structure
+
+The TOML configuration files have been updated to work with the unified binaries. Here's the structure:
+
+### Top-level Parameters
+- `build-command`: Path to the unified build binary (e.g., `"./target/release/hnsw_build"`)
+- `query-command`: Path to the unified search binary (e.g., `"./target/release/hnsw_search"`)
+- `vector-type`: Type of vectors - `"dense"` or `"sparse"`
+- `precision`: Precision - `"f32"` or `"f16"` (Note: PQ always uses f32)
+- `quantizer`: Quantizer type - `"plain"` or `"pq"`
+- `graph-type`: Graph type - `"standard"` or `"fixed-degree"`
+
+### Sections
+- `[indexing_parameters]`: Traditional HNSW parameters (`m`, `efc`, `metric`)
+- `[pq_parameters]`: PQ-specific parameters (`m-pq`, `nbits`, `sample-size`) when using PQ quantizer
+- `[folder]`: Directory paths for data, indexes, and experiments
+- `[filename]`: Filenames for dataset, queries, groundtruth, etc.
+- `[settings]`: Runtime settings (k, NUMA, build flag, evaluation metric)
+- `[query]`: Different ef-search values for query experiments
+
+### Example TOML Structure
+
+Here's an example of the complete TOML structure for a dense PQ experiment:
+
+```toml
+name = "example_hnsw_pq"
+title = "Example HNSW PQ Experiment"
+description = "Example experiment with Product Quantization"
+dataset = "Example Dataset"
+build-command = "./target/release/hnsw_build"
+query-command = "./target/release/hnsw_search"
+vector-type = "dense"
+precision = "f32"
+quantizer = "pq"
+graph-type = "standard"
+
+[settings]
+k = 10
+n-runs = 1
+NUMA = "numactl --physcpubind='0-15' --localalloc"
+build = true
+metric = ""
+
+[folder]
+data = "~/knn_datasets/dense_datasets/example"
+index = "~/knn_indexes/dense_datasets/example"
+experiment = "."
+
+[filename]
+dataset = "dataset.npy"
+queries = "queries.npy"
+groundtruth = "groundtruth.npy"
+index = "example_index"
+
+[indexing_parameters]
+m = 16
+efc = 150
+metric = "ip"
+
+[pq_parameters]  # Only needed when quantizer = "pq"
+m-pq = 64
+nbits = 8
+sample-size = 100000
+
+[query]
+    [query.efs_40]
+    ef-search = 40
+    [query.efs_80]
+    ef-search = 80
+``` 
 
 ### Getting the Results
 The script creates a folder named `sift_hnsw_XXX`, where `XXX` encodes the datetime at which the script was executed. This ensures that each run creates a unique directory.

@@ -114,11 +114,7 @@ where
 
     #[inline]
     fn data<'a>(&'a self) -> Self::DataType<'a> {
-        SparseVector1D::new(
-            self.components.as_ref(),
-            self.values.as_ref(),
-            self.d,
-        )
+        SparseVector1D::new(self.components.as_ref(), self.values.as_ref(), self.d)
     }
 
     #[inline]

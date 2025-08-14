@@ -269,7 +269,6 @@ $RECYCLE.BIN/
 *.sh
 
 # benchmark files
-*.txt
 *.csv
 *.tsv
 

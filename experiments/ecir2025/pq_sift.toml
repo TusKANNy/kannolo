@@ -3,8 +3,12 @@ title =         "Search dense HNSWM on MSMARCO (Dragon)"
 description =   "Search dense HNSWM on MSMARCO (Dragon)"
 dataset =       "Dragon on MS-MARCO"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
-build-command = "./target/release/hnsw_pq_build"
-query-command = "./target/release/hnsw_pq_run"
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+vector-type = "dense"    # Vector type: "dense" or "sparse"
+precision = "f32"        # Precision: "f32" for full-precision, "f16" for half-precision (Note: PQ always uses f32)
+quantizer = "pq"         # Quantizer: "plain" for no compression, "pq" for Product Quantization (dense only)
+graph-type = "standard"  # Graph type: "standard" or "fixed-degree"
 
 [settings]
 k =             10
@@ -12,7 +16,7 @@ n-runs =        1       # Number of runs. PLEASE think carefully how increasing
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         false   # Need to build the index or the index is already built?
-metric =        ""
+metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
 data =          "~/knn_datasets/dense_datasets/sift1M" # data base path
@@ -31,12 +35,12 @@ index =         "ecir_2025_pq_sift1m" # index file name
 [indexing_parameters]
 m =            16
 efc =          150
-metric =       "ip"
+metric =       "ip" # distance/similarity metric of the index, either "l2" or "ip"
 
 [pq_parameters]
-m-pq =         32
-nbits =       8
-sample-size =  200000
+m-pq =         32      # Number of PQ subspaces. Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
+nbits =       8        # Number of bits per subspace (determines 2^nbits centroids per subspace)
+sample-size =  200000  # Size of dataset sample used for PQ training
 
 [query]
     [query.efs_10]

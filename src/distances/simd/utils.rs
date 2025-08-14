@@ -1,3 +1,4 @@
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 /// Computes the squared L2 distance (element-wise) between two 128-bit SIMD vectors.
@@ -22,20 +23,22 @@ use std::arch::x86_64::*;
 ///
 /// # Example
 ///
-/// ```
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
-/// use core::simd::utils::squared_l2_dist_128;
+/// use kannolo::simd_utils::squared_l2_dist_128;
 ///
+/// #[cfg(target_arch = "x86_64")]
 /// unsafe {
 ///     let v1 = _mm_set_ps(1.0, 2.0, 3.0, 4.0);
 ///     let v2 = _mm_set_ps(4.0, 3.0, 2.0, 1.0);
 ///     let result = squared_l2_dist_128(v1, v2);
-///     let expected = [9.0, 1.0, 1.0, 9.0];
 ///     let result_array: [f32; 4] = std::mem::transmute(result);
-///     assert_eq!(result_array, expected);
+///     assert_eq!(result_array, [9.0, 1.0, 1.0, 9.0]);
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn squared_l2_dist_128(x: __m128, y: __m128) -> __m128 {
     let diff = _mm_sub_ps(x, y);
     _mm_mul_ps(diff, diff)
@@ -61,20 +64,22 @@ pub unsafe fn squared_l2_dist_128(x: __m128, y: __m128) -> __m128 {
 ///
 /// # Example
 ///
-/// ```
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
-/// use crate::simd::utils::squared_l2_dist_256;
+/// use kannolo::simd_utils::squared_l2_dist_256;
 ///
+/// #[cfg(target_arch = "x86_64")]
 /// unsafe {
 ///     let v1 = _mm256_set_ps(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);
 ///     let v2 = _mm256_set_ps(8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0);
 ///     let result = squared_l2_dist_256(v1, v2);
-///     let expected = [49.0, 25.0, 9.0, 1.0, 1.0, 9.0, 25.0, 49.0];
 ///     let result_array: [f32; 8] = std::mem::transmute(result);
-///     assert_eq!(result_array, expected);
+///     assert_eq!(result_array, [49.0, 25.0, 9.0, 1.0, 1.0, 9.0, 25.0, 49.0]);
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn squared_l2_dist_256(x: __m256, y: __m256) -> __m256 {
     let diff = _mm256_sub_ps(x, y);
     _mm256_mul_ps(diff, diff)
@@ -96,29 +101,14 @@ pub unsafe fn squared_l2_dist_256(x: __m256, y: __m256) -> __m256 {
 ///
 /// The sum of all elements in the `__m128` SIMD vector.
 ///
-/// # Detailed Workflow
-///
-/// The function performs the following steps to compute the horizontal sum:
-///
-/// 1. **Shuffling and Adding**:
-///    - The `shuffled` variable is created by shuffling `v` to swap its high and low parts and
-///      then adding it to `v`. This operation partially sums adjacent elements.
-///
-/// 2. **Final Accumulation**:
-///    - A second shuffle and add operation is performed to accumulate the
-///      partial sums into a single sum.
-///    - `shuffled2` is created by shuffling `sum1` to bring the last element to the front.
-///    - `sum2` is the final addition that sums up all elements.
-///
-/// 3. **Result Extraction**:
-///    - The sum is extracted from the lowest element of `sum2` using `_mm_cvtss_f32`.
-///
 /// # Example
 ///
-/// ```
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
-/// use crate::simd::utils::horizontal_sum_128;
+/// use kannolo::simd_utils::horizontal_sum_128;
 ///
+/// #[cfg(target_arch = "x86_64")]
 /// unsafe {
 ///     let v = _mm_set_ps(4.0, 3.0, 2.0, 1.0);
 ///     let sum = horizontal_sum_128(v);
@@ -126,6 +116,7 @@ pub unsafe fn squared_l2_dist_256(x: __m256, y: __m256) -> __m256 {
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn horizontal_sum_128(v: __m128) -> f32 {
     let shuffled = _mm_shuffle_ps(v, v, 0b00_00_11_10);
     let sum1 = _mm_add_ps(v, shuffled);
@@ -151,24 +142,14 @@ pub unsafe fn horizontal_sum_128(v: __m128) -> f32 {
 ///
 /// The sum of all elements in the `__m256` SIMD vector.
 ///
-/// # Detailed Workflow
-///
-/// The function performs the following steps to compute the horizontal sum:
-///
-/// 1. **Split and Add**:
-///    - The 256-bit vector is split into two 128-bit halves.
-///    - These halves are added together to form a single 128-bit vector (`v0`).
-///
-/// 2. **Utilize `horizontal_sum_128`**:
-///    - The function then calls `horizontal_sum_128` on `v0` to compute the
-///      sum of its elements.
-///
 /// # Example
 ///
-/// ```
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
-/// use crate::simd::utils::horizontal_sum_256;
+/// use kannolo::simd_utils::horizontal_sum_256;
 ///
+/// #[cfg(target_arch = "x86_64")]
 /// unsafe {
 ///     let v = _mm256_set_ps(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);
 ///     let sum = horizontal_sum_256(v);
@@ -176,6 +157,7 @@ pub unsafe fn horizontal_sum_128(v: __m128) -> f32 {
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn horizontal_sum_256(v: __m256) -> f32 {
     let low_high_sum = _mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
     horizontal_sum_128(low_high_sum)
@@ -184,7 +166,8 @@ pub unsafe fn horizontal_sum_256(v: __m256) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
 
     /// Tests the `squared_l2_dist_128` function for computing squared L2 distance between 128-bit SIMD vectors.
     ///
@@ -196,6 +179,7 @@ mod tests {
     /// Expected behavior:
     /// - The result should match the manually calculated squared differences of each element.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_squared_l2_dist_128() {
         unsafe {
             let v1 = _mm_set_ps(1.0, 2.0, 3.0, 4.0);
@@ -217,6 +201,7 @@ mod tests {
     /// Expected behavior:
     /// - The result should match the manually calculated squared differences of each element.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_squared_l2_dist_256() {
         unsafe {
             let v1 = _mm256_set_ps(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);
@@ -238,6 +223,7 @@ mod tests {
     /// Expected behavior:
     /// - The computed sum should match the sum of the elements in the input vector.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_horizontal_sum_128() {
         unsafe {
             let v = _mm_set_ps(4.0, 3.0, 2.0, 1.0);
@@ -256,6 +242,7 @@ mod tests {
     /// Expected behavior:
     /// - The computed sum should match the sum of the elements in the input vector.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_horizontal_sum_256() {
         unsafe {
             let v = _mm256_set_ps(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);

@@ -30,7 +30,7 @@ impl TopkHeap {
     ///
     /// Demonstrating `add` through `push`:
     /// ```
-    /// use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     ///
     /// let mut heap = TopkHeap::new(3);
     /// heap.push(2.0);  // This calls `add` internally as the heap is not yet full
@@ -73,7 +73,7 @@ impl TopkHeap {
     ///
     /// # Examples
     /// ```
-    /// use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     ///
     /// let mut heap = TopkHeap::new(3);
     /// heap.push(2.0);
@@ -144,7 +144,7 @@ impl OnlineTopKSelector for TopkHeap {
     /// - `k` (`usize`): The number of top distances to keep track of.
     /// # Examples
     /// ```
-    /// use struttura_kANNolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     ///
     /// let mut heap = TopkHeap::new(2);
     ///
@@ -152,7 +152,7 @@ impl OnlineTopKSelector for TopkHeap {
     /// heap.push(1.0);
     /// heap.push(2.0);
     ///
-    /// let top_k = heap.topk();
+    /// let _top_k = heap.topk();
     /// ```
     #[inline]
     fn new(k: usize) -> Self {
@@ -185,7 +185,7 @@ impl OnlineTopKSelector for TopkHeap {
     ///
     /// # Examples
     /// ```
-    /// use struttura_kANNolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     ///
     /// let mut heap = TopkHeap::new(3);
     /// heap.push(2.0);
@@ -238,7 +238,7 @@ impl OnlineTopKSelector for TopkHeap {
     ///
     /// # Examples
     /// ```
-    /// use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     ///
     /// let mut heap = TopkHeap::new(3);
     /// heap.extend(&[0.0, 1.0, 2.0]);
@@ -292,7 +292,7 @@ impl OnlineTopKSelector for TopkHeap {
     ///
     /// # Examples
     /// ```
-    /// use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
+    /// use kannolo::topk_selectors::{OnlineTopKSelector, TopkHeap};
     /// use itertools::Itertools;
     ///
     /// let mut heap = TopkHeap::new(3);

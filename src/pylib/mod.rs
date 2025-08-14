@@ -1,8 +1,9 @@
 use std::f32;
 
 use crate::datasets::{dense_dataset::DenseDataset, sparse_dataset::SparseDataset};
-use crate::hnsw::graph_index::GraphIndex;
-use crate::hnsw_utils::config_hnsw::ConfigHnsw;
+use crate::graph::Graph;
+use crate::graph_index::GraphIndex;
+use crate::hnsw::{HNSWBuildParams, HNSWSearchParams, HNSW};
 use crate::index_serializer::IndexSerializer;
 use crate::plain_quantizer::PlainQuantizer;
 use crate::pq::ProductQuantizer;
@@ -16,7 +17,7 @@ use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 /// A Python-exposed dense index built with a plain quantizer (no quantization).
 #[pyclass]
 pub struct DensePlainHNSW {
-    index: GraphIndex<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
+    index: HNSW<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>, Graph>,
 }
 
 #[pymethods]
@@ -54,13 +55,10 @@ impl DensePlainHNSW {
         let dataset: DenseDataset<PlainQuantizer<f32>> =
             DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -101,13 +99,10 @@ impl DensePlainHNSW {
         // Build the dense dataset.
         let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -125,7 +120,7 @@ impl DensePlainHNSW {
     #[staticmethod]
     pub fn load(path: &str) -> PyResult<Self> {
         let index = IndexSerializer::load_index::<
-            GraphIndex<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>>,
+            HNSW<DenseDataset<PlainQuantizer<f32>>, PlainQuantizer<f32>, Graph>,
         >(path);
         Ok(DensePlainHNSW { index })
     }
@@ -152,8 +147,7 @@ impl DensePlainHNSW {
         let _dim = query_slice.len();
 
         // Set up the HNSW search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Wrap the query slice in a DenseVector1D.
         let query_darray = DenseVector1D::new(query_slice);
@@ -189,7 +183,7 @@ impl DensePlainHNSW {
     /// The method returns a tuple of two 1D NumPy arrays of shape (n_queries * k):
     /// (ids, distances). In Python you can do:
     ///
-    ///     ids, distances = index.search(queries, k, ef_search)
+    /// ids, distances = index.search(queries, k, ef_search)
     ///
     /// Here, `ids` is an array of doc IDs (as int64) and `distances` is an array of scores (as float32).
     pub fn search_batch(
@@ -202,8 +196,7 @@ impl DensePlainHNSW {
         let num_queries = queries_slice.len() / dim;
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Pre-allocate vectors to store the results.
         // Each query returns k results; total elements = num_queries * k.
@@ -239,7 +232,7 @@ impl DensePlainHNSW {
 /// A Python-exposed dense index built with a plain quantizer (no quantization).
 #[pyclass]
 pub struct DensePlainHNSWf16 {
-    index: GraphIndex<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
+    index: HNSW<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>, Graph>,
 }
 
 #[pymethods]
@@ -278,13 +271,10 @@ impl DensePlainHNSWf16 {
         // Build the dense dataset.
         let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -330,13 +320,10 @@ impl DensePlainHNSWf16 {
         // Build the dense dataset.
         let dataset = DenseDataset::from_vec(data_vec, dim, quantizer.clone());
 
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -354,7 +341,7 @@ impl DensePlainHNSWf16 {
     #[staticmethod]
     pub fn load(path: &str) -> PyResult<Self> {
         let index = IndexSerializer::load_index::<
-            GraphIndex<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>>,
+            HNSW<DenseDataset<PlainQuantizer<f16>>, PlainQuantizer<f16>, Graph>,
         >(path);
         Ok(DensePlainHNSWf16 { index })
     }
@@ -381,8 +368,7 @@ impl DensePlainHNSWf16 {
         let _dim = query_slice.len();
 
         // Set up the HNSW search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Convert the f32 query to f16.
         let query_slice: Vec<f16> = query_slice.iter().map(|&v| f16::from_f32(v)).collect();
@@ -420,7 +406,7 @@ impl DensePlainHNSWf16 {
     /// The method returns a tuple of two 1D NumPy arrays of shape (n_queries * k):
     /// (ids, distances). In Python you can do:
     ///
-    ///     ids, distances = index.search(queries, k, ef_search)
+    /// ids, distances = index.search(queries, k, ef_search)
     ///
     /// Here, `ids` is an array of doc IDs (as int64) and `distances` is an array of scores (as float32).
     pub fn search_batch(
@@ -433,8 +419,7 @@ impl DensePlainHNSWf16 {
         let num_queries = queries_slice.len() / dim;
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Pre-allocate vectors to store the results.
         // Each query returns k results; total elements = num_queries * k.
@@ -474,7 +459,7 @@ impl DensePlainHNSWf16 {
 #[pyclass]
 pub struct SparsePlainHNSW {
     // The index type specialized for sparse datasets with SparsePlainQuantizer.
-    index: GraphIndex<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
+    index: HNSW<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>, Graph>,
 }
 
 #[pymethods]
@@ -520,13 +505,10 @@ impl SparsePlainHNSW {
         let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -592,13 +574,10 @@ impl SparsePlainHNSW {
         let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -614,7 +593,7 @@ impl SparsePlainHNSW {
     #[staticmethod]
     pub fn load(path: &str) -> PyResult<Self> {
         let index = IndexSerializer::load_index::<
-            GraphIndex<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>>,
+            HNSW<SparseDataset<SparsePlainQuantizer<f32>>, SparsePlainQuantizer<f32>, Graph>,
         >(path);
         Ok(SparsePlainHNSW { index })
     }
@@ -673,8 +652,7 @@ impl SparsePlainHNSW {
         }
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Retrieve the single query from the dataset.
         let query = query_dataset.iter().next().unwrap();
@@ -730,8 +708,7 @@ impl SparsePlainHNSW {
         let num_queries = queries.len();
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Pre-allocate vectors to store the results.
         let mut ids_vec: Vec<i64> = Vec::with_capacity(num_queries * k);
@@ -765,7 +742,7 @@ impl SparsePlainHNSW {
 #[pyclass]
 pub struct SparsePlainHNSWf16 {
     // The index type specialized for sparse datasets with SparsePlainQuantizer and f16 values.
-    index: GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>,
+    index: HNSW<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>, Graph>,
 }
 
 #[pymethods]
@@ -811,13 +788,10 @@ impl SparsePlainHNSWf16 {
         let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -888,13 +862,10 @@ impl SparsePlainHNSWf16 {
         let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
 
         // Create HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -910,7 +881,7 @@ impl SparsePlainHNSWf16 {
     #[staticmethod]
     pub fn load(path: &str) -> PyResult<Self> {
         let index = IndexSerializer::load_index::<
-            GraphIndex<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>,
+            HNSW<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>, Graph>,
         >(path);
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -975,8 +946,7 @@ impl SparsePlainHNSWf16 {
         }
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Retrieve the single query from the dataset.
         let query = query_dataset.iter().next().unwrap();
@@ -1027,8 +997,7 @@ impl SparsePlainHNSWf16 {
         let num_queries = queries.len();
 
         // Set up the search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Pre-allocate vectors to store the results.
         let mut ids_vec: Vec<i64> = Vec::with_capacity(num_queries * k);
@@ -1060,16 +1029,16 @@ impl SparsePlainHNSWf16 {
 
 // PQ
 enum DensePQHNSWEnum {
-    PQ8(GraphIndex<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>>),
-    PQ16(GraphIndex<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>>),
-    PQ32(GraphIndex<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>>),
-    PQ48(GraphIndex<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>>),
-    PQ64(GraphIndex<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>>),
-    PQ96(GraphIndex<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>>),
-    PQ128(GraphIndex<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>>),
-    PQ192(GraphIndex<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>>),
-    PQ256(GraphIndex<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>>),
-    PQ384(GraphIndex<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>>),
+    PQ8(HNSW<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>, Graph>),
+    PQ16(HNSW<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>, Graph>),
+    PQ32(HNSW<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>, Graph>),
+    PQ48(HNSW<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>, Graph>),
+    PQ64(HNSW<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>, Graph>),
+    PQ96(HNSW<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>, Graph>),
+    PQ128(HNSW<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>, Graph>),
+    PQ192(HNSW<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>, Graph>),
+    PQ256(HNSW<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>, Graph>),
+    PQ384(HNSW<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>, Graph>),
 }
 
 /// The Python-exposed PQ index.
@@ -1116,10 +1085,7 @@ impl DensePQHNSW {
         };
 
         // Build the HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Create a base dataset (using a plain quantizer as a placeholder).
         let dataset =
@@ -1138,52 +1104,52 @@ impl DensePQHNSW {
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1233,10 +1199,7 @@ impl DensePQHNSW {
         };
 
         // Build the HNSW configuration.
-        let config = ConfigHnsw::new()
-            .num_neighbors(m)
-            .ef_construction(ef_construction)
-            .build();
+        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Create a base dataset (using a plain quantizer as a placeholder).
         let dataset =
@@ -1255,52 +1218,52 @@ impl DensePQHNSW {
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = GraphIndex::from_dataset(&dataset, &config, quantizer);
+                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1320,52 +1283,52 @@ impl DensePQHNSW {
     pub fn load(path: &str, m_pq: usize) -> PyResult<Self> {
         let inner = match m_pq {
             8 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
-                let index: GraphIndex<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>> =
+                let index: HNSW<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>, Graph> =
                     IndexSerializer::load_index(path);
                 DensePQHNSWEnum::PQ384(index)
             }
@@ -1399,8 +1362,7 @@ impl DensePQHNSW {
         // (Optionally, you can check that the length matches the expected dimensionality.)
 
         // Build the HNSW search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Wrap the query slice in a DenseVector1D for search.
         let query_darray = DenseVector1D::new(query_slice);
@@ -1494,7 +1456,7 @@ impl DensePQHNSW {
     ///
     /// In Python you can do:
     ///
-    ///     distances, ids = pq_index.search(queries, k, ef_search)
+    /// distances, ids = pq_index.search(queries, k, ef_search)
     pub fn search_batch(
         &self,
         queries_path: &str,
@@ -1505,8 +1467,7 @@ impl DensePQHNSW {
         let num_queries = queries_slice.len() / dim;
 
         // Build the HNSW search configuration.
-        let mut search_config = ConfigHnsw::new().build();
-        search_config.set_ef_search(ef_search);
+        let search_config = HNSWSearchParams::new(ef_search);
 
         // Pre-allocate vectors for results.
         let mut ids_vec: Vec<i64> = Vec::with_capacity(num_queries * k);

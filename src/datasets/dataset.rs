@@ -72,5 +72,6 @@ where
     type InputDataType<'a>: Vector1D<ValuesType = Q::InputItem>
     where
         Q::InputItem: 'a;
+
     fn push<'a>(&mut self, vec: &Self::InputDataType<'a>);
 }

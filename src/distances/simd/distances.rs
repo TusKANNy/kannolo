@@ -1,12 +1,16 @@
+#[cfg(target_arch = "x86_64")]
 use super::transpose::{transpose_8x2, transpose_8x4, transpose_8x8};
+#[cfg(target_arch = "x86_64")]
 use super::utils::{
     horizontal_sum_128, horizontal_sum_256, squared_l2_dist_128, squared_l2_dist_256,
 };
 use crate::utils::compute_squared_l2_distance;
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 /* ********** SIMD OPTIMIZED FUNCTIONS ********** */
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_ip_d4(
     distance_table: &mut [f32],
     query: &[f32],
@@ -26,7 +30,7 @@ pub unsafe fn compute_distance_table_ip_d4(
         for j in (0..centroid_groups * 8).step_by(8) {
             let [v0, v1, v2, v3] = transpose_8x4(
                 _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-                _mm256_loadu_ps(centroids_ptr.add(8)),
+                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
             );
@@ -55,6 +59,7 @@ pub unsafe fn compute_distance_table_ip_d4(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_ip_d8(
     distance_table: &mut [f32],
     query: &[f32],
@@ -81,7 +86,7 @@ pub unsafe fn compute_distance_table_ip_d8(
             // Each centroid consists of 8 contiguous floats.
             let [v0, v1, v2, v3, v4, v5, v6, v7] = transpose_8x8(
                 _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-                _mm256_loadu_ps(centroids_ptr.add(8)),
+                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
                 _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
@@ -122,6 +127,7 @@ pub unsafe fn compute_distance_table_ip_d8(
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f32; 8] {
     let mut distances = [0.0; 8];
 
@@ -136,7 +142,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     // Load centroids data into AVX2 registers
     let centroids_avx = [
         _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
-        _mm256_loadu_ps(centroids_ptr.add(8)),
+        _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
         _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
         _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
     ];
@@ -168,6 +174,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     distances
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: usize) -> usize {
     let mut curr_idx = 0;
@@ -241,6 +248,7 @@ unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: 
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_avx2_d2(
     distance_table: &mut [f32],
     query: &[f32],
@@ -301,6 +309,7 @@ pub unsafe fn compute_distance_table_avx2_d2(
 }
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_avx2_d4(
     distance_table: &mut [f32],
     query: &[f32],
@@ -345,9 +354,11 @@ pub unsafe fn compute_distance_table_avx2_d4(
 /// # Arguments
 ///
 /// * `query_vec` - A slice representing the input vector for which the nearest centroid is to be found.
-///                 The length of `query_vec` is assumed to match the sub-dimension used in the calculation.
+///  The length of `query_vec` is assumed to match the sub-dimension used in the calculation.
+///
 /// * `centroids` - A slice representing the set of centroids. Each centroid should have the same
-///                 dimensionality as `query_vec`. The centroids are expected to be laid out contiguously in memory.
+///  dimensionality as `query_vec`. The centroids are expected to be laid out contiguously in memory.
+///
 /// * `ksub`      - The number of centroids.
 ///
 /// # Safety
@@ -383,6 +394,7 @@ pub unsafe fn compute_distance_table_avx2_d4(
 ///    - Uses scalar operations to compute the distance and update the minimum distance and index.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn find_nearest_centroid_avx2_d8(
     query_vec: &[f32],
     centroids: &[f32],
@@ -540,6 +552,7 @@ unsafe fn find_nearest_centroid_avx2_d8(
 ///      distances are computed individually using scalar operations.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d1(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -612,6 +625,7 @@ unsafe fn compute_distances_d1(
 ///    - Stores the total distances in `distances`.
 ///
 #[inline]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d12(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -624,7 +638,7 @@ unsafe fn compute_distances_d12(
     let seg2 = _mm_loadu_ps(query_vec.as_ptr().add(8));
 
     let mut centroid_offset = 0;
-    for i in 0..num_centroids {
+    for dist in distances.iter_mut().take(num_centroids) {
         // SIMD operations for each segment of the centroids
         let centroid_seg0 = _mm_loadu_ps(centroids.as_ptr().add(centroid_offset));
         let mut distance_accumulator = squared_l2_dist_128(seg0, centroid_seg0);
@@ -643,7 +657,7 @@ unsafe fn compute_distances_d12(
             distance_accumulator,
             squared_l2_dist_128(seg2, centroid_seg2),
         );
-        distances[i] = horizontal_sum_128(distance_accumulator); // Sum of distances from all segments
+        *dist = horizontal_sum_128(distance_accumulator); // Sum of distances from all segments
         centroid_offset += 8; // Move to the next set of centroid segments
     }
 }
@@ -710,10 +724,9 @@ fn compute_distances_general(
     n_centroids: usize,
 ) {
     let mut offset = 0;
-    for i in 0..n_centroids {
+    for dist in distances.iter_mut().take(n_centroids) {
         // Calculate distances for each segment of the query vector
-        distances[i] =
-            compute_squared_l2_distance(query_vec, &centroids[offset..offset + ksub], ksub);
+        *dist = compute_squared_l2_distance(query_vec, &centroids[offset..offset + ksub], ksub);
         offset += ksub;
     }
 }
@@ -927,7 +940,7 @@ mod tests {
             compute_distances_d1(&mut distances, &query_vec, &centroids, centroids.len());
         }
 
-        let expected_distances = [4.0, 1.0, 0.0, 1.0, 4.0];
+        let expected_distances = vec![4.0, 1.0, 0.0, 1.0, 4.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(
@@ -959,7 +972,7 @@ mod tests {
             compute_distances_d12(&mut distances, &query_vec, &centroids, 3);
         }
 
-        let expected_distances = [506.0, 506.0, 506.0];
+        let expected_distances = vec![506.0, 506.0, 506.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(
@@ -991,7 +1004,7 @@ mod tests {
 
         compute_distances_general(&mut distances, &query_vec, &centroids, ksub, n_centroids);
 
-        let expected_distances = [0.0, 64.0];
+        let expected_distances = vec![0.0, 64.0];
 
         for (i, &dist) in distances.iter().enumerate() {
             assert!(

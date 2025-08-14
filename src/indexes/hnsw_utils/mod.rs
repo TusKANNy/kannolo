@@ -9,14 +9,10 @@ use crate::{
     Dataset,
 };
 
-pub mod config_hnsw;
-pub mod hnsw_builder;
-pub mod level;
-
 #[derive(Debug, Clone, Copy)]
-pub struct Node(pub f32, pub usize);
+pub struct Candidate(pub f32, pub usize);
 
-impl Node {
+impl Candidate {
     pub fn distance(&self) -> f32 {
         self.0
     }
@@ -25,13 +21,13 @@ impl Node {
     }
 }
 
-impl PartialOrd for Node {
+impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.distance().partial_cmp(&other.distance())
     }
 }
 
-impl Ord for Node {
+impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
         self.distance()
             .partial_cmp(&other.distance())
@@ -39,17 +35,17 @@ impl Ord for Node {
     }
 }
 
-impl PartialEq for Node {
+impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
         self.distance() == other.distance()
     }
 }
 
-impl Eq for Node {}
+impl Eq for Candidate {}
 
-/// Adds a node to the min and max heaps used during the construction and search processes in the HNSW algorithm.
+/// Adds a candidate to the min and max heaps used during the construction and search processes in the HNSW algorithm.
 ///
-/// This function manages the insertion of a given node into both the minimum and maximum heaps,
+/// This function manages the insertion of a given candidate into both the minimum and maximum heaps,
 /// which are utilized during both the construction and search phases of the HNSW algorithm.
 /// The function ensures that the heaps do not exceed the size defined by the `ef_parameter`,
 /// which controls the number of elements maintained during these processes.
@@ -57,48 +53,48 @@ impl Eq for Node {}
 /// # Description
 ///
 /// The function follows these steps:
-/// 1. If the number of elements in the `max_heap` is less than `ef_parameter`, the node is added to both heaps.
-/// 2. If the `max_heap` is full but the new node is closer (i.e., has a smaller distance) than the
-///    farthest node in the `max_heap`, the node is added to both the heaps.
-/// 3. If the `max_heap` exceeds the `ef_parameter` size after adding the new node, the farthest node
+/// 1. If the number of elements in the `max_heap` is less than `ef_parameter`, the candidate is added to both heaps.
+/// 2. If the `max_heap` is full but the new candidate is closer (i.e., has a smaller distance) than the
+///    farthest candidate in the `max_heap`, the candidate is added to both the heaps.
+/// 3. If the `max_heap` exceeds the `ef_parameter` size after adding the new candidate, the farthest candidate
 ///    is removed from the `max_heap`.
 ///
 /// # Parameters
-/// - `min_heap`: A mutable reference to a `BinaryHeap` of `Reverse<Node>` objects.
-/// - `max_heap`: A mutable reference to a `BinaryHeap` of `Node` objects.
-/// - `node`: The `Node` to be potentially added to the heaps.
+/// - `min_heap`: A mutable reference to a `BinaryHeap` of `Reverse<Candidate>` objects.
+/// - `max_heap`: A mutable reference to a `BinaryHeap` of `Candidate` objects.
+/// - `candidate`: The `Candidate` to be potentially added to the heaps.
 /// - `ef_parameter`: The maximum number of elements that should be maintained in the heaps during the construction and search processes.
 ///
 /// # Example
 /// ```rust
 /// use std::collections::BinaryHeap;
 /// use std::cmp::Reverse;
-/// use struttura_kANNolo::hnsw_utils::{add_neighbor_to_heaps,Node};
+/// use kannolo::hnsw_utils::{add_neighbor_to_heaps, Candidate};
 ///
-/// let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-/// let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-/// let node = Node(0.5, 1); // Example node
+/// let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+/// let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+/// let candidate = Candidate(0.5, 1); // Example candidate
 /// let ef_parameter = 10;
 ///
-/// add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
+/// add_neighbor_to_heaps(&mut min_heap, &mut max_heap, candidate, ef_parameter);
 /// ```
 pub fn add_neighbor_to_heaps(
-    min_heap: &mut BinaryHeap<Reverse<Node>>,
-    max_heap: &mut BinaryHeap<Node>,
-    node: Node,
+    min_heap: &mut BinaryHeap<Reverse<Candidate>>,
+    max_heap: &mut BinaryHeap<Candidate>,
+    candidate: Candidate,
     ef_parameter: usize,
 ) {
     let should_add_node = if max_heap.len() < ef_parameter {
         true
     } else if let Some(top_node) = max_heap.peek() {
-        top_node.distance() > node.distance()
+        top_node.distance() > candidate.distance()
     } else {
         false
     };
 
     if should_add_node {
-        min_heap.push(Reverse(node));
-        max_heap.push(node);
+        min_heap.push(Reverse(candidate));
+        max_heap.push(candidate);
     }
 
     if max_heap.len() > ef_parameter {
@@ -107,8 +103,8 @@ pub fn add_neighbor_to_heaps(
 }
 
 pub fn add_neighbors_to_heaps(
-    min_heap: &mut BinaryHeap<Reverse<Node>>,
-    max_heap: &mut BinaryHeap<Node>,
+    min_heap: &mut BinaryHeap<Reverse<Candidate>>,
+    max_heap: &mut BinaryHeap<Candidate>,
     distances: &[f32],
     ids: &[usize],
     ef_parameter: usize,
@@ -123,8 +119,8 @@ pub fn add_neighbors_to_heaps(
         };
 
         if should_add_node {
-            min_heap.push(Reverse(Node(*distance, *id)));
-            max_heap.push(Node(*distance, *id));
+            min_heap.push(Reverse(Candidate(*distance, *id)));
+            max_heap.push(Candidate(*distance, *id));
         }
 
         if max_heap.len() > ef_parameter {
@@ -151,13 +147,13 @@ pub fn add_neighbors_to_heaps(
 /// `nearest_vec` to the current neighbor and `dis_nearest_vec` to the new shortest distance.
 ///
 /// # Example
-/// ```
-/// use struttura_kANNolo::hnsw_utils::compute_closest_from_neighbors;
-/// use struttura_kANNolo::DenseDataset;
-/// use struttura_kANNolo::DistanceType;
-/// use struttura_kANNolo::plain_quantizer::PlainQuantizer;
-/// use struttura_kANNolo::DenseVector1D;
-/// use crate::struttura_kANNolo::Dataset;
+/// ```rust
+/// use kannolo::hnsw_utils::compute_closest_from_neighbors;
+/// use kannolo::DenseDataset;
+/// use kannolo::DistanceType;
+/// use kannolo::plain_quantizer::PlainQuantizer;
+/// use kannolo::DenseVector1D;
+/// use kannolo::Dataset;
 ///
 /// // Create a query vector
 /// let query_vector: &[f32; 2] = &[1.0, 1.0];
@@ -176,6 +172,7 @@ pub fn add_neighbors_to_heaps(
 /// let mut dis_nearest_vec = f32::MAX;
 ///
 /// compute_closest_from_neighbors(
+///     &dataset,
 ///     &evaluator,
 ///     &neighbors,
 ///     &mut nearest_vec,
@@ -233,7 +230,7 @@ pub fn compute_closest_from_neighbors<'a, Q, D, E>(
 ///
 /// # Example
 /// ```rust
-/// use struttura_kANNolo::hnsw_utils::insert_into_topk;
+/// use kannolo::hnsw_utils::insert_into_topk;
 /// use std::sync::Mutex;
 ///
 /// // The vector holds results for two queries, each with 3 closest vectors (k=3).
@@ -244,7 +241,7 @@ pub fn compute_closest_from_neighbors<'a, Q, D, E>(
 ///     (f32::MAX, usize::MAX),
 ///     (f32::MAX, usize::MAX),
 ///     (f32::MAX, usize::MAX),
-///     ]);
+/// ]);
 ///
 /// let index = 1;
 /// let k = 3;
@@ -285,25 +282,25 @@ pub fn prefetch_dense_vec_with_offset<T>(vector: &[T], offset: usize, len: usize
     let end = offset + len;
 
     for i in (offset..end).step_by(64 / std::mem::size_of::<T>()) {
-        prefetch_read_T2(vector, i);
+        prefetch_read_NTA(vector, i);
     }
 }
 
 #[allow(non_snake_case)]
 #[inline]
-pub fn prefetch_read_T2<T>(data: &[T], offset: usize) {
+pub fn prefetch_read_NTA<T>(data: &[T], offset: usize) {
     let _p = data.as_ptr().wrapping_add(offset) as *const i8;
 
     //#[cfg(all(feature = "prefetch", any(target_arch = "x86", target_arch = "x86_64")))]
     {
         #[cfg(target_arch = "x86")]
-        use std::arch::x86::{_mm_prefetch, _MM_HINT_T2};
+        use std::arch::x86::{_mm_prefetch, _MM_HINT_NTA};
 
         #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T2};
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_NTA};
 
         unsafe {
-            _mm_prefetch(_p, _MM_HINT_T2);
+            _mm_prefetch(_p, _MM_HINT_NTA);
         }
     }
 }
@@ -324,22 +321,19 @@ pub fn prefetch_read_T2<T>(data: &[T], offset: usize) {
 /// ```rust
 /// use std::collections::BinaryHeap;
 /// use std::cmp::Reverse;
-/// use struttura_kANNolo::hnsw_utils::from_max_heap_to_min_heap;
-/// use struttura_kANNolo::hnsw_utils::Node;
+/// use kannolo::hnsw_utils::{from_max_heap_to_min_heap, Candidate};
 ///
-/// // Create a max-heap with some nodes.
 /// let mut max_heap = BinaryHeap::new();
-/// max_heap.push(Node(10.0,1));
-/// max_heap.push(Node(20.0,2));
-/// max_heap.push(Node(15.0,3));
+/// max_heap.push(Candidate(10.0,1));
+/// max_heap.push(Candidate(20.0,2));
+/// max_heap.push(Candidate(15.0,3));
 ///
-/// // Convert the max-heap to a min-heap.
 /// let min_heap = from_max_heap_to_min_heap(&mut max_heap);
-///
-/// // The new min-heap will contain the same nodes but in min-heap order.
-/// assert_eq!(min_heap.peek().unwrap().0.1, 1); // The smallest element should be on top.
+/// assert_eq!(min_heap.len(), 3);
 /// ```
-pub fn from_max_heap_to_min_heap(max_heap: &mut BinaryHeap<Node>) -> BinaryHeap<Reverse<Node>> {
+pub fn from_max_heap_to_min_heap(
+    max_heap: &mut BinaryHeap<Candidate>,
+) -> BinaryHeap<Reverse<Candidate>> {
     let vec: Vec<_> = max_heap.drain().collect();
     BinaryHeap::from(vec.into_iter().map(Reverse).collect::<Vec<_>>())
 }
@@ -354,31 +348,31 @@ mod tests_from_max_heap_to_min_heap {
     /// The result is checked to ensure that the elements are ordered correctly in the min-heap.
     #[test]
     fn test_from_max_heap_to_min_heap() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-        max_heap.push(Node(3.2, 10));
-        max_heap.push(Node(2.2, 8));
-        max_heap.push(Node(6.2, 12));
-        max_heap.push(Node(7.2, 2));
-        max_heap.push(Node(32.2, 4));
-        max_heap.push(Node(4.2, 14));
-        max_heap.push(Node(1.2, 6));
-        max_heap.push(Node(7.2, 6));
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+        max_heap.push(Candidate(3.2, 10));
+        max_heap.push(Candidate(2.2, 8));
+        max_heap.push(Candidate(6.2, 12));
+        max_heap.push(Candidate(7.2, 2));
+        max_heap.push(Candidate(32.2, 4));
+        max_heap.push(Candidate(4.2, 14));
+        max_heap.push(Candidate(1.2, 6));
+        max_heap.push(Candidate(7.2, 6));
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<Node> = Vec::new();
+        let mut min_heap_vec: Vec<Candidate> = Vec::new();
         while let Some(node) = min_heap.pop() {
             min_heap_vec.push(node.0);
         }
 
-        let expected_vec: Vec<Node> = vec![
-            Node(1.2, 6),
-            Node(2.2, 8),
-            Node(3.2, 10),
-            Node(4.2, 14),
-            Node(6.2, 12),
-            Node(7.2, 2),
-            Node(7.2, 6),
-            Node(32.2, 4),
+        let expected_vec: Vec<Candidate> = vec![
+            Candidate(1.2, 6),
+            Candidate(2.2, 8),
+            Candidate(3.2, 10),
+            Candidate(4.2, 14),
+            Candidate(6.2, 12),
+            Candidate(7.2, 2),
+            Candidate(7.2, 6),
+            Candidate(32.2, 4),
         ];
         assert_eq!(expected_vec, min_heap_vec);
     }
@@ -390,21 +384,21 @@ mod tests_from_max_heap_to_min_heap {
     #[test]
     fn test_from_max_heap_to_min_heap_with_large_data() {
         let n = 100000;
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
 
         for i in 0..n {
-            max_heap.push(Node(i as f32, i));
+            max_heap.push(Candidate(i as f32, i));
         }
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<Node> = Vec::new();
+        let mut min_heap_vec: Vec<Candidate> = Vec::new();
         while let Some(node) = min_heap.pop() {
             min_heap_vec.push(node.0);
         }
 
-        let mut expected_vec: Vec<Node> = Vec::new();
+        let mut expected_vec: Vec<Candidate> = Vec::new();
         for i in 0..n {
-            expected_vec.push(Node(i as f32, i));
+            expected_vec.push(Candidate(i as f32, i));
         }
 
         assert_eq!(expected_vec, min_heap_vec);
@@ -416,7 +410,7 @@ mod tests_from_max_heap_to_min_heap {
     /// The resulting min-heap should also be empty.
     #[test]
     fn test_from_max_heap_to_min_heap_empty() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let min_heap = from_max_heap_to_min_heap(&mut max_heap);
         assert!(min_heap.is_empty());
     }
@@ -427,13 +421,13 @@ mod tests_from_max_heap_to_min_heap {
     /// ensuring that the single element is correctly handled.
     #[test]
     fn test_from_max_heap_to_min_heap_single_element() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-        max_heap.push(Node(42.0, 1));
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+        max_heap.push(Candidate(42.0, 1));
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
         let node = min_heap.pop().unwrap().0;
 
-        assert_eq!(node, Node(42.0, 1));
+        assert_eq!(node, Candidate(42.0, 1));
         assert!(min_heap.is_empty());
     }
 
@@ -443,18 +437,18 @@ mod tests_from_max_heap_to_min_heap {
     /// and verifies that the min-heap retains the correct number of elements.
     #[test]
     fn test_from_max_heap_to_min_heap_all_elements_same() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         for _ in 0..10 {
-            max_heap.push(Node(5.0, 100));
+            max_heap.push(Candidate(5.0, 100));
         }
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<Node> = Vec::new();
+        let mut min_heap_vec: Vec<Candidate> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<Node> = vec![Node(5.0, 100); 10];
+        let expected_vec: Vec<Candidate> = vec![Candidate(5.0, 100); 10];
         assert_eq!(expected_vec, min_heap_vec);
     }
 
@@ -464,18 +458,19 @@ mod tests_from_max_heap_to_min_heap {
     /// when converting a max-heap to a min-heap.
     #[test]
     fn test_from_max_heap_to_min_heap_with_negative_values() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-        max_heap.push(Node(-1.0, 1));
-        max_heap.push(Node(-2.0, 2));
-        max_heap.push(Node(-3.0, 3));
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+        max_heap.push(Candidate(-1.0, 1));
+        max_heap.push(Candidate(-2.0, 2));
+        max_heap.push(Candidate(-3.0, 3));
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<Node> = Vec::new();
+        let mut min_heap_vec: Vec<Candidate> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<Node> = vec![Node(-3.0, 3), Node(-2.0, 2), Node(-1.0, 1)];
+        let expected_vec: Vec<Candidate> =
+            vec![Candidate(-3.0, 3), Candidate(-2.0, 2), Candidate(-1.0, 1)];
         assert_eq!(expected_vec, min_heap_vec);
     }
 
@@ -485,25 +480,25 @@ mod tests_from_max_heap_to_min_heap {
     /// and zero values. The resulting min-heap should correctly reflect the min-heap order.
     #[test]
     fn test_from_max_heap_to_min_heap_with_mixed_values() {
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-        max_heap.push(Node(0.0, 0));
-        max_heap.push(Node(-1.0, 1));
-        max_heap.push(Node(2.0, 2));
-        max_heap.push(Node(-2.0, 3));
-        max_heap.push(Node(1.0, 4));
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+        max_heap.push(Candidate(0.0, 0));
+        max_heap.push(Candidate(-1.0, 1));
+        max_heap.push(Candidate(2.0, 2));
+        max_heap.push(Candidate(-2.0, 3));
+        max_heap.push(Candidate(1.0, 4));
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<Node> = Vec::new();
+        let mut min_heap_vec: Vec<Candidate> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<Node> = vec![
-            Node(-2.0, 3),
-            Node(-1.0, 1),
-            Node(0.0, 0),
-            Node(1.0, 4),
-            Node(2.0, 2),
+        let expected_vec: Vec<Candidate> = vec![
+            Candidate(-2.0, 3),
+            Candidate(-1.0, 1),
+            Candidate(0.0, 0),
+            Candidate(1.0, 4),
+            Candidate(2.0, 2),
         ];
         assert_eq!(expected_vec, min_heap_vec);
     }
@@ -646,11 +641,13 @@ mod tests_insert_into_topk {
 
         insert_into_topk(&topk, topk_query.clone(), index, k);
 
-        let expected = [(0.5, 5),
+        let expected = [
+            (0.5, 5),
             (1.5, 6),
             (2.5, 7),
             (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX)];
+            (f32::MAX, usize::MAX),
+        ];
 
         let start_index = index * k;
 
@@ -726,11 +723,13 @@ mod tests_insert_into_topk {
 
         insert_into_topk(&topk, topk_query.clone(), index, k);
 
-        let expected = [(0.5, 5),
+        let expected = [
+            (0.5, 5),
             (1.5, 6),
             (f32::MAX, usize::MAX),
             (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX)];
+            (f32::MAX, usize::MAX),
+        ];
 
         let start_index = index * k;
 
@@ -810,17 +809,17 @@ mod tests_add_neighbors_to_heaps {
 
     #[test]
     fn test_add_to_empty_heaps() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
-        let node = Node(10.0, 1);
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
+        let candidate = Candidate(10.0, 1);
         let ef_parameter = 3;
 
-        add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
+        add_neighbor_to_heaps(&mut min_heap, &mut max_heap, candidate, ef_parameter);
 
         assert_eq!(min_heap.len(), 1);
         assert_eq!(max_heap.len(), 1);
-        assert_eq!(min_heap.peek(), Some(&Reverse(node)));
-        assert_eq!(max_heap.peek(), Some(&node));
+        assert_eq!(min_heap.peek(), Some(&Reverse(candidate)));
+        assert_eq!(max_heap.peek(), Some(&candidate));
     }
 
     /// Tests the `add_neighbor_to_heaps` function when the number of nodes is within the `ef_parameter` limit.
@@ -831,11 +830,11 @@ mod tests_add_neighbors_to_heaps {
     /// distance, and the top of the `min_heap` containing the smallest distance.
     #[test]
     fn test_add_within_ef_parameter_limit() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let ef_parameter = 3;
 
-        let nodes = [Node(10.0, 1), Node(5.0, 2), Node(7.0, 3)];
+        let nodes = [Candidate(10.0, 1), Candidate(5.0, 2), Candidate(7.0, 3)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -856,11 +855,16 @@ mod tests_add_neighbors_to_heaps {
     /// will contain the distance 3.0.
     #[test]
     fn test_add_beyond_ef_parameter_limit() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let ef_parameter = 3;
 
-        let nodes = [Node(10.0, 1), Node(5.0, 2), Node(7.0, 3), Node(3.0, 4)];
+        let nodes = [
+            Candidate(10.0, 1),
+            Candidate(5.0, 2),
+            Candidate(7.0, 3),
+            Candidate(3.0, 4),
+        ];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -880,17 +884,17 @@ mod tests_add_neighbors_to_heaps {
     /// as the new node's distance is greater than the current maximum at the top of the `max_heap`, which is 5.0.
     #[test]
     fn test_add_node_with_higher_distance_than_current_max() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = [Node(5.0, 1), Node(3.0, 2)];
+        let nodes = [Candidate(5.0, 1), Candidate(3.0, 2)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
         }
 
-        let new_node = Node(8.0, 3);
+        let new_node = Candidate(8.0, 3);
         add_neighbor_to_heaps(&mut min_heap, &mut max_heap, new_node, ef_parameter);
 
         // No change should be made, as the new node's distance is greater than current max
@@ -908,11 +912,11 @@ mod tests_add_neighbors_to_heaps {
     /// all 3 nodes, with the smallest distance node at the top.
     #[test]
     fn test_ef_parameter_of_one() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let ef_parameter = 1;
 
-        let nodes = [Node(5.0, 1), Node(3.0, 2), Node(2.0, 3)];
+        let nodes = [Candidate(5.0, 1), Candidate(3.0, 2), Candidate(2.0, 3)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -932,17 +936,17 @@ mod tests_add_neighbors_to_heaps {
     /// the top of the `max_heap` containing the distance 5.0, and the top of the `min_heap` containing the distance 3.0.
     #[test]
     fn test_add_node_equal_to_current_max() {
-        let mut min_heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<Node> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<Candidate> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = [Node(5.0, 1), Node(3.0, 2)];
+        let nodes = [Candidate(5.0, 1), Candidate(3.0, 2)];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
         }
 
-        let new_node = Node(5.0, 3);
+        let new_node = Candidate(5.0, 3);
         add_neighbor_to_heaps(&mut min_heap, &mut max_heap, new_node, ef_parameter);
 
         assert_eq!(min_heap.len(), 2);
@@ -1036,8 +1040,13 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
         let query_vector: &[f32] = &[1.0, 1.0];
         let query = DenseVector1D::new(query_vector);
 
-        // Neighbor vectors that are equidistant from the query except for the first one
-        let neighbor_vectors = &[2.0, 5.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0];
+        // Neighbor vectors: 0 is farther; 1, 2, 3 are equidistant to the query
+        let neighbor_vectors = &[
+            2.0, 5.0, // idx 0 (farther)
+            3.0, 1.0, // idx 1 (distance 2.0)
+            1.0, 3.0, // idx 2 (distance 2.0)
+            -1.0, 1.0, // idx 3 (distance 2.0)
+        ];
 
         let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
         let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
@@ -1057,6 +1066,7 @@ mod tests_compute_closest_from_neighbors_euclidean_distance {
             &mut dis_nearest_vec,
         );
 
+        // First equidistant encountered should be index 1
         assert_eq!(nearest_vec, 1);
     }
 

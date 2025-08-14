@@ -1,0 +1,6 @@
+ir_measures==0.3.7
+numpy==2.3.2
+pandas==2.3.1
+psutil==7.0.0
+termcolor==3.1.0
+toml==0.10.2

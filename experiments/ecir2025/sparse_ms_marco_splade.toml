@@ -3,8 +3,12 @@ title =         "Search sparse HNSWM on MSMARCO"
 description =   "Search sparse HNSWM on MSMARCO with memory budget 1.5"
 dataset =       "Splade cocondenser on MS-MARCO"
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
-build-command = "./target/release/hnsw_plain_sparse_build"
-query-command = "./target/release/hnsw_plain_sparse_run"
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+vector-type = "sparse"   # Vector type: "dense" or "sparse"
+precision = "f16"        # Precision: "f32" for full-precision, "f16" for half-precision (Note: sparse only supports f16)
+quantizer = "plain"      # Quantizer: "plain" for no compression, "pq" for Product Quantization (dense only)
+graph-type = "standard"  # Graph type: "standard" or "fixed-degree"
 
 [settings]
 k =             10
@@ -12,7 +16,7 @@ n-runs =        1       # Number of runs. PLEASE think carefully how increasing
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         true   # Need to build the index or the index is already built?
-metric =        "RR@10"
+metric =        "RR@10" # ir_measures metric (e.g. RR)
 
 [folder] 
 data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/splade" # data base path
@@ -31,7 +35,7 @@ index =         "ecir_2025_splade" # index input file name
 [indexing_parameters]
 m =            32
 efc =          2000
-metric =       "ip"
+metric =       "ip" # distance/similarity metric of the index, either "l2" or "ip"
 
 [query]
     [query.efs_10]

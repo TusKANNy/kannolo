@@ -49,7 +49,7 @@ impl<'a> PQEncoderGeneric<'a> {
     /// # Examples
     ///
     /// ```
-    /// use crate::encoder::PQEncoderGeneric;
+    /// use kannolo::encoder::PQEncoderGeneric;
     ///
     /// let mut buffer = vec![0; 10];
     /// let encoder = PQEncoderGeneric::new(&mut buffer, 32);
@@ -141,7 +141,7 @@ impl<'a> PQEncoder8<'a> {
     /// # Examples
     ///
     /// ```
-    /// use crate::encoder::PQEncoder8;
+    /// use kannolo::encoder::PQEncoder8;
     ///
     /// let mut buffer = vec![0; 10];
     /// let encoder = PQEncoder8::new(&mut buffer);
@@ -203,7 +203,7 @@ impl<'a> PQEncoder16<'a> {
     /// # Examples
     ///
     /// ```
-    /// use crate::encoder::PQEncoder16;
+    /// use kannolo::encoder::PQEncoder16;
     ///
     /// let mut buffer = vec![0; 10];
     /// let encoder = PQEncoder16::new(&mut buffer);

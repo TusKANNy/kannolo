@@ -2,13 +2,16 @@ use crate::clustering::KMeansBuilder;
 use crate::datasets::dense_dataset::DenseDataset;
 use crate::quantizers::encoder::{Encoder, PQEncoder8};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
+#[cfg(target_arch = "x86_64")]
 use crate::simd_distances::{
     compute_distance_table_avx2_d2, compute_distance_table_avx2_d4, compute_distance_table_ip_d4,
-    compute_distance_table_ip_d8, find_nearest_centroid_idx,
+    compute_distance_table_ip_d8,
 };
+
+use crate::simd_distances::find_nearest_centroid_idx;
 use crate::topk_selectors::OnlineTopKSelector;
 use crate::utils::{compute_vector_norm_squared, sgemm, MatrixLayout};
-use crate::{euclidean_distance_unrolled, Dataset, DistanceType};
+use crate::{euclidean_distance_simd, Dataset, DistanceType};
 use crate::{Float, PlainDenseDataset};
 use itertools::izip;
 use rayon::prelude::*;
@@ -61,7 +64,7 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
 
     fn encode(&self, input_vectors: &[Self::InputItem], output_vectors: &mut [Self::OutputItem]) {
         let n = input_vectors.len() / self.d();
-        let code_size = (self.nbits() * M).div_ceil(8);
+        let code_size = (self.nbits() * M + 7) / 8;
 
         assert!(
             output_vectors.len() >= M * n,
@@ -201,15 +204,15 @@ impl<const M: usize> ProductQuantizer<M> {
             current_centroids.data().values_as_slice().to_vec()
         };
 
-        
-
-        (0..M).into_par_iter().map(run_kmeans).reduce(
-            Vec::new,
+        let centroids = (0..M).into_par_iter().map(|i| run_kmeans(i)).reduce(
+            || Vec::new(),
             |mut acc, x| {
                 acc.extend_from_slice(&x);
                 acc
             },
-        )
+        );
+
+        centroids
     }
 
     #[inline]
@@ -257,8 +260,8 @@ impl<const M: usize> ProductQuantizer<M> {
             }
         }
 
-        
-        distance[0] + distance[1] + distance[2] + distance[3]
+        let final_distance = distance[0] + distance[1] + distance[2] + distance[3];
+        final_distance
     }
 
     #[inline]
@@ -326,7 +329,7 @@ impl<const M: usize> ProductQuantizer<M> {
         }
 
         // Compute the squared L2 norm for the first query vector segment.
-        let query_norm = compute_vector_norm_squared(query_vec, self.dsub());
+        let query_norm = compute_vector_norm_squared(&query_vec, self.dsub());
 
         for j in 0..self.ksub() {
             distances[j] += query_norm;
@@ -379,31 +382,44 @@ impl<const M: usize> ProductQuantizer<M> {
             let centroids = self.get_centroids(m);
             let distance_table_slice = &mut distance_table[m * self.ksub()..(m + 1) * self.ksub()];
 
-            match self.dsub() {
-                2 => unsafe {
-                    compute_distance_table_avx2_d2(
-                        distance_table_slice,
-                        query_subvector,
-                        centroids,
-                        self.ksub(),
-                    )
-                },
-
-                4 => unsafe {
-                    compute_distance_table_avx2_d4(
-                        distance_table_slice,
-                        query_subvector,
-                        centroids,
-                        self.ksub(),
-                    )
-                },
-                _ => {
-                    for i in 0..self.ksub() {
-                        distance_table_slice[i] = euclidean_distance_unrolled(
+            #[cfg(target_arch = "x86_64")]
+            {
+                match self.dsub() {
+                    2 => unsafe {
+                        compute_distance_table_avx2_d2(
+                            distance_table_slice,
                             query_subvector,
-                            &centroids[i * self.dsub()..(i + 1) * self.dsub()],
-                        );
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+
+                    4 => unsafe {
+                        compute_distance_table_avx2_d4(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    _ => {
+                        for i in 0..self.ksub() {
+                            distance_table_slice[i] = euclidean_distance_simd(
+                                query_subvector,
+                                &centroids[i * self.dsub()..(i + 1) * self.dsub()],
+                            );
+                        }
                     }
+                }
+            }
+
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                for i in 0..self.ksub() {
+                    distance_table_slice[i] = euclidean_distance_simd(
+                        query_subvector,
+                        &centroids[i * self.dsub()..(i + 1) * self.dsub()],
+                    );
                 }
             }
         }
@@ -424,52 +440,87 @@ impl<const M: usize> ProductQuantizer<M> {
             let distance_table_slice =
                 &mut dot_product_table[m * self.ksub()..(m + 1) * self.ksub()];
 
-            match self.dsub() {
-                4 => unsafe {
-                    compute_distance_table_ip_d4(
-                        distance_table_slice,
-                        query_subvector,
-                        centroids,
-                        self.ksub(),
-                    )
-                },
-                8 => unsafe {
-                    compute_distance_table_ip_d8(
-                        distance_table_slice,
-                        query_subvector,
-                        centroids,
-                        self.ksub(),
-                    )
-                },
-                _ => {
-                    let alpha = 1.0;
-                    let beta = 0.0;
-                    let m = 1;
-                    let k = self.dsub;
-                    let n = self.ksub;
+            #[cfg(target_arch = "x86_64")]
+            {
+                match self.dsub() {
+                    4 => unsafe {
+                        compute_distance_table_ip_d4(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    8 => unsafe {
+                        compute_distance_table_ip_d8(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    _ => {
+                        let alpha = 1.0;
+                        let beta = 0.0;
+                        let m = 1;
+                        let k = self.dsub;
+                        let n = self.ksub;
 
-                    for (x_subspace, centroids_subspace, dot_product) in izip!(
-                        query.values_as_slice().chunks_exact(self.dsub()),
-                        self.centroids().chunks_exact(self.ksub() * self.dsub()),
-                        dot_product_table.chunks_exact_mut(self.ksub())
-                    ) {
-                        sgemm(
-                            MatrixLayout::RowMajor,
-                            false,
-                            true,
-                            alpha,
-                            beta,
-                            m,
-                            k,
-                            n,
-                            x_subspace.as_ptr(),
-                            k as isize,
-                            centroids_subspace.as_ptr(),
-                            k as isize,
-                            dot_product.as_mut_ptr(),
-                            n as isize,
-                        );
+                        for (x_subspace, centroids_subspace, dot_product) in izip!(
+                            query.values_as_slice().chunks_exact(self.dsub()),
+                            self.centroids().chunks_exact(self.ksub() * self.dsub()),
+                            dot_product_table.chunks_exact_mut(self.ksub())
+                        ) {
+                            sgemm(
+                                MatrixLayout::RowMajor,
+                                false,
+                                true,
+                                alpha,
+                                beta,
+                                m,
+                                k,
+                                n,
+                                x_subspace.as_ptr(),
+                                k as isize,
+                                centroids_subspace.as_ptr(),
+                                k as isize,
+                                dot_product.as_mut_ptr(),
+                                n as isize,
+                            );
+                        }
                     }
+                }
+            }
+
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                let alpha = 1.0;
+                let beta = 0.0;
+                let m = 1;
+                let k = self.dsub;
+                let n = self.ksub;
+
+                for (x_subspace, centroids_subspace, dot_product) in izip!(
+                    query.values_as_slice().chunks_exact(self.dsub()),
+                    self.centroids().chunks_exact(self.ksub() * self.dsub()),
+                    dot_product_table.chunks_exact_mut(self.ksub())
+                ) {
+                    sgemm(
+                        MatrixLayout::RowMajor,
+                        false,
+                        true,
+                        alpha,
+                        beta,
+                        m,
+                        k,
+                        n,
+                        x_subspace.as_ptr(),
+                        k as isize,
+                        centroids_subspace.as_ptr(),
+                        k as isize,
+                        dot_product.as_mut_ptr(),
+                        n as isize,
+                    );
                 }
             }
         }
@@ -496,7 +547,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
 
         Self {
             _query: query,
-            distance_table,
+            distance_table: distance_table,
         }
     }
 

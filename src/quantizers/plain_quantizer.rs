@@ -1,7 +1,10 @@
-use crate::distances::{self, dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
+use crate::distances;
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{dot_product_batch_4, euclidean_distance_batch_4, DenseVector1D, Vector1D};
+use crate::{
+    dot_product_batch_4_simd, dot_product_simd, euclidean_distance_batch_4_simd,
+    euclidean_distance_simd, DenseVector1D, Vector1D,
+};
 use crate::{Dataset, DistanceType, Float};
 
 use crate::datasets::dense_dataset::DenseDataset;
@@ -89,10 +92,8 @@ where
         let document_slice = document_slice.values_as_slice();
         let query_slice = self.query.values_as_slice();
         match dataset.quantizer().distance() {
-            DistanceType::Euclidean => {
-                dense_euclidean_distance_unrolled(query_slice, document_slice)
-            }
-            DistanceType::DotProduct => -dense_dot_product_unrolled(query_slice, document_slice),
+            DistanceType::Euclidean => euclidean_distance_simd(query_slice, document_slice),
+            DistanceType::DotProduct => -dot_product_simd(query_slice, document_slice),
         }
     }
 
@@ -111,12 +112,12 @@ where
         let v1 = chunk[1].values_as_slice();
         let v2 = chunk[2].values_as_slice();
         let v3 = chunk[3].values_as_slice();
-        let vector_batch = [v0, v1, v2, v3];
+        let vector_batch = [&v0[..], &v1[..], &v2[..], &v3[..]];
 
         let dist = match quantizer.distance() {
-            DistanceType::Euclidean => euclidean_distance_batch_4(query_slice, vector_batch),
+            DistanceType::Euclidean => euclidean_distance_batch_4_simd(query_slice, vector_batch),
             DistanceType::DotProduct => {
-                let dps = dot_product_batch_4(query_slice, vector_batch); // Negate distances
+                let dps = dot_product_batch_4_simd(query_slice, vector_batch); // Negate distances
                 [-dps[0], -dps[1], -dps[2], -dps[3]]
             }
         };

@@ -34,7 +34,7 @@ Build HNSW index on dense, PQ-encoded data.
 npy_input_file = "" # your input file
 
 # Set PQ's parameters
-m_pq = 192 # Number of subspaces of PQ
+m_pq = 192 # Number of subspaces of PQ. Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
 nbits = 8 # Number of bits to represent a centroid of a PQ's subspace
 sample_size = 500_000 # Size of the sample of the dataset for training PQ
 metric = "ip" # Inner product. Alternatively, you can use "l2" for squared L2 metric

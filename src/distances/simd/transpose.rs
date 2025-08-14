@@ -1,6 +1,8 @@
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __m256) {
     let r0 = _mm256_permute2f128_ps(i0, i1, 0b0010_0000);
     let r1 = _mm256_permute2f128_ps(i0, i1, 0b0011_0001);
@@ -32,9 +34,10 @@ pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __
 ///
 /// # Example
 ///
-/// ```
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
 /// use std::arch::x86_64::*;
-/// use crate::distances::simd::transpose::transpose_8x4;
+/// use kannolo::simd_transpose::transpose_8x4;
 ///
 /// unsafe {
 ///     // remember that the data in the actual registers is stored in the
@@ -45,10 +48,11 @@ pub unsafe fn transpose_8x2(i0: __m256, i1: __m256, o0: &mut __m256, o1: &mut __
 ///     let i3 = _mm256_set_ps(60.0, 61.0, 62.0, 63.0, 70.0, 71.0, 72.0, 73.0);
 ///
 ///     let transposed = transpose_8x4(i0, i1, i2, i3);
-///     // The `transposed` array now contains the transposed registers.
+///     let _ = transposed; // avoid unused warning in doctest
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [__m256; 4] {
     // let's say we have the following data stored in the registers:
     // i0:  00 01 02 03 10 11 12 13
@@ -105,28 +109,12 @@ pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [
 ///
 /// Returns an array of eight __m256 registers containing the transposed 8x8 matrix.
 ///
-/// # Detailed Workflow
-///
-/// 1. **Unpacking Rows**: The function starts by unpacking each pair of rows.
-///    Using `_mm256_unpacklo_ps` and `_mm256_unpackhi_ps`, it interleaves
-///    adjacent elements from two rows (`i0` with `i1`, `i2` with `i3`, etc.).
-///    This results in eight new registers (`r0` to `r7`), each holding
-///    interleaved elements from two rows.
-///
-/// 2. **Shuffling Pairs**: Next, the function shuffles elements within these
-///    pairs using `_mm256_shuffle_ps`. This is done twice for each pair,
-///    resulting in eight shuffled registers (`rr0` to `rr7`).
-///
-/// 3. **Final Permutation**: Finally, `_mm256_permute2f128_ps` is used to
-///    permute 128-bit halves from the shuffled registers, completing the
-///    transpose. This results in the final transposed registers (`o0` to `o7`).
-///
 /// # Example
 ///
-/// ```
-/// use crate::distances::simd::transpose::transpose_8x8;
+/// ```rust
+/// use kannolo::simd_transpose::transpose_8x8;
 ///
-/// #[cfg(target_feature = "avx2")]
+/// #[cfg(target_arch = "x86_64")]
 /// {
 ///     use std::arch::x86_64::*;
 ///     unsafe {
@@ -142,10 +130,12 @@ pub unsafe fn transpose_8x4(i0: __m256, i1: __m256, i2: __m256, i3: __m256) -> [
 ///         let i7 = _mm256_set_ps(77.0, 76.0, 75.0, 74.0, 73.0, 72.0, 71.0, 70.0);
 ///
 ///         let transposed = transpose_8x8(i0, i1, i2, i3, i4, i5, i6, i7);
+///         let _ = transposed; // avoid unused warning in doctest
 ///     }
 /// }
 /// ```
 #[inline]
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn transpose_8x8(
     i0: __m256,
     i1: __m256,
@@ -257,6 +247,7 @@ mod tests {
     /// corresponding row in the expected result, indicating a failure in the
     /// transposition logic of the `transpose_8x4` function.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_transpose_8x4() {
         unsafe {
             let i0 = _mm256_set_ps(13.0, 12.0, 11.0, 10.0, 3.0, 2.0, 1.0, 0.0);
@@ -313,6 +304,7 @@ mod tests {
     /// corresponding row in the expected result, indicating a failure in the
     /// transposition logic of the `transpose_8x8` function.
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_transpose_8x8() {
         unsafe {
             let i0 = _mm256_set_ps(7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0);

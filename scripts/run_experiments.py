@@ -127,6 +127,16 @@ def build_index(configs, experiment_dir):
         f"--metric {configs['indexing_parameters']['metric']}",
     ] 
 
+    # Add new unified binary parameters
+    if "vector-type" in configs:
+        command_and_params.append(f"--vector-type {configs['vector-type']}")
+    if "precision" in configs:
+        command_and_params.append(f"--precision {configs['precision']}")
+    if "quantizer" in configs:
+        command_and_params.append(f"--quantizer {configs['quantizer']}")
+    if "graph-type" in configs:
+        command_and_params.append(f"--graph-type {configs['graph-type']}")
+
     # If there is a section [pq_params] in the configuration file, add the parameters to the command
     if "pq_parameters" in configs:
         for k, v in configs["pq_parameters"].items():
@@ -144,6 +154,7 @@ def build_index(configs, experiment_dir):
     # Build the index and display output in real-time
     print(colored("Building index...", "yellow"))
     building_time = 0
+    
     with open(building_output_file, "w") as build_output:
         build_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for line in iter(build_process.stdout.readline, b''):
@@ -152,6 +163,7 @@ def build_index(configs, experiment_dir):
             build_output.write(decoded_line)  # Write each line to the output file
             if decoded_line.startswith("Time to build:") and decoded_line.strip().endswith("s (before serializing)"):
                 building_time = int(decoded_line.split()[3])
+                
         build_process.stdout.close()
         build_process.wait()
 
@@ -270,8 +282,6 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
     if not query_command:
         raise ValueError("Query command must be specified!!!")
 
-    #TODO: this must be updated after refactorin the search script in Rust
-    
     command_and_params = [
         configs['settings']['NUMA'] if "NUMA" in configs['settings'] else "",
         query_command, 
@@ -280,15 +290,28 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
         f"--k {configs['settings']['k']}",
         f"--ef-search {query_config['ef-search']}",
         f"--output-path {output_file}",
-        f"--m-pq {configs['pq_parameters']['m-pq']}" if "pq_parameters" in configs and "m-pq" in configs['pq_parameters'] else "",
     ]
+
+    # Add new unified binary parameters
+    if "vector-type" in configs:
+        command_and_params.append(f"--vector-type {configs['vector-type']}")
+    if "precision" in configs:
+        command_and_params.append(f"--precision {configs['precision']}")
+    if "quantizer" in configs:
+        command_and_params.append(f"--quantizer {configs['quantizer']}")
+    if "graph-type" in configs:
+        command_and_params.append(f"--graph-type {configs['graph-type']}")
+
+    # Add PQ-specific parameters if needed
+    if "pq_parameters" in configs and "m-pq" in configs['pq_parameters']:
+        command_and_params.append(f"--m-pq {configs['pq_parameters']['m-pq']}")
 
     command = " ".join(command_and_params)
 
     print(f"Executing query for subsection '{subsection_name}' with command:")
     print(command)
 
-    pattern = r"\tTotal: (\d+) Bytes" # Pattern to match the total memory usage
+    pattern = r"Total: (\d+) bytes"  # Pattern to match the total memory usage
 
     query_time = 0
     # Run the query and display output in real-time
@@ -459,7 +482,7 @@ def run_experiment(config_data):
         if metric != "":
             # Concatenate \t{metric} 
             metric = f"\t{metric}"
-        report_file.write(f"Subsection\tQuery Time (microsecs)\tRecall{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
+        report_file.write(f"Subsection\tQuery Time (microsecs)\tAccuracy{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
         if 'query' in config_data:
             for subsection, query_config in config_data['query'].items():
                 query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection)

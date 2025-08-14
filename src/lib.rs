@@ -1,12 +1,10 @@
 #![feature(iter_array_chunks)]
-#![feature(stdarch_x86_avx512)]
-#![feature(stdarch_x86_mm_shuffle)]
+#![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_mm_shuffle))]
 #![feature(portable_simd)]
 #![feature(thread_id_value)]
 #![feature(array_chunks)]
-#![feature(allocator_api)]
 
-mod topk_selectors;
+pub mod topk_selectors;
 
 use pyo3::types::PyModuleMethods;
 
@@ -26,6 +24,8 @@ pub mod clustering {
     pub use kmeans::KMeansBuilder;
 }
 
+pub mod graph;
+
 pub mod quantizers;
 pub use quantizers::decoder;
 pub use quantizers::encoder;
@@ -33,6 +33,7 @@ pub use quantizers::plain_quantizer;
 pub use quantizers::pq;
 pub use quantizers::quantizer;
 pub use quantizers::sparse_plain_quantizer;
+pub mod visited_set;
 
 pub mod datasets {
     pub mod dataset;
@@ -61,11 +62,8 @@ pub use distances::simd::utils as simd_utils;
 
 pub mod utils;
 
-pub mod hnsw {
-    pub mod graph_index;
-}
-
-pub mod hnsw_utils;
+pub mod indexes;
+pub use indexes::{graph_index, hnsw, hnsw_utils};
 
 pub mod index_serializer;
 pub use index_serializer::IndexSerializer;

@@ -1,13 +1,15 @@
-use crate::plain_quantizer::PlainQuantizer;
-use crate::{dot_product_unrolled_avx, read_fvecs_file, DenseDataset, DistanceType};
+use crate::dot_product_simd;
+use crate::indexes::hnsw_utils::Candidate;
 use core::hash::Hash;
 use csv::WriterBuilder;
 use rand::thread_rng;
 use rand::Rng;
-use std::collections::HashSet;
-use std::error::Error;
-use std::fs::{File, OpenOptions};
-use std::path::Path;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
+use std::fs::File;
+
+#[cfg(target_arch = "aarch64")]
+use half::f16;
 
 #[cfg(use_cblas)]
 use cblas_sys::{self, CBLAS_LAYOUT, CBLAS_TRANSPOSE};
@@ -62,7 +64,7 @@ pub enum MatrixLayout {
 ///
 /// # Examples
 /// ```
-/// use struttura_kANNolo::utils::{sgemm, MatrixLayout};
+/// use kannolo::utils::{sgemm, MatrixLayout};
 ///
 /// let m = 100; // Number of rows in a and c
 /// let k = 100; // Number of columns in a and rows in b
@@ -223,7 +225,7 @@ pub fn warm_up() {
 pub fn vectors_norm(vectors: &[f32], d: usize) -> Vec<f32> {
     vectors
         .chunks_exact(d)
-        .map(|v| dot_product_unrolled_avx(v, v))
+        .map(|v| dot_product_simd(v, v))
         .collect()
 }
 
@@ -245,117 +247,28 @@ pub fn compute_squared_l2_distance(query_vec: &[f32], centroids: &[f32], length:
         .sum() // Sum of all squared differences
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct BenchmarkResult {
-    m: usize,
-    ef_construction: usize,
-    ef_search: usize,
-    upper_beam: usize,
-    bounded_queue: bool,
-    distance: String,
-    recall: f64,
-    time_add: u128,
-    avg_time_add_per_query: u128,
-    time_search: u128,
-    avg_time_search_per_query: u128,
-}
+#[cfg(target_arch = "aarch64")]
+fn conv_f16_to_f32(src: &[f16], dst: &mut [f32]) {
+    let len = src.len();
+    let chunks = len / 8;
 
-impl BenchmarkResult {
-    pub fn new(
-        m: usize,
-        ef_construction: usize,
-        ef_search: usize,
-        upper_beam: usize,
-        bounded_queue: bool,
-        distance: String,
-        recall: f64,
-        time_add: u128,
-        avg_time_add_per_query: u128,
-        time_search: u128,
-        avg_time_search_per_query: u128,
-    ) -> Self {
-        Self {
-            m,
-            ef_construction,
-            ef_search,
-            upper_beam,
-            bounded_queue,
-            distance,
-            recall,
-            time_add,
-            avg_time_add_per_query,
-            time_search,
-            avg_time_search_per_query,
-        }
+    // process 8 at a time
+    for i in 0..chunks {
+        let base = i * 8;
+        dst[base + 0] = src[base + 0].to_f32();
+        dst[base + 1] = src[base + 1].to_f32();
+        dst[base + 2] = src[base + 2].to_f32();
+        dst[base + 3] = src[base + 3].to_f32();
+        dst[base + 4] = src[base + 4].to_f32();
+        dst[base + 5] = src[base + 5].to_f32();
+        dst[base + 6] = src[base + 6].to_f32();
+        dst[base + 7] = src[base + 7].to_f32();
     }
-}
 
-pub fn write_benchmark_result(
-    file_path: &str,
-    result: BenchmarkResult,
-) -> Result<(), Box<dyn Error>> {
-    let path = Path::new(file_path);
-
-    let mut wtr = if path.exists() {
-        // If the file already exists, open it in append mode
-        let file = OpenOptions::new().append(true).open(path)?;
-        csv::Writer::from_writer(file)
-    } else {
-        // If the file does not exist, create it
-        let file = OpenOptions::new().create(true).write(true).open(path)?;
-        let mut wtr = csv::Writer::from_writer(file);
-        // Write header if the file is newly created
-        wtr.write_record([
-            "M",
-            "ef_construction",
-            "ef_search",
-            "upper_beam",
-            "bounded_queue",
-            "distance",
-            "recall",
-            "time_add",
-            "avg_time_add_per_query",
-            "time_search",
-            "avg_time_search_per_query",
-        ])?;
-        wtr.flush()?;
-        wtr
-    };
-
-    // Write benchmark result
-    wtr.write_record(&[
-        result.m.to_string(),
-        result.ef_construction.to_string(),
-        result.ef_search.to_string(),
-        result.upper_beam.to_string(),
-        result.bounded_queue.to_string(),
-        result.distance,
-        result.recall.to_string(),
-        result.time_add.to_string(),
-        result.avg_time_add_per_query.to_string(),
-        result.time_search.to_string(),
-        result.avg_time_search_per_query.to_string(),
-    ])?;
-
-    wtr.flush()?;
-
-    Ok(())
-}
-
-pub fn read_dataset_sift1m(
-    distance: DistanceType,
-    folder_path: &str,
-    data_path: &str,
-) -> DenseDataset<PlainQuantizer<f32>> {
-    let filename = format!("{}/{}", folder_path, data_path);
-    let (data, d_data, _) = match read_fvecs_file(&filename) {
-        Ok((data, d_data, data_len)) => (data, d_data, data_len),
-        Err(err) => {
-            panic!("Error occurred while reading the file: {:?}", err);
-        }
-    };
-
-    DenseDataset::from_vec(data, d_data, PlainQuantizer::<f32>::new(d_data, distance))
+    // tail
+    for i in (chunks * 8)..len {
+        dst[i] = src[i].to_f32();
+    }
 }
 
 pub fn save_to_tsv(
@@ -416,4 +329,11 @@ pub fn compute_accuracy(
     }
 
     100.0 * sum_recall / (ground_truth_values.len() / gt_size) as f64
+}
+
+pub fn from_max_heap_to_min_heap(
+    max_heap: &mut BinaryHeap<Candidate>,
+) -> BinaryHeap<Reverse<Candidate>> {
+    let vec: Vec<_> = max_heap.drain().collect();
+    BinaryHeap::from(vec.into_iter().map(Reverse).collect::<Vec<_>>())
 }

@@ -341,7 +341,6 @@ impl GraphTrait for Graph {
             }
             mapping[id]
         } else {
-            // No mapping, return id itself (ground level case)
             id
         }
     }
@@ -377,7 +376,6 @@ impl GraphTrait for Graph {
         let final_mapping = if let Some(mapping) = &growable_graph.ids_mapping {
             Some(mapping.clone().into_boxed_slice())
         } else {
-            // Ground level case: create an identity mapping
             None
         };
 
@@ -467,18 +465,30 @@ impl GraphTrait for GraphFixedDegree {
         self.ids_mapping = Some(mapping.into_boxed_slice());
     }
 
+    #[inline]
+    fn get_external_id(&self, id: usize) -> usize {
+        if let Some(mapping) = &self.ids_mapping {
+            if id >= mapping.len() {
+                panic!("ID out of bounds: {}", id);
+            }
+            mapping[id]
+        } else {
+            id
+        }
+    }
+
     /// Creates a new `Graph` from a `GrowableGraph`.
     /// This function converts a `GrowableGraph` into a graph by removing the padding
     fn from_growable_graph(growable_graph: &GrowableGraph) -> Self {
+        let ids_mapping = if let Some(mapping) = &growable_graph.ids_mapping {
+            Some(mapping.clone().into_boxed_slice())
+        } else {
+            None
+        };
+
         GraphFixedDegree {
             neighbors: growable_graph.neighbors.clone().into_boxed_slice(),
-            ids_mapping: Some(
-                growable_graph
-                    .ids_mapping
-                    .clone()
-                    .unwrap()
-                    .into_boxed_slice(),
-            ),
+            ids_mapping: ids_mapping,
             max_degree: growable_graph.max_degree,
             n_edges: growable_graph.n_edges,
             n_nodes: growable_graph.n_nodes,
@@ -563,7 +573,6 @@ impl GraphTrait for GrowableGraph {
             }
             mapping[id]
         } else {
-            // No mapping, return id itself (ground level case)
             id
         }
     }

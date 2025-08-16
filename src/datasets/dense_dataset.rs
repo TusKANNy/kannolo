@@ -74,7 +74,7 @@ where
     }
 
     fn get_space_usage_bytes(&self) -> usize {
-        self.len() * self.dim() * std::mem::size_of::<Q::OutputItem>()
+        self.len() * self.quantizer.m() * std::mem::size_of::<Q::OutputItem>()
             + self.quantizer.get_space_usage_bytes()
     }
 

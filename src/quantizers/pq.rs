@@ -170,6 +170,7 @@ impl<const M: usize> ProductQuantizer<M> {
         let ksub: usize = 2_usize.pow(nbits as u32);
 
         let centroids = ProductQuantizer::<M>::train_centroids(training_data, ksub, dsub);
+
         ProductQuantizer {
             d,
             ksub,
@@ -211,6 +212,8 @@ impl<const M: usize> ProductQuantizer<M> {
                 acc
             },
         );
+
+        println!("K-Means finished");
 
         centroids
     }

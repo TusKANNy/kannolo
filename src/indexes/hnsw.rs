@@ -173,16 +173,15 @@ where
 
     fn print_space_usage_bytes(&self) {
         let dataset_size = self.dataset.get_space_usage_bytes();
-        let quantizer_size = self.dataset.quantizer().get_space_usage_bytes();
         let index_size = self
             .levels
             .iter()
             .map(|g| g.get_space_usage_bytes())
             .sum::<usize>();
 
-        let total_size = dataset_size + quantizer_size + index_size;
+        let total_size = dataset_size + index_size;
         println!(
-            "[######] Space usage: Dataset: {dataset_size} bytes, Quantizer: {quantizer_size} bytes, Index: {index_size} bytes, Total: {total_size} bytes"
+            "[######] Space usage: Dataset: {dataset_size} bytes, Index: {index_size} bytes, Total: {total_size} bytes"
         );
     }
 

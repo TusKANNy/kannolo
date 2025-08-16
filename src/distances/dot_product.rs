@@ -150,7 +150,6 @@ where
         .array_chunks::<N_LANES>();
 
     for chunk in chunk_iter {
-        //for i in 0..N_LANES { // Slightly faster withour this for.
         result[0] += unsafe {
             (*query_slice.get_unchecked(*chunk[0].0 as usize))
                 .to_f32()

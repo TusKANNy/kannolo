@@ -69,8 +69,19 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
     type QueryType = SparseVector1D<&'a [u16], &'a [T]>;
 
     #[inline]
-    fn new(query: Self::QueryType, _dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
-        let mut dense_query = vec![T::zero(); query.d];
+    fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self {
+        // Use the maximum between dataset dimensionality and query's max component + 1
+        let dataset_dim = dataset.dim();
+        let query_max_component = query
+            .components_as_slice()
+            .iter()
+            .map(|&idx| idx as usize)
+            .max()
+            .unwrap_or(0);
+        let dense_dim = std::cmp::max(dataset_dim, query_max_component + 1);
+
+        let mut dense_query = vec![T::zero(); dense_dim];
+
         for (&i, &v) in query
             .components_as_slice()
             .iter()
@@ -90,8 +101,9 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
     #[inline]
     fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
         let document = dataset.get(index);
-
-        -1.0 * dot_product_dense_sparse(&self.dense_query, &document)
+        let dot_product = dot_product_dense_sparse(&self.dense_query, &document);
+        let result = -1.0 * dot_product;
+        result
     }
 
     #[inline]

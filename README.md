@@ -36,6 +36,13 @@ Install Rust (via `rustup`):
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
+
+Activate nightly:
+```bash
+rustup install nightly
+rustup default nightly
+```
+
 #### Installation
 ```bash
 RUSTFLAGS="-C target-cpu=native" pip install --no-binary :all: kannolo

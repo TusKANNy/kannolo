@@ -281,26 +281,56 @@ impl DensePlainHNSWf16 {
         Ok(DensePlainHNSWf16 { index })
     }
 
-    /// Build a dense plain index from a 1D NumPy array given the dimensionality.
-    /// - `data_vec`: a 1D f32 array of len num_docs * dim
-    /// - `dim`: dimensionality of the data
-    /// - `m`: number of neighbors per node
-    /// - `ef_construction`: candidate pool size during index construction
-    /// - `metric`: either "l2" for Euclidean or "ip" for inner product
+    /// Build a dense plain HNSW index from a 1D NumPy array with f16 precision.
+    /// 
+    /// This function builds an HNSW (Hierarchical Navigable Small World) index on 
+    /// f16 (half-precision) floating point vectors.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `data_vec` - A 1D NumPy array of uint16 values representing f16 bit patterns.
+    ///                Shape should be (num_docs * dim). To convert from f16:
+    ///                `data_f16.view(np.uint16)`, where data_f16 is your f16 array.
+    /// * `dim` - Dimensionality of each vector in the dataset.
+    /// * `m` - Number of neighbors per node in the HNSW graph (default: 32).
+    ///         Higher values improve recall but increase memory usage and build time.
+    /// * `ef_construction` - Size of the dynamic candidate list during construction (default: 200).
+    ///                       Higher values improve index quality but increase build time.
+    /// * `metric` - Distance metric to use (default: "ip").
+    ///              "ip" for inner product, "l2" for Euclidean distance.
+    /// 
+    /// # Returns
+    /// 
+    /// A new DensePlainHNSWf16 index ready for searching.
+    /// 
+    /// # Example
+    /// 
+    /// ```python
+    /// import numpy as np
+    /// # Create f16 data and convert to bit patterns
+    /// data_f16 = np.random.randn(1000, 128).astype(np.float16)
+    /// data_bits = data_f16.view(np.uint16)
+    /// 
+    /// # Build the index
+    /// index = DensePlainHNSWf16.build_from_array(
+    ///     data_bits, dim=128, m=32, ef_construction=200, metric="ip"
+    /// )
+    /// ```
     #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()))]
+    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()), text_signature = "(data_vec, dim, m=32, ef_construction=200, metric='ip')")]
     pub fn build_from_array(
-        data_vec: PyReadonlyArray1<f32>,
+        data_vec: PyReadonlyArray1<u16>,
         dim: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        // Convert the f32 data to f16.
+        // Interpret u16 values as f16 bit patterns
+        println!("Reading data as f16 from u16 bit patterns");
         let data_vec: Vec<f16> = data_vec
             .as_slice()?
             .iter()
-            .map(|&v| f16::from_f32(v))
+            .map(|&bits| f16::from_bits(bits))
             .collect();
 
         // Determine the distance type.
@@ -346,16 +376,38 @@ impl DensePlainHNSWf16 {
         Ok(DensePlainHNSWf16 { index })
     }
 
-    /// Search using a single query vector.
-    ///
-    /// Parameters:
-    /// - `query`: a 1D NumPy array (f32) representing the query vector.
-    /// - `k`: number of nearest neighbors to return.
-    /// - `ef_search`: parameter controlling the candidate pool size during search.
-    ///
-    /// Returns a tuple (distances, ids) where:
-    /// - `distances` is a 1D NumPy array (f32) of scores.
-    /// - `ids` is a 1D NumPy array (i64) of document IDs.
+    /// Search for the k nearest neighbors of a query vector.
+    /// 
+    /// Performs approximate nearest neighbor search using the HNSW index
+    /// with f16 precision vectors.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `query` - A 1D NumPy array of float32 values representing the query vector.
+    ///             Should have the same dimensionality as the indexed vectors.
+    /// * `k` - Number of nearest neighbors to return.
+    /// * `ef_search` - Size of the dynamic candidate list during search.
+    ///                 Higher values improve recall but increase search time.
+    ///                 Should be >= k. Typical values: 10-400.
+    /// 
+    /// # Returns
+    /// 
+    /// A tuple containing:
+    /// - distances: numpy.ndarray of float32 - similarity scores for the k nearest neighbors
+    /// - ids: numpy.ndarray of int64 - document IDs for the k nearest neighbors
+    /// 
+    /// For "ip" metric: higher distances = more similar
+    /// For "l2" metric: lower distances = more similar
+    /// 
+    /// # Example
+    /// 
+    /// ```python
+    /// # Search for 10 nearest neighbors
+    /// query = np.random.randn(128).astype(np.float32)
+    /// distances, ids = index.search(query, k=10, ef_search=100)
+    /// print(f"Found {len(ids)} neighbors")
+    /// print(f"Best match: doc_id={ids[0]}, score={distances[0]}")
+    /// ```
     pub fn search(
         &self,
         query: PyReadonlyArray1<f32>,
@@ -796,21 +848,47 @@ impl SparsePlainHNSWf16 {
         Ok(SparsePlainHNSWf16 { index })
     }
 
-    /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
-    ///
-    /// Parameters:
-    /// - `components`: a 1D NumPy array (i32) of component indices.
-    /// - `values`: a 1D NumPy array (f32) of values corresponding to the components.
-    /// - `offsets`: a 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
-    /// - `d`: dimensionality of the vector space
-    /// - `m`: number of neighbors per node
-    /// - `ef_construction`: candidate pool size during construction
-    /// - `metric`: either "l2" or "ip"
+    /// Build a sparse plain index from arrays of components, f16 values, and offsets.
+    /// 
+    /// Creates a sparse HNSW index with f16 precision for memory efficiency
+    /// while maintaining good search quality for sparse vector data.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `components` - A 1D NumPy array (i32) of component indices for non-zero elements.
+    /// * `values` - A 1D NumPy array (u16) of f16 values stored as bit patterns.
+    ///              To convert from f16: `values_f16.view(np.uint16)` where values_f16 is your f16 array.
+    /// * `offsets` - A 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
+    /// * `d` - Dimensionality of the vector space (total possible dimensions).
+    /// * `m` - Number of neighbors per node in the HNSW graph (default: 32).
+    /// * `ef_construction` - Size of the dynamic candidate list during construction (default: 200).
+    /// * `metric` - Distance metric to use (default: "ip").
+    ///              "ip" for inner product, "l2" for Euclidean distance.
+    /// 
+    /// # Returns
+    /// 
+    /// A new SparsePlainHNSWf16 index ready for searching.
+    /// 
+    /// # Example
+    /// 
+    /// ```python
+    /// import numpy as np
+    /// # Example sparse data with f16 values
+    /// components = np.array([0, 5, 10, 2, 8], dtype=np.int32)
+    /// values_f16 = np.array([0.5, 1.2, -0.3, 0.8, 2.1], dtype=np.float16)
+    /// values_bits = values_f16.view(np.uint16)  # Convert to bit patterns
+    /// offsets = np.array([0, 3, 5], dtype=np.int32)  # Two documents
+    /// 
+    /// # Build the index
+    /// index = SparsePlainHNSWf16.build_from_arrays(
+    ///     components, values_bits, offsets, d=128, m=32, ef_construction=200, metric="ip"
+    /// )
+    /// ```
     #[staticmethod]
     #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
-        values: PyReadonlyArray1<f32>,
+        values: PyReadonlyArray1<u16>,
         offsets: PyReadonlyArray1<i32>,
         d: usize,
         m: usize,
@@ -823,11 +901,13 @@ impl SparsePlainHNSWf16 {
             .iter()
             .map(|x| *x as u16)
             .collect::<Vec<_>>();
+        // Convert u16 bit patterns directly to f16 values
+        println!("Reading sparse data as f16 from u16 bit patterns");
         let values_vec = values
             .to_vec()
             .unwrap()
             .iter()
-            .map(|&x| half::f16::from_f32(x))
+            .map(|&bits| half::f16::from_bits(bits))
             .collect::<Vec<_>>();
         let offsets_vec = offsets
             .to_vec()

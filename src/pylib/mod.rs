@@ -1108,6 +1108,7 @@ impl SparsePlainHNSWf16 {
 }
 
 // PQ
+#[derive(serde::Serialize)]
 enum DensePQHNSWEnum {
     PQ8(HNSW<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>, Graph>),
     PQ16(HNSW<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>, Graph>),
@@ -1419,6 +1420,13 @@ impl DensePQHNSW {
             }
         };
         Ok(DensePQHNSW { inner })
+    }
+
+    /// Save the PQ index to a file.
+    pub fn save(&self, path: &str) -> PyResult<()> {
+        IndexSerializer::save_index(path, &self.inner).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+        })
     }
 
     /// Search using a single query vector.

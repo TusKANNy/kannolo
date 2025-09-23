@@ -57,9 +57,6 @@ If no compatible wheel exists, pip will download the source distribution and att
 pip install kannolo
 ```
 
-Prebuilt wheels are available for Linux platforms (x86_64, i686, aarch64) with different Python implementation (CPython, PyPy) for linux distros using glibc 2.17 or later.
-Wheels are also available x86_64 platforms with linux distros using musl 1.2 or later.
-
 ### Rust 
 
 This command allows you to compile all the Rust binaries contained in `src/bin`

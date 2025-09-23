@@ -282,12 +282,12 @@ impl DensePlainHNSWf16 {
     }
 
     /// Build a dense plain HNSW index from a 1D NumPy array with f16 precision.
-    /// 
-    /// This function builds an HNSW (Hierarchical Navigable Small World) index on 
+    ///
+    /// This function builds an HNSW (Hierarchical Navigable Small World) index on
     /// f16 (half-precision) floating point vectors.
-    /// 
+    ///
     /// # Parameters
-    /// 
+    ///
     /// * `data_vec` - A 1D NumPy array of uint16 values representing f16 bit patterns.
     ///                Shape should be (num_docs * dim). To convert from f16:
     ///                `data_f16.view(np.uint16)`, where data_f16 is your f16 array.
@@ -298,19 +298,19 @@ impl DensePlainHNSWf16 {
     ///                       Higher values improve index quality but increase build time.
     /// * `metric` - Distance metric to use (default: "ip").
     ///              "ip" for inner product, "l2" for Euclidean distance.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new DensePlainHNSWf16 index ready for searching.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```python
     /// import numpy as np
     /// # Create f16 data and convert to bit patterns
     /// data_f16 = np.random.randn(1000, 128).astype(np.float16)
     /// data_bits = data_f16.view(np.uint16)
-    /// 
+    ///
     /// # Build the index
     /// index = DensePlainHNSWf16.build_from_array(
     ///     data_bits, dim=128, m=32, ef_construction=200, metric="ip"
@@ -377,30 +377,30 @@ impl DensePlainHNSWf16 {
     }
 
     /// Search for the k nearest neighbors of a query vector.
-    /// 
+    ///
     /// Performs approximate nearest neighbor search using the HNSW index
     /// with f16 precision vectors.
-    /// 
+    ///
     /// # Parameters
-    /// 
+    ///
     /// * `query` - A 1D NumPy array of float32 values representing the query vector.
     ///             Should have the same dimensionality as the indexed vectors.
     /// * `k` - Number of nearest neighbors to return.
     /// * `ef_search` - Size of the dynamic candidate list during search.
     ///                 Higher values improve recall but increase search time.
     ///                 Should be >= k. Typical values: 10-400.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A tuple containing:
     /// - distances: numpy.ndarray of float32 - similarity scores for the k nearest neighbors
     /// - ids: numpy.ndarray of int64 - document IDs for the k nearest neighbors
-    /// 
+    ///
     /// For "ip" metric: higher distances = more similar
     /// For "l2" metric: lower distances = more similar
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```python
     /// # Search for 10 nearest neighbors
     /// query = np.random.randn(128).astype(np.float32)
@@ -849,12 +849,12 @@ impl SparsePlainHNSWf16 {
     }
 
     /// Build a sparse plain index from arrays of components, f16 values, and offsets.
-    /// 
+    ///
     /// Creates a sparse HNSW index with f16 precision for memory efficiency
     /// while maintaining good search quality for sparse vector data.
-    /// 
+    ///
     /// # Parameters
-    /// 
+    ///
     /// * `components` - A 1D NumPy array (i32) of component indices for non-zero elements.
     /// * `values` - A 1D NumPy array (u16) of f16 values stored as bit patterns.
     ///              To convert from f16: `values_f16.view(np.uint16)` where values_f16 is your f16 array.
@@ -864,13 +864,13 @@ impl SparsePlainHNSWf16 {
     /// * `ef_construction` - Size of the dynamic candidate list during construction (default: 200).
     /// * `metric` - Distance metric to use (default: "ip").
     ///              "ip" for inner product, "l2" for Euclidean distance.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new SparsePlainHNSWf16 index ready for searching.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```python
     /// import numpy as np
     /// # Example sparse data with f16 values
@@ -878,7 +878,7 @@ impl SparsePlainHNSWf16 {
     /// values_f16 = np.array([0.5, 1.2, -0.3, 0.8, 2.1], dtype=np.float16)
     /// values_bits = values_f16.view(np.uint16)  # Convert to bit patterns
     /// offsets = np.array([0, 3, 5], dtype=np.int32)  # Two documents
-    /// 
+    ///
     /// # Build the index
     /// index = SparsePlainHNSWf16.build_from_arrays(
     ///     components, values_bits, offsets, d=128, m=32, ef_construction=200, metric="ip"
@@ -1424,9 +1424,68 @@ impl DensePQHNSW {
 
     /// Save the PQ index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
-        IndexSerializer::save_index(path, &self.inner).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-        })
+        match self.inner {
+            DensePQHNSWEnum::PQ8(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ16(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ32(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<32>>, ProductQuantizer<32>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ48(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<48>>, ProductQuantizer<48>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ64(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<64>>, ProductQuantizer<64>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ96(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<96>>, ProductQuantizer<96>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ128(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<128>>, ProductQuantizer<128>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ192(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<192>>, ProductQuantizer<192>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ256(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<256>>, ProductQuantizer<256>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePQHNSWEnum::PQ384(ref index) => IndexSerializer::save_index::<
+                HNSW<DenseDataset<ProductQuantizer<384>>, ProductQuantizer<384>, Graph>,
+            >(path, &index)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+        }
     }
 
     /// Search using a single query vector.

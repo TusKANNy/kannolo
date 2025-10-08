@@ -263,8 +263,7 @@ impl<const M: usize> ProductQuantizer<M> {
             }
         }
 
-        let final_distance = distance[0] + distance[1] + distance[2] + distance[3];
-        final_distance
+        distance[0] + distance[1] + distance[2] + distance[3]
     }
 
     #[inline]
@@ -550,7 +549,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
 
         Self {
             _query: query,
-            distance_table: distance_table,
+            distance_table,
         }
     }
 

@@ -488,7 +488,7 @@ impl GraphTrait for GraphFixedDegree {
 
         GraphFixedDegree {
             neighbors: growable_graph.neighbors.clone().into_boxed_slice(),
-            ids_mapping: ids_mapping,
+            ids_mapping,
             max_degree: growable_graph.max_degree,
             n_edges: growable_graph.n_edges,
             n_nodes: growable_graph.n_nodes,

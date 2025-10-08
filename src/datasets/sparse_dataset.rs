@@ -163,9 +163,7 @@ where
             DistanceType::Euclidean => {
                 panic!("Euclidean distance is not supported for sparse datasets.")
             }
-            DistanceType::DotProduct => {
-                -1.0 * sparse_dot_product_with_merge(&document1, &document2)
-            }
+            DistanceType::DotProduct => -sparse_dot_product_with_merge(&document1, &document2),
         }
     }
 

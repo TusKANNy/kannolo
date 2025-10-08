@@ -2,7 +2,6 @@
 #![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_mm_shuffle))]
 #![feature(portable_simd)]
 #![feature(thread_id_value)]
-#![feature(array_chunks)]
 
 pub mod topk_selectors;
 

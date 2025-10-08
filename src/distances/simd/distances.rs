@@ -1,9 +1,9 @@
 #[cfg(target_arch = "x86_64")]
 use super::transpose::{transpose_8x2, transpose_8x4, transpose_8x8};
 #[cfg(target_arch = "x86_64")]
-use super::utils::{
-    horizontal_sum_128, horizontal_sum_256, squared_l2_dist_128, squared_l2_dist_256,
-};
+use super::utils::{horizontal_sum_128, squared_l2_dist_128};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use super::utils::{horizontal_sum_256, squared_l2_dist_256};
 use crate::utils::compute_squared_l2_distance;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -174,7 +174,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     distances
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: usize) -> usize {
     let mut curr_idx = 0;
@@ -394,7 +394,7 @@ pub unsafe fn compute_distance_table_avx2_d4(
 ///    - Uses scalar operations to compute the distance and update the minimum distance and index.
 ///
 #[inline]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 unsafe fn find_nearest_centroid_avx2_d8(
     query_vec: &[f32],
     centroids: &[f32],
@@ -552,7 +552,7 @@ unsafe fn find_nearest_centroid_avx2_d8(
 ///      distances are computed individually using scalar operations.
 ///
 #[inline]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 unsafe fn compute_distances_d1(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -625,7 +625,7 @@ unsafe fn compute_distances_d1(
 ///    - Stores the total distances in `distances`.
 ///
 #[inline]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 unsafe fn compute_distances_d12(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -854,11 +854,13 @@ mod tests {
     const FLOAT_TOLERANCE: f32 = 0.0001;
 
     /// Helper function to create a sample query vector
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn sample_query_vec(dsub: usize) -> Vec<f32> {
         (0..dsub).map(|i| i as f32).collect()
     }
 
     /// Helper function to create a set of sample centroids
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn sample_centroids(ksub: usize, dsub: usize) -> Vec<f32> {
         (0..ksub * dsub).map(|i| i as f32).collect()
     }
@@ -875,6 +877,7 @@ mod tests {
     /// Assertions:
     /// - The returned index of the nearest centroid matches the expected index.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_find_nearest_centroid_avx2_d4() {
         let query_vec = sample_query_vec(4);
         let centroids = sample_centroids(10, 4);
@@ -903,6 +906,7 @@ mod tests {
     /// - Ensures that the index of the nearest centroid returned by the function
     ///   is equal to the expected index.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_find_nearest_centroid_avx2_d8() {
         let query_vec = sample_query_vec(8);
         let centroids = sample_centroids(10, 8);
@@ -931,6 +935,7 @@ mod tests {
     /// - Each calculated distance is compared against the expected distance, within a small
     ///   tolerance level, to account for floating-point precision issues.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_compute_distances_d1() {
         let query_vec = vec![3.0];
         let centroids = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -963,6 +968,7 @@ mod tests {
     /// - Compares the calculated distances with the expected values within a defined tolerance,
     ///   ensuring accuracy of the distance computation.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_compute_distances_d12() {
         let query_vec = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
         let centroids = vec![0.0; 12 * 3];

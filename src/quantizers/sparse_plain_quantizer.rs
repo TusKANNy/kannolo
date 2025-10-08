@@ -102,8 +102,7 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
     fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
         let document = dataset.get(index);
         let dot_product = dot_product_dense_sparse(&self.dense_query, &document);
-        let result = -1.0 * dot_product;
-        result
+        -dot_product
     }
 
     #[inline]

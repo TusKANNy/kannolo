@@ -310,7 +310,7 @@ impl DotProduct<f32> for f32 {
                 return dot_product_avx(query, values);
             }
             // Fallback to scalar if AVX2 is not available
-            return dense_dot_product_unrolled(query, values);
+            dense_dot_product_unrolled(query, values)
         }
         // aarch64 NEON path
         #[cfg(target_arch = "aarch64")]
@@ -338,10 +338,7 @@ impl DotProduct<f32> for f32 {
             return dot_product_neon(query, values);
         }
         // Scalar fallback
-        #[cfg(not(any(
-            all(target_arch = "x86_64", target_feature = "avx2"),
-            target_arch = "aarch64"
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         dense_dot_product_unrolled(query, values)
     }
 
@@ -388,7 +385,7 @@ impl DotProduct<f32> for f32 {
                 return dot_product_batch_4_avx2(query, vectors);
             }
             // Fallback to scalar if AVX2 is not available
-            return dense_dot_product_batch_4_unrolled(query, vectors);
+            dense_dot_product_batch_4_unrolled(query, vectors)
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -433,10 +430,7 @@ impl DotProduct<f32> for f32 {
             return dot_product_batch_4_neon(query, vectors);
         }
         // Scalar fallback
-        #[cfg(not(any(
-            all(target_arch = "x86_64", target_feature = "avx2"),
-            target_arch = "aarch64"
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }
@@ -492,7 +486,7 @@ impl DotProduct<f16> for f16 {
                 return dot_product_avx2(query, values);
             }
             // Fallback to scalar if AVX2+F16C is not available
-            return dense_dot_product_unrolled(query, values);
+            dense_dot_product_unrolled(query, values)
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -540,10 +534,7 @@ impl DotProduct<f16> for f16 {
         }
 
         // Scalar fallback
-        #[cfg(not(any(
-            all(target_arch = "x86_64", target_feature = "avx2"),
-            target_arch = "aarch64"
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         dense_dot_product_unrolled(query, values)
     }
 
@@ -606,7 +597,7 @@ impl DotProduct<f16> for f16 {
                 return dot_product_batch_4_avx2(query, vectors);
             }
             // Fallback to scalar if AVX2+F16C is not available
-            return dense_dot_product_batch_4_unrolled(query, vectors);
+            dense_dot_product_batch_4_unrolled(query, vectors)
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -681,10 +672,7 @@ impl DotProduct<f16> for f16 {
         }
 
         // fallback scalar
-        #[cfg(not(any(
-            all(target_arch = "x86_64", target_feature = "avx2"),
-            target_arch = "aarch64"
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         dense_dot_product_batch_4_unrolled(query, vectors)
     }
 }

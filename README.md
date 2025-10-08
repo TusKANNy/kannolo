@@ -2,7 +2,7 @@
 
 <h1 align="center">kANNolo</h1>
 <p align="center">
-    <img width="300px" src="/imgs/kannolo_with_text.jpeg" />
+    <img width="300px" src="https://github.com/TusKANNy/kannolo/blob/main/imgs/kannolo_with_text.jpeg" />
 </p>
 
 <p align="center">

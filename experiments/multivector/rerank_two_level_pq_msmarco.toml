@@ -1,0 +1,48 @@
+name =          "sparse_hnsw_rerank_plain"
+title =         "Rerank on MS-MARCOv1 with two-levels quantization encoded multivectors"
+description =   "Two-stage search: sparse HNSW + two-levels quantization encoded multivector reranking on MS-MARCOv1"
+dataset =       "MS-MARCOv1"
+build-command = "./target/release/hnsw_build"
+query-command = "./target/release/hnsw_rerank_search"
+graph-type = "fixed"
+
+[settings]
+k =             10
+n-runs =        1
+NUMA =        "numactl --physcpubind='0-15' --localalloc"
+build =         false
+metric =        "RR@10"
+
+[folder]
+data =          "/data1/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data" # Path to sparse dataset for first-stage (e.g., ms_marco_cocondenser folder)
+index =         "/data3/silvio/indexes/kannolo" # Folder containing the kANNolo graph index
+qrels_path =    "/data1/knn_datasets/sparse_datasets/msmarco_v1_passage/qrels.dev.small.tsv" # Path to qrels file (e.g., qrels.dev.small.tsv)
+experiment =    "."
+
+[filename]
+dataset =       "" 
+queries =       "queries.bin"
+groundtruth =   "groundtruth.tsv"
+doc_ids =       "doc_ids.npy"
+query_ids =     "queries_ids.npy"
+index =         "ms_marco_cocondenser_fixed" # Graph index filename (e.g., "index_ms_marco_cocondenser", parameters will be added automatically)
+
+[indexing_parameters]
+m =            32
+efc =          2000
+metric =       "ip"
+
+[reranking]
+multivec_data_dir = "/data2/cosimorulli/indexes_for_silvio/indexes_jmpq/260k_m32" # Path to compressed multivector data (e.g., ms_marco_jmpq16 or ms_marco_mopq32 folder)
+k_candidates =       25
+multivec_type =      "two_levels" # either "plain", "pq" or "two_levels"
+vector_dim =        128
+pq_m =             32   # Should match the number of subspaces of the PQ dataset in multivec_data_dir
+alpha =            0.1  # Optional: pruning parameter (filters candidates below threshold)
+beta =             2   # Optional: early exit parameter (stops after beta consecutive stalls)
+
+[query]
+    [query.efs_10]
+    ef-search =      10
+    [query.efs_800]
+    ef-search =      800

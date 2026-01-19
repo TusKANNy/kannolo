@@ -8,8 +8,8 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 
 use crate::graph::{GraphTrait, GrowableGraph};
-use crate::graph_index::GraphIndex;
-use crate::quantizer::{IdentityQuantizer, Quantizer, QueryEvaluator};
+use crate::index::Index;
+use crate::quantizer::{self, IdentityQuantizer, Quantizer, QueryEvaluator};
 use crate::DotProduct;
 use crate::EuclideanDistance;
 use crate::{hnsw_utils::*, Dataset, DistanceType, Float, GrowableDataset};
@@ -151,7 +151,7 @@ where
     }
 }
 
-impl<D, Q, G> GraphIndex<D, Q, G> for HNSW<D, Q, G>
+impl<D, Q, G> Index<D, Q> for HNSW<D, Q, G>
 where
     D: Dataset<Q> + GrowableDataset<Q> + Sync,
     Q: Quantizer<DatasetType = D>,
@@ -255,7 +255,7 @@ where
     /// 4. It iterates through all HNSW levels, from highest to lowest, inserting nodes.
     ///    - A hybrid sequential/parallel strategy is used based on the number of nodes at each level.
     /// 5. It finalizes the graph structures and creates the final `HNSW` index struct.
-    fn build_from_dataset<'a, BD, IQ>(
+    fn build_index<'a, BD, IQ>(
         source_dataset: &'a BD,
         quantizer: Q,
         build_params: &Self::BuildParams,
@@ -370,6 +370,7 @@ where
 
         let mut dataset = D::new(quantizer, source_dataset.dim());
         for id in 0..source_dataset.len() {
+            // Encode and add each vector to the final dataset.
             dataset.push(&source_dataset.get(id));
         }
 

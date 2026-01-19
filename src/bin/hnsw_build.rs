@@ -3,7 +3,7 @@ use std::{fmt::Debug, time::Instant};
 use clap::{Parser, ValueEnum};
 use half::f16;
 use kannolo::graph::{Graph, GraphFixedDegree};
-use kannolo::graph_index::GraphIndex;
+use kannolo::index::Index;
 use kannolo::hnsw::{HNSWBuildParams, HNSW};
 use kannolo::plain_quantizer::PlainQuantizer;
 use kannolo::pq::ProductQuantizer;
@@ -11,11 +11,11 @@ use kannolo::sparse_plain_quantizer::SparsePlainQuantizer;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use std::process;
 
-use kannolo::{read_numpy_f32_flatten_2d, DenseDataset, SparseDataset, Vector1D};
+use kannolo::{read_numpy_f32_flatten_2d, DenseDataset, SparseDataset, VectorType};
 use kannolo::{Dataset, DistanceType, IndexSerializer};
 
 #[derive(Debug, Clone, ValueEnum)]
-enum VectorType {
+enum VectorRepresentation {
     Dense,
     Sparse,
 }
@@ -51,7 +51,7 @@ struct Args {
 
     /// The type of vectors (dense or sparse).
     #[clap(long, value_enum)]
-    vector_type: VectorType,
+    vector_representation: VectorRepresentation,
 
     /// The precision (f16 or f32). Note: PQ always uses f32.
     #[clap(long, value_enum)]
@@ -104,12 +104,12 @@ fn main() {
     let args: Args = Args::parse();
 
     // Validate arguments
-    match (&args.vector_type, &args.quantizer) {
-        (VectorType::Sparse, QuantizerType::Pq) => {
+    match (&args.vector_representation, &args.quantizer) {
+        (VectorRepresentation::Sparse, QuantizerType::Pq) => {
             eprintln!("Error: PQ quantizer is only available for dense vectors.");
             process::exit(1);
         }
-        (VectorType::Dense, QuantizerType::Pq) if matches!(args.precision, Precision::F16) => {
+        (VectorRepresentation::Dense, QuantizerType::Pq) if matches!(args.precision, Precision::F16) => {
             eprintln!("Warning: PQ always uses f32 precision, ignoring f16 specification.");
         }
         _ => {}
@@ -145,55 +145,55 @@ fn main() {
     );
 
     match (
-        &args.vector_type,
+        &args.vector_representation,
         &args.quantizer,
         &args.precision,
         &args.graph_type,
     ) {
         // Dense vectors with plain quantizer
-        (VectorType::Dense, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
+        (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
             build_dense_plain_f32_standard(&args, distance, &config);
         }
-        (VectorType::Dense, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
+        (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
             build_dense_plain_f32_fixed(&args, distance, &config);
         }
-        (VectorType::Dense, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
+        (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
             build_dense_plain_f16_standard(&args, distance, &config);
         }
-        (VectorType::Dense, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
+        (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
             build_dense_plain_f16_fixed(&args, distance, &config);
         }
         // Dense vectors with PQ quantizer (always f32)
-        (VectorType::Dense, QuantizerType::Pq, _, GraphType::Standard) => {
+        (VectorRepresentation::Dense, QuantizerType::Pq, _, GraphType::Standard) => {
             build_dense_pq_standard(&args, distance, &config);
         }
-        (VectorType::Dense, QuantizerType::Pq, _, GraphType::FixedDegree) => {
+        (VectorRepresentation::Dense, QuantizerType::Pq, _, GraphType::FixedDegree) => {
             build_dense_pq_fixed(&args, distance, &config);
         }
         // Sparse vectors with plain quantizer (f16 only)
-        (VectorType::Sparse, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
+        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
             build_sparse_plain_f16_standard(&args, distance, &config);
         }
-        (VectorType::Sparse, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
+        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
             build_sparse_plain_f16_fixed(&args, distance, &config);
         }
-        (VectorType::Sparse, QuantizerType::Plain, Precision::F32, _) => {
+        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F32, _) => {
             eprintln!("Error: Sparse vectors currently only support f16 precision.");
             process::exit(1);
         }
         // This case is already handled by validation above
-        (VectorType::Sparse, QuantizerType::Pq, _, _) => unreachable!(),
+        (VectorRepresentation::Sparse, QuantizerType::Pq, _, _) => unreachable!(),
     }
 }
 
 fn build_dense_plain_f32_standard(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
     let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
     let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(dataset.dim(), distance);
+    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>, Graph> =
-        HNSW::build_from_dataset(&dataset, quantizer, config);
+        HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -206,14 +206,14 @@ fn build_dense_plain_f32_standard(args: &Args, distance: DistanceType, config: &
 fn build_dense_plain_f32_fixed(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
     let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
     let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(dataset.dim(), distance);
+    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<
         DenseDataset<PlainQuantizer<f32>, Vec<f32>>,
         PlainQuantizer<f32>,
         GraphFixedDegree,
-    > = HNSW::build_from_dataset(&dataset, quantizer, config);
+    > = HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -227,11 +227,11 @@ fn build_dense_plain_f16_standard(args: &Args, distance: DistanceType, config: &
     let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
     let docs_vec = docs_vec.into_iter().map(f16::from_f32).collect();
     let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f16>::new(d, distance));
-    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(dataset.dim(), distance);
+    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<DenseDataset<PlainQuantizer<f16>, Vec<f16>>, PlainQuantizer<f16>, Graph> =
-        HNSW::build_from_dataset(&dataset, quantizer, config);
+        HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -245,14 +245,14 @@ fn build_dense_plain_f16_fixed(args: &Args, distance: DistanceType, config: &HNS
     let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
     let docs_vec = docs_vec.into_iter().map(f16::from_f32).collect();
     let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f16>::new(d, distance));
-    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(dataset.dim(), distance);
+    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<
         DenseDataset<PlainQuantizer<f16>, Vec<f16>>,
         PlainQuantizer<f16>,
         GraphFixedDegree,
-    > = HNSW::build_from_dataset(&dataset, quantizer, config);
+    > = HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -321,15 +321,15 @@ fn build_dense_pq_typed_standard<const M: usize>(
     }
     let training_dataset = DenseDataset::from_vec(
         training_vec,
-        dataset.dim(),
-        PlainQuantizer::<f32>::new(dataset.dim(), distance),
+        Dataset::dim(dataset),
+        PlainQuantizer::<f32>::new(Dataset::dim(dataset), distance),
     );
 
     let pq = ProductQuantizer::<M>::train(&training_dataset, args.nbits, distance);
 
     let start_time = Instant::now();
     let index: HNSW<DenseDataset<ProductQuantizer<M>, Vec<u8>>, ProductQuantizer<M>, Graph> =
-        HNSW::build_from_dataset(dataset, pq, config);
+        HNSW::build_index(dataset, pq, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -352,8 +352,8 @@ fn build_dense_pq_typed_fixed<const M: usize>(
     }
     let training_dataset = DenseDataset::from_vec(
         training_vec,
-        dataset.dim(),
-        PlainQuantizer::<f32>::new(dataset.dim(), distance),
+        Dataset::dim(dataset),
+        PlainQuantizer::<f32>::new(Dataset::dim(dataset), distance),
     );
 
     let pq = ProductQuantizer::<M>::train(&training_dataset, args.nbits, distance);
@@ -363,7 +363,7 @@ fn build_dense_pq_typed_fixed<const M: usize>(
         DenseDataset<ProductQuantizer<M>, Vec<u8>>,
         ProductQuantizer<M>,
         GraphFixedDegree,
-    > = HNSW::build_from_dataset(dataset, pq, config);
+    > = HNSW::build_index(dataset, pq, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -390,11 +390,11 @@ fn build_sparse_plain_f16_standard(args: &Args, distance: DistanceType, config: 
     )
     .unwrap();
 
-    let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
+    let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>, Graph> =
-        HNSW::build_from_dataset(&dataset, quantizer, config);
+        HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",
@@ -421,14 +421,14 @@ fn build_sparse_plain_f16_fixed(args: &Args, distance: DistanceType, config: &HN
     )
     .unwrap();
 
-    let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
+    let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
 
     let start_time = Instant::now();
     let index: HNSW<
         SparseDataset<SparsePlainQuantizer<f16>>,
         SparsePlainQuantizer<f16>,
         GraphFixedDegree,
-    > = HNSW::build_from_dataset(&dataset, quantizer, config);
+    > = HNSW::build_index(&dataset, quantizer, config);
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",

@@ -28,6 +28,8 @@ pub mod graph;
 pub mod quantizers;
 pub use quantizers::decoder;
 pub use quantizers::encoder;
+pub use quantizers::multivector_plain_quantizer;
+pub use quantizers::multivector_product_quantizer;
 pub use quantizers::plain_quantizer;
 pub use quantizers::pq;
 pub use quantizers::quantizer;
@@ -37,6 +39,7 @@ pub mod visited_set;
 pub mod datasets {
     pub mod dataset;
     pub mod dense_dataset;
+    pub mod multivector_dataset;
     pub mod sparse_dataset;
     pub mod utils;
 }
@@ -45,6 +48,7 @@ pub use datasets::dataset::Dataset;
 pub use datasets::dataset::GrowableDataset;
 pub use datasets::dense_dataset::DenseDataset;
 pub use datasets::dense_dataset::DenseDatasetIter;
+pub use datasets::multivector_dataset::MultiVectorDataset;
 pub use datasets::sparse_dataset::ParSparseDatasetIter;
 pub use datasets::sparse_dataset::SparseDataset;
 pub use datasets::sparse_dataset::SparseDatasetIter;
@@ -55,6 +59,7 @@ type PlainDenseDataset<T> = DenseDataset<plain_quantizer::PlainQuantizer<T>>;
 pub mod distances;
 pub use distances::dot_product::*;
 pub use distances::euclidean_distance::*;
+pub use distances::multivector::*;
 pub use distances::simd::distances as simd_distances;
 pub use distances::simd::transpose as simd_transpose;
 pub use distances::simd::utils as simd_utils;
@@ -62,7 +67,7 @@ pub use distances::simd::utils as simd_utils;
 pub mod utils;
 
 pub mod indexes;
-pub use indexes::{graph_index, hnsw, hnsw_utils};
+pub use indexes::{index, hnsw, hnsw_utils, rerank_index};
 
 pub mod index_serializer;
 pub use index_serializer::IndexSerializer;
@@ -127,7 +132,7 @@ impl<U> AsRefItem for &mut [U] {
     }
 }
 
-pub trait Vector1D {
+pub trait VectorType {
     type ComponentsType;
     type ValuesType;
 
@@ -157,7 +162,7 @@ impl<T: AsRefItem> DenseVector1D<T> {
     }
 }
 
-impl<T: AsRefItem> Vector1D for DenseVector1D<T> {
+impl<T: AsRefItem> VectorType for DenseVector1D<T> {
     type ComponentsType = ();
     type ValuesType = T::Item;
 
@@ -206,7 +211,7 @@ where
     }
 }
 
-impl<V, T> Vector1D for SparseVector1D<V, T>
+impl<V, T> VectorType for SparseVector1D<V, T>
 where
     V: AsRefItem<Item = u16>,
     T: AsRefItem,
@@ -243,6 +248,77 @@ where
         self.values.as_ref_item()
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiVector<T: AsRefItem> {
+    components: (), // Empty for dense multivectors
+    values: T,
+    num_vectors: usize,
+    vector_dim: usize,
+}
+
+impl<T: AsRefItem> MultiVector<T> {
+    #[inline]
+    pub fn new(values: T, num_vectors: usize, vector_dim: usize) -> Self {
+        debug_assert_eq!(
+            values.as_ref_item().len(),
+            num_vectors * vector_dim,
+            "Values length must equal num_vectors * vector_dim"
+        );
+
+        MultiVector {
+            components: (),
+            values,
+            num_vectors,
+            vector_dim,
+        }
+    }
+
+    #[inline]
+    pub fn num_vectors(&self) -> usize {
+        self.num_vectors
+    }
+
+    #[inline]
+    pub fn vector_dim(&self) -> usize {
+        self.vector_dim
+    }
+
+    #[inline]
+    pub fn get_vector(&self, index: usize) -> &[T::Item] {
+        debug_assert!(index < self.num_vectors, "Vector index out of bounds");
+        let start = index * self.vector_dim;
+        let end = start + self.vector_dim;
+        &self.values_as_slice()[start..end]
+    }
+
+    #[inline]
+    pub fn iter_vectors(&self) -> impl Iterator<Item = &[T::Item]> + '_ {
+        self.values_as_slice().chunks_exact(self.vector_dim)
+    }
+}
+
+impl<T: AsRefItem> VectorType for MultiVector<T> {
+    type ComponentsType = ();
+    type ValuesType = T::Item;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        // Total number of elements across all vectors
+        self.values_as_slice().len()
+    }
+
+    #[inline(always)]
+    fn components_as_slice(&self) -> &[Self::ComponentsType] {
+        &EMPTY_COMPONENTS
+    }
+
+    #[inline(always)]
+    fn values_as_slice(&self) -> &[Self::ValuesType] {
+        self.values.as_ref_item()
+    }
+}
+
 
 /// A Python module implemented in Rust. The name of this function must match the `lib.name`
 /// setting in the `Cargo.toml`, otherwise Python will not be able to import the module.

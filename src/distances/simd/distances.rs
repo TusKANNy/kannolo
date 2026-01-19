@@ -1,14 +1,67 @@
+use rayon::prelude::*;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
 #[cfg(target_arch = "x86_64")]
-use super::transpose::{transpose_8x2, transpose_8x4, transpose_8x8};
+use super::transpose::{transpose_8x2, transpose_8x4, transpose_8x8, transpose_8x16};
 #[cfg(target_arch = "x86_64")]
-use super::utils::{horizontal_sum_128, squared_l2_dist_128};
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use super::utils::{horizontal_sum_256, squared_l2_dist_256};
+use super::utils::{
+    horizontal_sum_128, horizontal_sum_256, squared_l2_dist_128, squared_l2_dist_256,
+};
 use crate::utils::compute_squared_l2_distance;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 /* ********** SIMD OPTIMIZED FUNCTIONS ********** */
+
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn compute_distance_table_ip_d2(
+    distance_table: &mut [f32],
+    query: &[f32],
+    centroids: &[f32],
+    ksub: usize,
+) {
+    let mut i = 0;
+    let mut centroids_ptr = centroids.as_ptr();
+    let centroid_groups = ksub / 8;
+
+    if centroid_groups > 0 {
+        let m0 = _mm256_set1_ps(query[0]);
+        let m1 = _mm256_set1_ps(query[1]);
+
+        for j in (0..centroid_groups * 8).step_by(8) {
+            let mut v0 = _mm256_setzero_ps();
+            let mut v1 = _mm256_setzero_ps();
+
+            transpose_8x2(
+                _mm256_loadu_ps(centroids_ptr),
+                _mm256_loadu_ps(centroids_ptr.add(8)),
+                &mut v0,
+                &mut v1,
+            );
+
+            let mut distances = _mm256_mul_ps(m0, v0);
+            distances = _mm256_fmadd_ps(m1, v1, distances);
+
+            _mm256_storeu_ps(distance_table.as_mut_ptr().add(j), distances);
+
+            centroids_ptr = centroids_ptr.add(16);
+        }
+
+        i = centroid_groups * 8;
+    }
+
+    if i < ksub {
+        let x0 = query[0];
+        let x1 = query[1];
+
+        for j in i..ksub {
+            let c0 = *centroids_ptr;
+            let c1 = *centroids_ptr.add(1);
+            distance_table[j] = x0 * c0 + x1 * c1;
+            centroids_ptr = centroids_ptr.add(2);
+        }
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn compute_distance_table_ip_d4(
@@ -126,6 +179,108 @@ pub unsafe fn compute_distance_table_ip_d8(
     }
 }
 
+/// Computes the inner product distance table for 16-dimensional subvectors (dsub=16).
+/// This is optimized for m_pq=8 with 128-dimensional vectors.
+///
+/// # Safety
+/// This function uses AVX2 SIMD intrinsics.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn compute_distance_table_ip_d16(
+    distance_table: &mut [f32],
+    query: &[f32],
+    centroids: &[f32],
+    ksub: usize,
+) {
+    let mut i = 0;
+    let mut centroids_ptr = centroids.as_ptr();
+    let centroid_groups = ksub / 8;
+
+    if centroid_groups > 0 {
+        // Broadcast each query component for dsub == 16.
+        let m0 = _mm256_set1_ps(query[0]);
+        let m1 = _mm256_set1_ps(query[1]);
+        let m2 = _mm256_set1_ps(query[2]);
+        let m3 = _mm256_set1_ps(query[3]);
+        let m4 = _mm256_set1_ps(query[4]);
+        let m5 = _mm256_set1_ps(query[5]);
+        let m6 = _mm256_set1_ps(query[6]);
+        let m7 = _mm256_set1_ps(query[7]);
+        let m8 = _mm256_set1_ps(query[8]);
+        let m9 = _mm256_set1_ps(query[9]);
+        let m10 = _mm256_set1_ps(query[10]);
+        let m11 = _mm256_set1_ps(query[11]);
+        let m12 = _mm256_set1_ps(query[12]);
+        let m13 = _mm256_set1_ps(query[13]);
+        let m14 = _mm256_set1_ps(query[14]);
+        let m15 = _mm256_set1_ps(query[15]);
+
+        for j in (0..centroid_groups * 8).step_by(8) {
+            // Load 16 registers (each with 8 floats) from the interleaved centroid data.
+            // Each centroid consists of 16 contiguous floats.
+            // We're processing 8 centroids at once (8 * 16 = 128 floats = 16 __m256 registers).
+            let [v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15] =
+                transpose_8x16(
+                    _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(5 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(6 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(7 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(8 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(9 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(10 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(11 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(12 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(13 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(14 * 8)),
+                    _mm256_loadu_ps(centroids_ptr.add(15 * 8)),
+                );
+
+            // Compute the dot product for 8 centroids:
+            // distances[i] = query[0]*v0[i] + query[1]*v1[i] + ... + query[15]*v15[i]
+            let mut distances = _mm256_mul_ps(m0, v0);
+            distances = _mm256_fmadd_ps(m1, v1, distances);
+            distances = _mm256_fmadd_ps(m2, v2, distances);
+            distances = _mm256_fmadd_ps(m3, v3, distances);
+            distances = _mm256_fmadd_ps(m4, v4, distances);
+            distances = _mm256_fmadd_ps(m5, v5, distances);
+            distances = _mm256_fmadd_ps(m6, v6, distances);
+            distances = _mm256_fmadd_ps(m7, v7, distances);
+            distances = _mm256_fmadd_ps(m8, v8, distances);
+            distances = _mm256_fmadd_ps(m9, v9, distances);
+            distances = _mm256_fmadd_ps(m10, v10, distances);
+            distances = _mm256_fmadd_ps(m11, v11, distances);
+            distances = _mm256_fmadd_ps(m12, v12, distances);
+            distances = _mm256_fmadd_ps(m13, v13, distances);
+            distances = _mm256_fmadd_ps(m14, v14, distances);
+            distances = _mm256_fmadd_ps(m15, v15, distances);
+
+            _mm256_storeu_ps(distance_table.as_mut_ptr().add(j), distances);
+
+            // Advance the centroids pointer by 16 floats per centroid * 8 centroids.
+            centroids_ptr = centroids_ptr.add(16 * 8);
+        }
+        i = centroid_groups * 8;
+    }
+
+    // Process any remaining centroids (if ksub is not a multiple of 8).
+    if i < ksub {
+        let x0 = _mm256_loadu_ps(query.as_ptr());
+        let x1 = _mm256_loadu_ps(query.as_ptr().add(8));
+
+        for j in i..ksub {
+            let c0 = _mm256_loadu_ps(centroids_ptr);
+            let c1 = _mm256_loadu_ps(centroids_ptr.add(8));
+            let accu0 = _mm256_mul_ps(x0, c0);
+            let accu1 = _mm256_fmadd_ps(x1, c1, accu0);
+            centroids_ptr = centroids_ptr.add(16);
+            distance_table[j] = horizontal_sum_256(accu1);
+        }
+    }
+}
+
 #[inline]
 #[cfg(target_arch = "x86_64")]
 unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f32; 8] {
@@ -174,7 +329,7 @@ unsafe fn compute_l2_sqr_avx2_d4(query: &[f32], centroids_ptr: *const f32) -> [f
     distances
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn find_nearest_centroid_avx2_d4(query: &[f32], centroids: &[f32], ksub: usize) -> usize {
     let mut curr_idx = 0;
@@ -342,6 +497,169 @@ pub unsafe fn compute_distance_table_avx2_d4(
     }
 }
 
+#[inline]
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn compute_distance_table_avx2_d8(
+    distance_table: &mut [f32],
+    query: &[f32],
+    centroids: &[f32],
+    ksub: usize,
+) {
+    let mut i = 0;
+    let mut centroids_ptr = centroids.as_ptr();
+    let centroid_groups = ksub / 8;
+
+    if centroid_groups > 0 {
+        let m0 = _mm256_set1_ps(query[0]);
+        let m1 = _mm256_set1_ps(query[1]);
+        let m2 = _mm256_set1_ps(query[2]);
+        let m3 = _mm256_set1_ps(query[3]);
+        let m4 = _mm256_set1_ps(query[4]);
+        let m5 = _mm256_set1_ps(query[5]);
+        let m6 = _mm256_set1_ps(query[6]);
+        let m7 = _mm256_set1_ps(query[7]);
+
+        for j in (0..centroid_groups * 8).step_by(8) {
+            let [v0, v1, v2, v3, v4, v5, v6, v7] = transpose_8x8(
+                _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(5 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(6 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(7 * 8)),
+            );
+
+            let d0 = _mm256_sub_ps(m0, v0);
+            let mut distances = _mm256_mul_ps(d0, d0);
+
+            let d1 = _mm256_sub_ps(m1, v1);
+            distances = _mm256_fmadd_ps(d1, d1, distances);
+            let d2 = _mm256_sub_ps(m2, v2);
+            distances = _mm256_fmadd_ps(d2, d2, distances);
+            let d3 = _mm256_sub_ps(m3, v3);
+            distances = _mm256_fmadd_ps(d3, d3, distances);
+            let d4 = _mm256_sub_ps(m4, v4);
+            distances = _mm256_fmadd_ps(d4, d4, distances);
+            let d5 = _mm256_sub_ps(m5, v5);
+            distances = _mm256_fmadd_ps(d5, d5, distances);
+            let d6 = _mm256_sub_ps(m6, v6);
+            distances = _mm256_fmadd_ps(d6, d6, distances);
+            let d7 = _mm256_sub_ps(m7, v7);
+            distances = _mm256_fmadd_ps(d7, d7, distances);
+
+            _mm256_storeu_ps(distance_table.as_mut_ptr().add(j), distances);
+
+            centroids_ptr = centroids_ptr.add(64);
+        }
+        i = centroid_groups * 8;
+    }
+
+    if i < ksub {
+        let q_avx = _mm256_loadu_ps(query.as_ptr());
+        for j in i..ksub {
+            let c_avx = _mm256_loadu_ps(centroids_ptr);
+            let dist = squared_l2_dist_256(q_avx, c_avx);
+            distance_table[j] = horizontal_sum_256(dist);
+            centroids_ptr = centroids_ptr.add(8);
+        }
+    }
+}
+
+/// Computes the squared L2 distance table for 16-dimensional subvectors (dsub=16).
+/// This is optimized for m_pq=8 with 128-dimensional vectors.
+///
+/// # Safety
+/// This function uses AVX2 SIMD intrinsics.
+#[inline]
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn compute_distance_table_avx2_d16(
+    distance_table: &mut [f32],
+    query: &[f32],
+    centroids: &[f32],
+    ksub: usize,
+) {
+    let mut i = 0;
+    let mut centroids_ptr = centroids.as_ptr();
+    let centroid_groups = ksub / 8;
+
+    if centroid_groups > 0 {
+        // Broadcast query components for dsub=16
+        let q: [__m256; 16] = [
+            _mm256_set1_ps(query[0]),
+            _mm256_set1_ps(query[1]),
+            _mm256_set1_ps(query[2]),
+            _mm256_set1_ps(query[3]),
+            _mm256_set1_ps(query[4]),
+            _mm256_set1_ps(query[5]),
+            _mm256_set1_ps(query[6]),
+            _mm256_set1_ps(query[7]),
+            _mm256_set1_ps(query[8]),
+            _mm256_set1_ps(query[9]),
+            _mm256_set1_ps(query[10]),
+            _mm256_set1_ps(query[11]),
+            _mm256_set1_ps(query[12]),
+            _mm256_set1_ps(query[13]),
+            _mm256_set1_ps(query[14]),
+            _mm256_set1_ps(query[15]),
+        ];
+
+        for j in (0..centroid_groups * 8).step_by(8) {
+            // Load and transpose 8 centroids (8 * 16 = 128 floats)
+            let c = transpose_8x16(
+                _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(5 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(6 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(7 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(8 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(9 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(10 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(11 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(12 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(13 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(14 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(15 * 8)),
+            );
+
+            // Compute squared L2 distances for all 16 dimensions
+            let d0 = _mm256_sub_ps(q[0], c[0]);
+            let mut distances = _mm256_mul_ps(d0, d0);
+
+            for k in 1..16 {
+                let dk = _mm256_sub_ps(q[k], c[k]);
+                distances = _mm256_fmadd_ps(dk, dk, distances);
+            }
+
+            _mm256_storeu_ps(distance_table.as_mut_ptr().add(j), distances);
+            centroids_ptr = centroids_ptr.add(16 * 8);
+        }
+        i = centroid_groups * 8;
+    }
+
+    // Scalar fallback for remaining centroids
+    if i < ksub {
+        let query_avx0 = _mm256_loadu_ps(query.as_ptr());
+        let query_avx1 = _mm256_loadu_ps(query.as_ptr().add(8));
+
+        for j in i..ksub {
+            let centroid_avx0 = _mm256_loadu_ps(centroids_ptr);
+            let centroid_avx1 = _mm256_loadu_ps(centroids_ptr.add(8));
+
+            let dist0 = squared_l2_dist_256(query_avx0, centroid_avx0);
+            let dist1 = squared_l2_dist_256(query_avx1, centroid_avx1);
+            let dist_sum = _mm256_add_ps(dist0, dist1);
+            distance_table[j] = horizontal_sum_256(dist_sum);
+
+            centroids_ptr = centroids_ptr.add(16);
+        }
+    }
+}
+
 /// Finds the nearest centroid to a given query vector `query_vec` from a set of centroids `centroids`
 /// using SIMD (Single Instruction, Multiple Data) operations, optimized for AVX2 instruction set.
 /// This function is designed for high-performance computation in scenarios where both the query vector
@@ -394,7 +712,7 @@ pub unsafe fn compute_distance_table_avx2_d4(
 ///    - Uses scalar operations to compute the distance and update the minimum distance and index.
 ///
 #[inline]
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(target_arch = "x86_64")]
 unsafe fn find_nearest_centroid_avx2_d8(
     query_vec: &[f32],
     centroids: &[f32],
@@ -509,6 +827,150 @@ unsafe fn find_nearest_centroid_avx2_d8(
     min_idx
 }
 
+/// Finds the nearest centroid to a given query vector for 16-dimensional subvectors (dsub=16).
+/// This is optimized for m_pq=8 with 128-dimensional vectors.
+///
+/// # Arguments
+///
+/// * `query_vec` - A slice representing the 16-dimensional query subvector.
+/// * `centroids` - A slice representing the centroids (each 16-dimensional).
+/// * `ksub` - The number of centroids.
+///
+/// # Safety
+///
+/// This function uses AVX2 SIMD intrinsics.
+///
+/// # Returns
+///
+/// The index of the nearest centroid.
+#[inline]
+#[cfg(target_arch = "x86_64")]
+unsafe fn find_nearest_centroid_avx2_d16(
+    query_vec: &[f32],
+    centroids: &[f32],
+    ksub: usize,
+) -> usize {
+    let centroid_groups = ksub / 8;
+
+    let mut min_dist = f32::MAX;
+    let mut min_idx = 0;
+
+    let mut curr_idx = 0;
+    let mut centroids_ptr = centroids.as_ptr();
+
+    if centroid_groups > 0 {
+        let mut avx_min_dist = _mm256_set1_ps(f32::MAX);
+        let mut avx_min_idx = _mm256_set1_epi32(0);
+
+        let mut avx_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+        let idx_increment = _mm256_set1_epi32(8);
+
+        // Broadcast query components
+        let qvec_avx: [__m256; 16] = [
+            _mm256_set1_ps(query_vec[0]),
+            _mm256_set1_ps(query_vec[1]),
+            _mm256_set1_ps(query_vec[2]),
+            _mm256_set1_ps(query_vec[3]),
+            _mm256_set1_ps(query_vec[4]),
+            _mm256_set1_ps(query_vec[5]),
+            _mm256_set1_ps(query_vec[6]),
+            _mm256_set1_ps(query_vec[7]),
+            _mm256_set1_ps(query_vec[8]),
+            _mm256_set1_ps(query_vec[9]),
+            _mm256_set1_ps(query_vec[10]),
+            _mm256_set1_ps(query_vec[11]),
+            _mm256_set1_ps(query_vec[12]),
+            _mm256_set1_ps(query_vec[13]),
+            _mm256_set1_ps(query_vec[14]),
+            _mm256_set1_ps(query_vec[15]),
+        ];
+
+        while curr_idx < centroid_groups * 8 {
+            // Load and transpose 8 centroids (8 * 16 = 128 floats)
+            let transposed = transpose_8x16(
+                _mm256_loadu_ps(centroids_ptr.add(0 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(1 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(2 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(3 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(4 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(5 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(6 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(7 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(8 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(9 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(10 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(11 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(12 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(13 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(14 * 8)),
+                _mm256_loadu_ps(centroids_ptr.add(15 * 8)),
+            );
+
+            // Compute squared Euclidean distances for all 16 dimensions
+            let diff0 = _mm256_sub_ps(qvec_avx[0], transposed[0]);
+            let mut dists_avx = _mm256_mul_ps(diff0, diff0);
+
+            for k in 1..16 {
+                let diff = _mm256_sub_ps(qvec_avx[k], transposed[k]);
+                dists_avx = _mm256_fmadd_ps(diff, diff, dists_avx);
+            }
+
+            // Update the minimum distances and their indices
+            let cmp = _mm256_cmp_ps(avx_min_dist, dists_avx, _CMP_LT_OS);
+            avx_min_dist = _mm256_min_ps(dists_avx, avx_min_dist);
+            avx_min_idx = _mm256_castps_si256(_mm256_blendv_ps(
+                _mm256_castsi256_ps(avx_idx),
+                _mm256_castsi256_ps(avx_min_idx),
+                cmp,
+            ));
+
+            avx_idx = _mm256_add_epi32(avx_idx, idx_increment);
+            centroids_ptr = centroids_ptr.add(16 * 8);
+            curr_idx += 8;
+        }
+
+        // Extract minimum distances and their indices into scalar arrays
+        let mut scalar_dists = [0.0_f32; 8];
+        let mut scalar_idxs = [0_i32; 8];
+        _mm256_storeu_ps(scalar_dists.as_mut_ptr(), avx_min_dist);
+        _mm256_storeu_si256(scalar_idxs.as_mut_ptr() as *mut __m256i, avx_min_idx);
+
+        // Find the global minimum distance and its index
+        for j in 0..8 {
+            if min_dist > scalar_dists[j] {
+                min_dist = scalar_dists[j];
+                min_idx = scalar_idxs[j] as usize;
+            }
+        }
+    }
+
+    // Process any remaining centroids not handled in the SIMD loop
+    if curr_idx < ksub {
+        let qvec_avx0 = _mm256_loadu_ps(query_vec.as_ptr());
+        let qvec_avx1 = _mm256_loadu_ps(query_vec.as_ptr().add(8));
+
+        while curr_idx < ksub {
+            let centroid_avx0 = _mm256_loadu_ps(centroids_ptr);
+            let centroid_avx1 = _mm256_loadu_ps(centroids_ptr.add(8));
+
+            let dists_avx0 = squared_l2_dist_256(qvec_avx0, centroid_avx0);
+            let dists_avx1 = squared_l2_dist_256(qvec_avx1, centroid_avx1);
+            let dists_sum = _mm256_add_ps(dists_avx0, dists_avx1);
+            let dist = horizontal_sum_256(dists_sum);
+
+            if min_dist > dist {
+                min_dist = dist;
+                min_idx = curr_idx;
+            }
+
+            curr_idx += 1;
+            centroids_ptr = centroids_ptr.add(16);
+        }
+    }
+
+    min_idx
+}
+
 /* ********** GENERAL METHOD ********** */
 
 /// Calculates the squared L2 distances between a single-dimensional segment of a query vector
@@ -552,7 +1014,7 @@ unsafe fn find_nearest_centroid_avx2_d8(
 ///      distances are computed individually using scalar operations.
 ///
 #[inline]
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d1(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -625,7 +1087,7 @@ unsafe fn compute_distances_d1(
 ///    - Stores the total distances in `distances`.
 ///
 #[inline]
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(target_arch = "x86_64")]
 unsafe fn compute_distances_d12(
     distances: &mut [f32],
     query_vec: &[f32],
@@ -818,6 +1280,7 @@ pub fn find_nearest_centroid_idx(
         // 2 => unsafe { find_nearest_centroid_avx2_d2(query_sub, centroids_sub, ksub) },
         4 => unsafe { find_nearest_centroid_avx2_d4(query_sub, centroids_sub, ksub) },
         8 => unsafe { find_nearest_centroid_avx2_d8(query_sub, centroids_sub, ksub) },
+        16 => unsafe { find_nearest_centroid_avx2_d16(query_sub, centroids_sub, ksub) },
         _ => find_nearest_centroid_general(query_sub, centroids_sub, dsub, ksub),
     }
 }
@@ -854,13 +1317,11 @@ mod tests {
     const FLOAT_TOLERANCE: f32 = 0.0001;
 
     /// Helper function to create a sample query vector
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn sample_query_vec(dsub: usize) -> Vec<f32> {
         (0..dsub).map(|i| i as f32).collect()
     }
 
     /// Helper function to create a set of sample centroids
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn sample_centroids(ksub: usize, dsub: usize) -> Vec<f32> {
         (0..ksub * dsub).map(|i| i as f32).collect()
     }
@@ -877,7 +1338,6 @@ mod tests {
     /// Assertions:
     /// - The returned index of the nearest centroid matches the expected index.
     #[test]
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_find_nearest_centroid_avx2_d4() {
         let query_vec = sample_query_vec(4);
         let centroids = sample_centroids(10, 4);
@@ -906,7 +1366,6 @@ mod tests {
     /// - Ensures that the index of the nearest centroid returned by the function
     ///   is equal to the expected index.
     #[test]
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_find_nearest_centroid_avx2_d8() {
         let query_vec = sample_query_vec(8);
         let centroids = sample_centroids(10, 8);
@@ -935,7 +1394,6 @@ mod tests {
     /// - Each calculated distance is compared against the expected distance, within a small
     ///   tolerance level, to account for floating-point precision issues.
     #[test]
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_compute_distances_d1() {
         let query_vec = vec![3.0];
         let centroids = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -968,7 +1426,6 @@ mod tests {
     /// - Compares the calculated distances with the expected values within a defined tolerance,
     ///   ensuring accuracy of the distance computation.
     #[test]
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     fn test_compute_distances_d12() {
         let query_vec = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
         let centroids = vec![0.0; 12 * 3];
@@ -1019,5 +1476,280 @@ mod tests {
                 i
             );
         }
+    }
+
+    /// Tests the `find_nearest_centroid_avx2_d16` function for accuracy.
+    ///
+    /// This test checks if the function accurately finds the nearest centroid
+    /// to a query vector using AVX2 SIMD operations. The query vector and centroids
+    /// used in the test are of dimension 16, with 10 centroids provided.
+    ///
+    /// The expected outcome is that the function identifies the first centroid as the nearest.
+    #[test]
+    fn test_find_nearest_centroid_avx2_d16() {
+        let query_vec = sample_query_vec(16);
+        let centroids = sample_centroids(10, 16);
+
+        let expected_index = 0;
+
+        unsafe {
+            let nearest_index =
+                find_nearest_centroid_avx2_d16(&query_vec, &centroids, centroids.len() / 16);
+            assert_eq!(
+                nearest_index, expected_index,
+                "Nearest centroid index mismatch in avx2_d16"
+            );
+        }
+    }
+
+    /// Tests the `compute_distance_table_ip_d16` function for inner product distance table computation.
+    ///
+    /// This test verifies that the SIMD-optimized inner product distance table computation
+    /// for 16-dimensional subvectors produces correct results.
+    #[test]
+    fn test_compute_distance_table_ip_d16() {
+        let query: Vec<f32> = (0..16).map(|i| (i + 1) as f32).collect();
+        // Create 10 centroids of dimension 16
+        let centroids: Vec<f32> = (0..10 * 16).map(|i| (i % 16) as f32).collect();
+        let mut distance_table = vec![0.0f32; 10];
+
+        unsafe {
+            compute_distance_table_ip_d16(&mut distance_table, &query, &centroids, 10);
+        }
+
+        // Verify results by computing expected values manually
+        for i in 0..10 {
+            let mut expected: f32 = 0.0;
+            for j in 0..16 {
+                expected += query[j] * centroids[i * 16 + j];
+            }
+            assert!(
+                (distance_table[i] - expected).abs() < FLOAT_TOLERANCE,
+                "IP distance mismatch at index {}: got {}, expected {}",
+                i, distance_table[i], expected
+            );
+        }
+    }
+
+    /// Tests the `compute_distance_table_avx2_d16` function for L2 distance table computation.
+    ///
+    /// This test verifies that the SIMD-optimized L2 distance table computation
+    /// for 16-dimensional subvectors produces correct results.
+    #[test]
+    fn test_compute_distance_table_avx2_d16() {
+        let query: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        // Create 10 centroids of dimension 16
+        let centroids: Vec<f32> = (0..10 * 16).map(|i| ((i / 16) * 16 + (i % 16)) as f32).collect();
+        let mut distance_table = vec![0.0f32; 10];
+
+        unsafe {
+            compute_distance_table_avx2_d16(&mut distance_table, &query, &centroids, 10);
+        }
+
+        // Verify results by computing expected values manually
+        for i in 0..10 {
+            let mut expected: f32 = 0.0;
+            for j in 0..16 {
+                let diff = query[j] - centroids[i * 16 + j];
+                expected += diff * diff;
+            }
+            assert!(
+                (distance_table[i] - expected).abs() < FLOAT_TOLERANCE,
+                "L2 distance mismatch at index {}: got {}, expected {}",
+                i, distance_table[i], expected
+            );
+        }
+    }
+}
+
+/* ********** RESIDUAL COMPUTATION ********** */
+
+/// Compute residual (vector - centroid) using AVX2 for f16 data
+/// Assumes dim is a multiple of 8 for optimal performance
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma", enable = "f16c")]
+pub unsafe fn compute_residual_f16_avx2(
+    residual: &mut [half::f16],
+    vector: &[half::f16],
+    centroid: &[half::f16],
+    dim: usize,
+) {
+    let chunks = dim / 8;
+
+    // Process 8 f16 values at a time using AVX2
+    for i in 0..chunks {
+        let offset = i * 8;
+        
+        // Load 8 f16 values (128 bits) and convert to 8 f32 values (256 bits)
+        let vec_f16 = _mm_loadu_si128(vector.as_ptr().add(offset) as *const __m128i);
+        let cent_f16 = _mm_loadu_si128(centroid.as_ptr().add(offset) as *const __m128i);
+        
+        let vec_f32 = _mm256_cvtph_ps(vec_f16);
+        let cent_f32 = _mm256_cvtph_ps(cent_f16);
+        
+        // Compute residual: vector - centroid
+        let res_f32 = _mm256_sub_ps(vec_f32, cent_f32);
+        
+        // Convert back to f16
+        let res_f16 = _mm256_cvtps_ph::<_MM_FROUND_TO_NEAREST_INT>(res_f32);
+        
+        // Store result
+        _mm_storeu_si128(residual.as_mut_ptr().add(offset) as *mut __m128i, res_f16);
+    }
+
+    // Handle remaining elements
+    for i in chunks * 8..dim {
+        residual[i] = vector[i] - centroid[i];
+    }
+}
+
+/// Fallback non-SIMD version for non-x86_64 architectures
+#[cfg(not(target_arch = "x86_64"))]
+pub fn compute_residual_f16_avx2(
+    residual: &mut [half::f16],
+    vector: &[half::f16],
+    centroid: &[half::f16],
+    dim: usize,
+) {
+    for i in 0..dim {
+        residual[i] = vector[i] - centroid[i];
+    }
+}
+
+/* ********** RESIDUAL COMPUTATION FOR F32 ********** */
+
+/// Compute residual (vector - centroid) using AVX2 for f32 data
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+pub unsafe fn compute_residual_f32_avx2(
+    residual: &mut [f32],
+    vector: &[f32],
+    centroid: &[f32],
+    dim: usize,
+) {
+    let chunks = dim / 8; // process 8 at a time for AVX
+
+    for i in 0..chunks {
+        let offset = i * 8;
+        let vec_f32 = _mm256_loadu_ps(vector.as_ptr().add(offset));
+        let cent_f32 = _mm256_loadu_ps(centroid.as_ptr().add(offset));
+        let res = _mm256_sub_ps(vec_f32, cent_f32);
+        _mm256_storeu_ps(residual.as_mut_ptr().add(offset), res);
+    }
+
+    // Remainder
+    for i in chunks * 8..dim {
+        residual[i] = vector[i] - centroid[i];
+    }
+}
+
+/// Fallback non-SIMD version for f32
+#[cfg(not(target_arch = "x86_64"))]
+pub fn compute_residual_f32_avx2(
+    residual: &mut [f32],
+    vector: &[f32],
+    centroid: &[f32],
+    dim: usize,
+) {
+    for i in 0..dim {
+        residual[i] = vector[i] - centroid[i];
+    }
+}
+
+/* ********** GENERIC TRAIT FOR RESIDUAL COMPUTATION ********** */
+
+/// Trait to provide an efficient residual computation for supported element types
+pub trait ResidualCompute: Sized + Copy {
+    /// Compute residual: residual[i] = vector[i] - centroid[i]
+    fn compute_residual_avx2(residual: &mut [Self], vector: &[Self], centroid: &[Self], dim: usize);
+
+    /// Convert coarse centroids (f32) to this type T in a SIMD-friendly way
+    fn centroids_from_f32(src: &[f32]) -> Vec<Self>;
+
+    /// Convert scalar f32 to this type
+    fn from_f32_scalar(x: f32) -> Self;
+
+    /// Convert a slice of T to f32 (SIMD-friendly)
+    fn convert_to_f32(src: &[Self], dst: &mut [f32]);
+}
+
+impl ResidualCompute for half::f16 {
+    fn compute_residual_avx2(residual: &mut [Self], vector: &[Self], centroid: &[Self], dim: usize) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            compute_residual_f16_avx2(residual, vector, centroid, dim);
+            return;
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            for i in 0..dim {
+                residual[i] = vector[i] - centroid[i];
+            }
+        }
+    }
+
+    fn centroids_from_f32(src: &[f32]) -> Vec<Self> {
+        src.par_iter().map(|&x| half::f16::from_f32(x)).collect()
+    }
+
+    fn from_f32_scalar(x: f32) -> Self {
+        half::f16::from_f32(x)
+    }
+
+    fn convert_to_f32(src: &[Self], dst: &mut [f32]) {
+        // Use AVX2/F16C to convert blocks of 8 f16 -> f32
+        let len = src.len();
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let chunks = len / 8;
+            for i in 0..chunks {
+                let off = i * 8;
+                let src_ptr = src.as_ptr().add(off) as *const i16;
+                let v128 = _mm_loadu_si128(src_ptr as *const __m128i);
+                let v256 = _mm256_cvtph_ps(v128);
+                _mm256_storeu_ps(dst.as_mut_ptr().add(off), v256);
+            }
+            for i in chunks * 8..len {
+                dst[i] = src[i].to_f32();
+            }
+            return;
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            for i in 0..len {
+                dst[i] = src[i].to_f32();
+            }
+        }
+    }
+}
+
+impl ResidualCompute for f32 {
+    fn compute_residual_avx2(residual: &mut [Self], vector: &[Self], centroid: &[Self], dim: usize) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            compute_residual_f32_avx2(residual, vector, centroid, dim);
+            return;
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            for i in 0..dim {
+                residual[i] = vector[i] - centroid[i];
+            }
+        }
+    }
+
+    fn centroids_from_f32(src: &[f32]) -> Vec<Self> {
+        src.to_vec()
+    }
+
+    fn from_f32_scalar(x: f32) -> Self {
+        x
+    }
+
+    fn convert_to_f32(src: &[Self], dst: &mut [f32]) {
+        // f32 -> f32 copy (use memcpy-like block copy)
+        dst.copy_from_slice(src);
     }
 }

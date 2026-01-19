@@ -210,6 +210,78 @@ pub unsafe fn transpose_8x8(
     [o0, o1, o2, o3, o4, o5, o6, o7]
 }
 
+/// Transposes data from 8 centroids of 16 dimensions each into 16 registers,
+/// where each output register contains one dimension across all 8 centroids.
+///
+/// Input layout (128 floats total, 8 centroids × 16 dims):
+/// - i0 = C0[0..7], i1 = C0[8..15]   (centroid 0)
+/// - i2 = C1[0..7], i3 = C1[8..15]   (centroid 1)
+/// - i4 = C2[0..7], i5 = C2[8..15]   (centroid 2)
+/// - i6 = C3[0..7], i7 = C3[8..15]   (centroid 3)
+/// - i8 = C4[0..7], i9 = C4[8..15]   (centroid 4)
+/// - i10 = C5[0..7], i11 = C5[8..15] (centroid 5)
+/// - i12 = C6[0..7], i13 = C6[8..15] (centroid 6)
+/// - i14 = C7[0..7], i15 = C7[8..15] (centroid 7)
+///
+/// Output layout (16 registers):
+/// - o0 = [C0[0], C1[0], C2[0], C3[0], C4[0], C5[0], C6[0], C7[0]] (dimension 0)
+/// - o1 = [C0[1], C1[1], C2[1], C3[1], C4[1], C5[1], C6[1], C7[1]] (dimension 1)
+/// - ...
+/// - o15 = [C0[15], C1[15], ...] (dimension 15)
+///
+/// # Safety
+///
+/// This function is unsafe because it uses AVX2 instructions.
+#[inline]
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn transpose_8x16(
+    i0: __m256,
+    i1: __m256,
+    i2: __m256,
+    i3: __m256,
+    i4: __m256,
+    i5: __m256,
+    i6: __m256,
+    i7: __m256,
+    i8: __m256,
+    i9: __m256,
+    i10: __m256,
+    i11: __m256,
+    i12: __m256,
+    i13: __m256,
+    i14: __m256,
+    i15: __m256,
+) -> [__m256; 16] {
+    // First, transpose the first 8 dimensions (elements 0-7 of each centroid)
+    // Input: i0 (C0[0..7]), i2 (C1[0..7]), i4 (C2[0..7]), i6 (C3[0..7]),
+    //        i8 (C4[0..7]), i10 (C5[0..7]), i12 (C6[0..7]), i14 (C7[0..7])
+    let first_half = transpose_8x8(i0, i2, i4, i6, i8, i10, i12, i14);
+
+    // Then, transpose the second 8 dimensions (elements 8-15 of each centroid)
+    // Input: i1 (C0[8..15]), i3 (C1[8..15]), i5 (C2[8..15]), i7 (C3[8..15]),
+    //        i9 (C4[8..15]), i11 (C5[8..15]), i13 (C6[8..15]), i15 (C7[8..15])
+    let second_half = transpose_8x8(i1, i3, i5, i7, i9, i11, i13, i15);
+
+    [
+        first_half[0],  // dimension 0
+        first_half[1],  // dimension 1
+        first_half[2],  // dimension 2
+        first_half[3],  // dimension 3
+        first_half[4],  // dimension 4
+        first_half[5],  // dimension 5
+        first_half[6],  // dimension 6
+        first_half[7],  // dimension 7
+        second_half[0], // dimension 8
+        second_half[1], // dimension 9
+        second_half[2], // dimension 10
+        second_half[3], // dimension 11
+        second_half[4], // dimension 12
+        second_half[5], // dimension 13
+        second_half[6], // dimension 14
+        second_half[7], // dimension 15
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

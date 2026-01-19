@@ -1,4 +1,23 @@
 
+#!/usr/bin/env python3
+"""
+kANNolo Experiment Runner
+
+This script supports both hnsw_search and hnsw_rerank_search binaries.
+
+For reranking experiments, add a [reranking] section to your TOML config:
+
+[reranking]
+multivec_docs_file = "embeddings_u16.npy"    # Required: multivector documents file
+k_candidates = 100                            # Optional: candidates from graph search (default: 100)
+multivec_type = "plain"                       # Optional: "plain" or "pq" (default: "plain")
+    # pq_components_dir was removed: PQ components should be placed under
+    # `multivec_data_dir` and will be discovered by the binaries.
+
+Example usage:
+    python run_experiments.py --exp config_rerank.toml
+"""
+
 import re 
 import os
 import sys
@@ -137,6 +156,15 @@ def build_index(configs, experiment_dir):
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
 
+    # Add multivector-specific parameters
+    if configs.get("vector-type") == "multivector":
+        if "sparse_dataset" in configs["filename"]:
+            sparse_file = os.path.join(configs["folder"]["data"], configs["filename"]["sparse_dataset"])
+            command_and_params.append(f"--sparse-data-file {sparse_file}")
+        if "doc_lens" in configs["filename"]:
+            doc_lens_file = os.path.join(configs["folder"]["data"], configs["filename"]["doc_lens"])
+            command_and_params.append(f"--doc-lens-file {doc_lens_file}")
+
     # If there is a section [pq_params] in the configuration file, add the parameters to the command
     if "pq_parameters" in configs:
         for k, v in configs["pq_parameters"].items():
@@ -210,6 +238,15 @@ def compute_metric(configs, output_file, gt_file, metric):
     gt_pd['query_id'] = gt_pd['query_id'].astype(df_qrels.query_id.dtype)
     res_pd['query_id'] = res_pd['query_id'].astype(df_qrels.query_id.dtype)
     
+    # pytrec_eval (used by ir_measures) expects string keys for query ids and doc ids.
+    # Ensure all ids are strings to avoid TypeError: Expected string as key.
+    df_qrels['query_id'] = df_qrels['query_id'].astype(str)
+    df_qrels['doc_id'] = df_qrels['doc_id'].astype(str)
+    gt_pd['query_id'] = gt_pd['query_id'].astype(str)
+    res_pd['query_id'] = res_pd['query_id'].astype(str)
+    gt_pd['doc_id'] = gt_pd['doc_id'].astype(str)
+    res_pd['doc_id'] = res_pd['doc_id'].astype(str)
+    
     ir_metric = ir_measures.parse_measure(metric)
     
     metric_val = ir_measures.calc_aggregate([ir_metric], df_qrels, res_pd)[ir_metric]
@@ -271,17 +308,17 @@ def compute_accuracy(query_file, gt_file):
 
 def query_execution(configs, query_config, experiment_dir, subsection_name):
     """Execute a query based on the provided configuration."""
-    index_file = os.path.join(configs["folder"]["index"], get_index_filename(configs["filename"]["index"], configs))
-    print("Searching index at:", index_file)
-    query_file =  os.path.join(configs["folder"]["data"], configs["filename"]["queries"] ) 
     
-    output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
-    log_output_file =  os.path.join(experiment_dir, f"log_{subsection_name}") 
-
     query_command = configs.get("query-command", None)
     if not query_command:
         raise ValueError("Query command must be specified!!!")
-
+    
+    index_file = os.path.join(configs["folder"]["index"], get_index_filename(configs["filename"]["index"], configs))
+    print("Searching index at:", index_file)
+    
+    query_file = os.path.join(configs["folder"]["data"], configs["filename"]["queries"])
+    output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
+    
     command_and_params = [
         configs['settings']['NUMA'] if "NUMA" in configs['settings'] else "",
         query_command, 
@@ -302,6 +339,42 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
 
+    # Add multivector-specific parameters
+    if configs.get("vector-type") == "multivector":
+        # multivector data is now provided as a directory; binaries will infer
+        # queries/doclens inside that folder (e.g. `queries.npy`, `doclens.npy`).
+        if "vector_dim" in configs["indexing_parameters"]:
+            command_and_params.append(f"--vector-dim {configs['indexing_parameters']['vector_dim']}")
+
+    # Add reranking-specific parameters
+    if "reranking" in configs:
+        rerank_config = configs["reranking"]
+
+        # Required reranking parameters
+        # Prefer the new unified `multivec_data_dir` which points to a folder
+        # containing `queries.npy`, `doclens.npy`, etc. Fall back to the
+        # dataset data folder if not provided.
+        if "multivec_data_dir" in rerank_config:
+            command_and_params.append(f"--multivec-data-dir {rerank_config['multivec_data_dir']}")
+        else:
+            command_and_params.append(f"--multivec-data-dir {configs['folder']['data']}")
+        if "vector_dim" in rerank_config:
+            command_and_params.append(f"--vector-dim {rerank_config['vector_dim']}")
+
+        # Optional reranking parameters
+        if "k_candidates" in rerank_config:
+            command_and_params.append(f"--k-candidates {rerank_config['k_candidates']}")
+        if "multivec_type" in rerank_config:
+            command_and_params.append(f"--multivec-type {rerank_config['multivec_type']}")
+        # PQ components are expected to live inside `multivec_data_dir` now.
+        # The binaries will look for `pq_centroids.npy` and
+        # `vector_codes_uint8.npy` inside that folder when `multivec_type = "pq"`.
+        # Optional pruning/early-exit parameters
+        if "alpha" in rerank_config:
+            command_and_params.append(f"--alpha {rerank_config['alpha']}")
+        if "beta" in rerank_config:
+            command_and_params.append(f"--beta {rerank_config['beta']}")
+
     # Add PQ-specific parameters if needed
     if "pq_parameters" in configs and "m-pq" in configs['pq_parameters']:
         command_and_params.append(f"--m-pq {configs['pq_parameters']['m-pq']}")
@@ -310,6 +383,10 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
 
     print(f"Executing query for subsection '{subsection_name}' with command:")
     print(command)
+
+    # Define log and output files
+    log_output_file = os.path.join(experiment_dir, f"log_{subsection_name}")
+    output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
 
     pattern = r"Total: (\d+) bytes"  # Pattern to match the total memory usage
 

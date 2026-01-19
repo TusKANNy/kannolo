@@ -1,5 +1,5 @@
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::{Dataset, DistanceType, Float, Vector1D};
+use crate::{Dataset, DistanceType, Float, VectorType};
 use crate::{DotProduct, EuclideanDistance};
 
 pub trait IdentityQuantizer: Quantizer<InputItem = Self::T, OutputItem = Self::T> {
@@ -35,7 +35,7 @@ pub trait Quantizer: Sized {
 
 pub trait QueryEvaluator<'a> {
     type Q: Quantizer;
-    type QueryType: Vector1D;
+    type QueryType: VectorType;
 
     fn new(query: Self::QueryType, dataset: &<Self::Q as Quantizer>::DatasetType) -> Self;
 

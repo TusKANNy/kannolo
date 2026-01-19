@@ -12,6 +12,7 @@ build = "build.rs"
 serde = { version = "1.0", features = ["derive"] }
 ndarray = "0.15.6"
 ndarray-npy = "0.8.1"
+npyz = "0.8.3"
 rand = "0.8.5"
 itertools = "0.12.1"
 matrixmultiply = "0.3.8"
@@ -31,9 +32,14 @@ numpy = "0.24.0"
 nohash-hasher = "0.2.0"
 indicatif = {version = "0.17.11", features = ["rayon"]}
 optional = { version = "0.5.0", features = ["serde"]}
+blas    = "0.23"
+libc    = "0.2"
+
 
 
 [features]
+default = []
+use-libxsmm = []
 
 [lib]
 name = "kannolo"
@@ -42,5 +48,7 @@ crate-type = ["cdylib", "lib"]
 [profile.release]
 opt-level = 3
 debug = false
-#lto = true
+lto = true
 codegen-units = 1
+panic = "abort"
+strip = "symbols"

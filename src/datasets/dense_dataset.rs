@@ -1,9 +1,9 @@
 use crate::distances::{dense_dot_product_unrolled, dense_euclidean_distance_unrolled};
 use crate::plain_quantizer::PlainQuantizer;
 use crate::quantizer::{Quantizer, QueryEvaluator};
-use crate::topk_selectors::{OnlineTopKSelector, TopkHeap};
+use crate::topk_selectors::OnlineTopKSelector;
 use crate::{
-    Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset, Vector1D,
+    Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset, VectorType,
 };
 use crate::{DotProduct, EuclideanDistance};
 
@@ -142,6 +142,10 @@ where
         let distances = evaluator.compute_distances(self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
     }
+
+    fn sample(&self, _sample_size: usize) -> Self {
+        unimplemented!("sample() is only implemented for DenseDataset with Vec buffer")
+    }
 }
 
 impl<'a, Q, B> DenseDataset<Q, B>
@@ -157,8 +161,46 @@ where
 
 impl<'a, Q> DenseDataset<Q, Vec<Q::OutputItem>>
 where
-    Q: Quantizer,
+    Q: Quantizer + Clone,
+    Q::OutputItem: Copy,
 {
+     pub fn sample(&self, sample_size: usize) -> Self {
+        let dataset_len = self.n_vecs;
+        
+        // If sample size >= dataset length, clone the entire dataset
+        if sample_size >= dataset_len {
+            return Self {
+                data: self.data.clone(),
+                n_vecs: self.n_vecs,
+                d: self.d,
+                quantizer: self.quantizer.clone(),
+            };
+        }
+
+        // Sample indices uniformly at random
+        use rand::seq::index::sample;
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(525);
+        let sampled_indices = sample(&mut rng, dataset_len, sample_size);
+
+        // Extract sampled vectors (quantized data)
+        let m = self.quantizer.m();
+        let mut sampled_data = Vec::with_capacity(sample_size * m);
+        for idx in sampled_indices.into_vec() {
+            let start = idx * m;
+            let end = start + m;
+            sampled_data.extend_from_slice(&self.data[start..end]);
+        }
+
+        Self {
+            data: sampled_data,
+            n_vecs: sample_size,
+            d: self.d,
+            quantizer: self.quantizer.clone(),
+        }
+    }
+
+    
     #[inline]
     pub fn with_capacity(quantizer: Q, d: usize, capacity: usize) -> Self {
         Self {
@@ -390,32 +432,20 @@ where
         sample
     }
 
-    pub fn top1(&self, queries: &[T], batch_size: usize) -> Vec<(f32, usize)>
-    where
-        T: Float + EuclideanDistance<T> + DotProduct<T>,
-    {
-        assert!(
-            queries.len() == batch_size * self.dim(),
-            "Query dimension ({}) does not match centroid dimension ({})!",
-            queries.len() / batch_size,
-            self.dim(),
-        );
+    #[inline]
+    pub fn from_random_sample_with_rng<R: rand::Rng>(&self, rng: &mut R, n_vecs: usize) -> Self {
+        use rand::seq::index::sample;
 
-        let mut results = Vec::with_capacity(batch_size);
+        let sampled_id = sample(rng, self.len(), n_vecs);
+        let mut sample = Self::with_capacity_plain(n_vecs, self.d);
 
-        for query in queries.chunks_exact(self.dim()) {
-            let query_array = DenseVector1D::new(query);
-
-            let mut heap = TopkHeap::new(1);
-            let search_results = self.search(query_array, &mut heap);
-
-            if let Some((dist, idx)) = search_results.into_iter().next() {
-                results.push((dist, idx));
-            } else {
-                results.push((f32::MAX, usize::MAX));
-            }
+        for id in sampled_id {
+            sample.push(&DenseVector1D::new(
+                &self.data[id * self.d..(id + 1) * self.d],
+            ));
         }
 
-        results
+        sample
     }
+
 }

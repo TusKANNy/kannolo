@@ -16,7 +16,7 @@ use std::io::{BufReader, Read, Result as IoResult};
 use std::ops::Range;
 use std::path::Path;
 
-use crate::{SparseVector1D, Vector1D};
+use crate::{SparseVector1D, VectorType};
 
 use serde::{Deserialize, Serialize};
 
@@ -163,7 +163,9 @@ where
             DistanceType::Euclidean => {
                 panic!("Euclidean distance is not supported for sparse datasets.")
             }
-            DistanceType::DotProduct => -sparse_dot_product_with_merge(&document1, &document2),
+            DistanceType::DotProduct => {
+                -1.0 * sparse_dot_product_with_merge(&document1, &document2)
+            }
         }
     }
 
@@ -197,6 +199,60 @@ where
         let evaluator = self.query_evaluator(query);
         let distances = evaluator.compute_distances(self, 0..self.len());
         evaluator.topk_retrieval(distances, heap)
+    }
+
+    fn sample(&self, _sample_size: usize) -> Self {
+        unimplemented!("sample() is only implemented for SparseDataset with Vec containers")
+    }
+}
+
+// Specific implementation for Vec-backed SparseDataset  
+impl<Q> SparseDataset<Q, Vec<()>>
+where
+    Q: Quantizer<DatasetType = SparseDataset<Q>> + Clone,
+    Q::OutputItem: Copy + Default + Clone,
+{
+    pub fn sample(&self, sample_size: usize) -> Self {
+        let dataset_len = self.n_vecs;
+        
+        // If sample size >= dataset length, clone the entire dataset
+        if sample_size >= dataset_len {
+            return Self {
+                values: self.values.clone(),
+                components: self.components.clone(),
+                offsets: self.offsets.clone(),
+                n_vecs: self.n_vecs,
+                d: self.d,
+                quantizer: self.quantizer.clone(),
+            };
+        }
+
+        // Sample indices uniformly at random
+        use rand::seq::index::sample;
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(525);
+        let sampled_indices = sample(&mut rng, dataset_len, sample_size);
+
+        // Extract sampled vectors
+        let mut sampled_values = Vec::new();
+        let mut sampled_components = Vec::new();
+        let mut sampled_offsets = vec![0];
+        
+        for idx in sampled_indices.into_vec() {
+            let range: Range<usize> = Self::vector_range(self.offsets.as_ref(), idx);
+            sampled_components.extend_from_slice(&self.components[range.clone()]);
+            sampled_values.extend_from_slice(&self.values[range]);
+            sampled_offsets.push(sampled_components.len());
+        }
+
+        Self {
+            values: sampled_values,
+            components: sampled_components,
+            offsets: sampled_offsets,
+            n_vecs: sample_size,
+            d: self.d,
+            quantizer: self.quantizer.clone(),
+        }
     }
 }
 

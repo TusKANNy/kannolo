@@ -1,13 +1,11 @@
-use crate::graph::GraphTrait;
 use crate::quantizer::{IdentityQuantizer, Quantizer, QueryEvaluator};
 use crate::{Dataset, DotProduct, EuclideanDistance, Float, GrowableDataset};
 
-pub trait GraphIndex<D, Q, G>
+pub trait Index<D, Q>
 where
-    D: Dataset<Q> + GrowableDataset<Q>,
+    D: Dataset<Q>,
     Q: Quantizer<DatasetType = D>,
     Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
-    G: GraphTrait,
 {
     type BuildParams; // Type for graph build parameters
     type SearchParams; // Type for search parameters
@@ -22,7 +20,12 @@ where
     /// including the dataset and the graph structure.
     fn print_space_usage_bytes(&self);
 
-    fn build_from_dataset<'a, BD, IQ>(
+    /// Builds an index from a dataset.
+    ///
+    /// For graph-based indexes this will perform the graph build. For datasets
+    /// acting as indices (flat indices), this can simply return the dataset
+    /// that was passed as `dataset_for_search`.
+    fn build_index<'a, BD, IQ>(
         dataset: &'a BD,
         quantizer: Q,
         build_params: &Self::BuildParams,
@@ -34,8 +37,6 @@ where
         // The query evaluator, however, requires a vector of type Querytype.
         <IQ as Quantizer>::Evaluator<'a>:
             QueryEvaluator<'a, QueryType = <BD as Dataset<IQ>>::DataType<'a>>,
-        // This constraint is necessary because the `push` function of the new_dataset
-        // expects input types of InputDataType, while we iterate over types of DataType from the source_dataset.
         D: GrowableDataset<Q, InputDataType<'a> = <BD as Dataset<IQ>>::DataType<'a>>,
         <Q as Quantizer>::InputItem: 'a;
 
@@ -58,4 +59,5 @@ where
         <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
             + DotProduct<<Q as Quantizer>::InputItem>,
         <Q as Quantizer>::InputItem: 'a;
+
 }

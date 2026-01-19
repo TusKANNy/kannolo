@@ -3,7 +3,7 @@ use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
 use crate::{
     dot_product_batch_4_simd, dot_product_simd, euclidean_distance_batch_4_simd,
-    euclidean_distance_simd, DenseVector1D, Vector1D,
+    euclidean_distance_simd, DenseVector1D, VectorType,
 };
 use crate::{Dataset, DistanceType, Float};
 

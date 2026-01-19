@@ -2,13 +2,15 @@ use std::f32;
 
 use crate::datasets::{dense_dataset::DenseDataset, sparse_dataset::SparseDataset};
 use crate::graph::Graph;
-use crate::graph_index::GraphIndex;
+use crate::index::Index;
 use crate::hnsw::{HNSWBuildParams, HNSWSearchParams, HNSW};
 use crate::index_serializer::IndexSerializer;
 use crate::plain_quantizer::PlainQuantizer;
 use crate::pq::ProductQuantizer;
 use crate::sparse_plain_quantizer::SparsePlainQuantizer;
-use crate::{read_numpy_f32_flatten_2d, Dataset, DenseVector1D, DistanceType, Vector1D};
+use crate::{
+    read_numpy_f32_flatten_2d, Dataset, DenseVector1D, DistanceType, VectorType,
+};
 use half::f16;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -58,7 +60,7 @@ impl DensePlainHNSW {
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -102,7 +104,7 @@ impl DensePlainHNSW {
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -183,7 +185,7 @@ impl DensePlainHNSW {
     /// The method returns a tuple of two 1D NumPy arrays of shape (n_queries * k):
     /// (ids, distances). In Python you can do:
     ///
-    /// ids, distances = index.search(queries, k, ef_search)
+    ///     ids, distances = index.search(queries, k, ef_search)
     ///
     /// Here, `ids` is an array of doc IDs (as int64) and `distances` is an array of scores (as float32).
     pub fn search_batch(
@@ -274,63 +276,33 @@ impl DensePlainHNSWf16 {
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
         Ok(DensePlainHNSWf16 { index })
     }
 
-    /// Build a dense plain HNSW index from a 1D NumPy array with f16 precision.
-    ///
-    /// This function builds an HNSW (Hierarchical Navigable Small World) index on
-    /// f16 (half-precision) floating point vectors.
-    ///
-    /// # Parameters
-    ///
-    /// * `data_vec` - A 1D NumPy array of uint16 values representing f16 bit patterns.
-    ///                Shape should be (num_docs * dim). To convert from f16:
-    ///                `data_f16.view(np.uint16)`, where data_f16 is your f16 array.
-    /// * `dim` - Dimensionality of each vector in the dataset.
-    /// * `m` - Number of neighbors per node in the HNSW graph (default: 32).
-    ///         Higher values improve recall but increase memory usage and build time.
-    /// * `ef_construction` - Size of the dynamic candidate list during construction (default: 200).
-    ///                       Higher values improve index quality but increase build time.
-    /// * `metric` - Distance metric to use (default: "ip").
-    ///              "ip" for inner product, "l2" for Euclidean distance.
-    ///
-    /// # Returns
-    ///
-    /// A new DensePlainHNSWf16 index ready for searching.
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// import numpy as np
-    /// # Create f16 data and convert to bit patterns
-    /// data_f16 = np.random.randn(1000, 128).astype(np.float16)
-    /// data_bits = data_f16.view(np.uint16)
-    ///
-    /// # Build the index
-    /// index = DensePlainHNSWf16.build_from_array(
-    ///     data_bits, dim=128, m=32, ef_construction=200, metric="ip"
-    /// )
-    /// ```
+    /// Build a dense plain index from a 1D NumPy array given the dimensionality.
+    /// - `data_vec`: a 1D f32 array of len num_docs * dim
+    /// - `dim`: dimensionality of the data
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during index construction
+    /// - `metric`: either "l2" for Euclidean or "ip" for inner product
     #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()), text_signature = "(data_vec, dim, m=32, ef_construction=200, metric='ip')")]
+    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_array(
-        data_vec: PyReadonlyArray1<u16>,
+        data_vec: PyReadonlyArray1<f32>,
         dim: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        // Interpret u16 values as f16 bit patterns
-        println!("Reading data as f16 from u16 bit patterns");
+        // Convert the f32 data to f16.
         let data_vec: Vec<f16> = data_vec
             .as_slice()?
             .iter()
-            .map(|&bits| f16::from_bits(bits))
+            .map(|&v| f16::from_f32(v))
             .collect();
 
         // Determine the distance type.
@@ -353,7 +325,7 @@ impl DensePlainHNSWf16 {
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         let start = std::time::Instant::now();
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
         let elapsed = start.elapsed();
         println!("Time to build index: {:?}", elapsed);
 
@@ -376,38 +348,16 @@ impl DensePlainHNSWf16 {
         Ok(DensePlainHNSWf16 { index })
     }
 
-    /// Search for the k nearest neighbors of a query vector.
+    /// Search using a single query vector.
     ///
-    /// Performs approximate nearest neighbor search using the HNSW index
-    /// with f16 precision vectors.
+    /// Parameters:
+    /// - `query`: a 1D NumPy array (f32) representing the query vector.
+    /// - `k`: number of nearest neighbors to return.
+    /// - `ef_search`: parameter controlling the candidate pool size during search.
     ///
-    /// # Parameters
-    ///
-    /// * `query` - A 1D NumPy array of float32 values representing the query vector.
-    ///             Should have the same dimensionality as the indexed vectors.
-    /// * `k` - Number of nearest neighbors to return.
-    /// * `ef_search` - Size of the dynamic candidate list during search.
-    ///                 Higher values improve recall but increase search time.
-    ///                 Should be >= k. Typical values: 10-400.
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// - distances: numpy.ndarray of float32 - similarity scores for the k nearest neighbors
-    /// - ids: numpy.ndarray of int64 - document IDs for the k nearest neighbors
-    ///
-    /// For "ip" metric: higher distances = more similar
-    /// For "l2" metric: lower distances = more similar
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// # Search for 10 nearest neighbors
-    /// query = np.random.randn(128).astype(np.float32)
-    /// distances, ids = index.search(query, k=10, ef_search=100)
-    /// print(f"Found {len(ids)} neighbors")
-    /// print(f"Best match: doc_id={ids[0]}, score={distances[0]}")
-    /// ```
+    /// Returns a tuple (distances, ids) where:
+    /// - `distances` is a 1D NumPy array (f32) of scores.
+    /// - `ids` is a 1D NumPy array (i64) of document IDs.
     pub fn search(
         &self,
         query: PyReadonlyArray1<f32>,
@@ -458,7 +408,7 @@ impl DensePlainHNSWf16 {
     /// The method returns a tuple of two 1D NumPy arrays of shape (n_queries * k):
     /// (ids, distances). In Python you can do:
     ///
-    /// ids, distances = index.search(queries, k, ef_search)
+    ///     ids, distances = index.search(queries, k, ef_search)
     ///
     /// Here, `ids` is an array of doc IDs (as int64) and `distances` is an array of scores (as float32).
     pub fn search_batch(
@@ -554,13 +504,13 @@ impl SparsePlainHNSW {
         })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f32>::new(Dataset::dim(&dataset), distance);
 
         // Create HNSW configuration.
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -623,13 +573,13 @@ impl SparsePlainHNSW {
         })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f32>::new(dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f32>::new(Dataset::dim(&dataset), distance);
 
         // Create HNSW configuration.
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSW { index })
     }
@@ -837,58 +787,32 @@ impl SparsePlainHNSWf16 {
                 })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
 
         // Create HNSW configuration.
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSWf16 { index })
     }
 
-    /// Build a sparse plain index from arrays of components, f16 values, and offsets.
+    /// Build a sparse plain index from arrays of components (i32), values (f32) and offsets (i32).
     ///
-    /// Creates a sparse HNSW index with f16 precision for memory efficiency
-    /// while maintaining good search quality for sparse vector data.
-    ///
-    /// # Parameters
-    ///
-    /// * `components` - A 1D NumPy array (i32) of component indices for non-zero elements.
-    /// * `values` - A 1D NumPy array (u16) of f16 values stored as bit patterns.
-    ///              To convert from f16: `values_f16.view(np.uint16)` where values_f16 is your f16 array.
-    /// * `offsets` - A 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
-    /// * `d` - Dimensionality of the vector space (total possible dimensions).
-    /// * `m` - Number of neighbors per node in the HNSW graph (default: 32).
-    /// * `ef_construction` - Size of the dynamic candidate list during construction (default: 200).
-    /// * `metric` - Distance metric to use (default: "ip").
-    ///              "ip" for inner product, "l2" for Euclidean distance.
-    ///
-    /// # Returns
-    ///
-    /// A new SparsePlainHNSWf16 index ready for searching.
-    ///
-    /// # Example
-    ///
-    /// ```python
-    /// import numpy as np
-    /// # Example sparse data with f16 values
-    /// components = np.array([0, 5, 10, 2, 8], dtype=np.int32)
-    /// values_f16 = np.array([0.5, 1.2, -0.3, 0.8, 2.1], dtype=np.float16)
-    /// values_bits = values_f16.view(np.uint16)  # Convert to bit patterns
-    /// offsets = np.array([0, 3, 5], dtype=np.int32)  # Two documents
-    ///
-    /// # Build the index
-    /// index = SparsePlainHNSWf16.build_from_arrays(
-    ///     components, values_bits, offsets, d=128, m=32, ef_construction=200, metric="ip"
-    /// )
-    /// ```
+    /// Parameters:
+    /// - `components`: a 1D NumPy array (i32) of component indices.
+    /// - `values`: a 1D NumPy array (f32) of values corresponding to the components.
+    /// - `offsets`: a 1D NumPy array (i32) of offsets. offsets[i] indicates the start of the i-th document.
+    /// - `d`: dimensionality of the vector space
+    /// - `m`: number of neighbors per node
+    /// - `ef_construction`: candidate pool size during construction
+    /// - `metric`: either "l2" or "ip"
     #[staticmethod]
     #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="ip".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
-        values: PyReadonlyArray1<u16>,
+        values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i32>,
         d: usize,
         m: usize,
@@ -901,13 +825,11 @@ impl SparsePlainHNSWf16 {
             .iter()
             .map(|x| *x as u16)
             .collect::<Vec<_>>();
-        // Convert u16 bit patterns directly to f16 values
-        println!("Reading sparse data as f16 from u16 bit patterns");
         let values_vec = values
             .to_vec()
             .unwrap()
             .iter()
-            .map(|&bits| half::f16::from_bits(bits))
+            .map(|&x| half::f16::from_f32(x))
             .collect::<Vec<_>>();
         let offsets_vec = offsets
             .to_vec()
@@ -939,13 +861,13 @@ impl SparsePlainHNSWf16 {
         })?;
 
         // Create a quantizer for the sparse dataset.
-        let quantizer = SparsePlainQuantizer::<f16>::new(dataset.dim(), distance);
+        let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
 
         // Create HNSW configuration.
         let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
 
         // Build the index.
-        let index = HNSW::build_from_dataset(&dataset, quantizer, &config);
+        let index = HNSW::build_index(&dataset, quantizer, &config);
 
         Ok(SparsePlainHNSWf16 { index })
     }
@@ -1108,7 +1030,6 @@ impl SparsePlainHNSWf16 {
 }
 
 // PQ
-#[derive(serde::Serialize)]
 enum DensePQHNSWEnum {
     PQ8(HNSW<DenseDataset<ProductQuantizer<8>>, ProductQuantizer<8>, Graph>),
     PQ16(HNSW<DenseDataset<ProductQuantizer<16>>, ProductQuantizer<16>, Graph>),
@@ -1185,52 +1106,52 @@ impl DensePQHNSW {
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1299,52 +1220,53 @@ impl DensePQHNSW {
         let inner = match m_pq {
             8 => {
                 let quantizer = ProductQuantizer::<8>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                // Create encoded dataset for search
+                let index = HNSW::build_index(&dataset, quantizer, &config);
                 DensePQHNSWEnum::PQ8(index)
             }
             16 => {
                 let quantizer = ProductQuantizer::<16>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ16(index)
             }
             32 => {
                 let quantizer = ProductQuantizer::<32>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ32(index)
             }
             48 => {
                 let quantizer = ProductQuantizer::<48>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ48(index)
             }
             64 => {
                 let quantizer = ProductQuantizer::<64>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ64(index)
             }
             96 => {
                 let quantizer = ProductQuantizer::<96>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ96(index)
             }
             128 => {
                 let quantizer = ProductQuantizer::<128>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ128(index)
             }
             192 => {
                 let quantizer = ProductQuantizer::<192>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ192(index)
             }
             256 => {
                 let quantizer = ProductQuantizer::<256>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ256(index)
             }
             384 => {
                 let quantizer = ProductQuantizer::<384>::train(&training_dataset, nbits, distance);
-                let index = HNSW::build_from_dataset(&dataset, quantizer,  &config);
+                let index = HNSW::build_index(&dataset, quantizer,  &config);
                 DensePQHNSWEnum::PQ384(index)
             }
             _ => {
@@ -1422,7 +1344,7 @@ impl DensePQHNSW {
         Ok(DensePQHNSW { inner })
     }
 
-    /// Save the PQ index to a file.
+        /// Save the PQ index to a file.
     pub fn save(&self, path: &str) -> PyResult<()> {
         match self.inner {
             DensePQHNSWEnum::PQ8(ref index) => IndexSerializer::save_index::<
@@ -1603,7 +1525,7 @@ impl DensePQHNSW {
     ///
     /// In Python you can do:
     ///
-    /// distances, ids = pq_index.search(queries, k, ef_search)
+    ///     distances, ids = pq_index.search(queries, k, ef_search)
     pub fn search_batch(
         &self,
         queries_path: &str,

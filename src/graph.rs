@@ -488,7 +488,7 @@ impl GraphTrait for GraphFixedDegree {
 
         GraphFixedDegree {
             neighbors: growable_graph.neighbors.clone().into_boxed_slice(),
-            ids_mapping,
+            ids_mapping: ids_mapping,
             max_degree: growable_graph.max_degree,
             n_edges: growable_graph.n_edges,
             n_nodes: growable_graph.n_nodes,
@@ -711,6 +711,7 @@ impl GrowableGraph {
         <Q as Quantizer>::Evaluator<'a>:
             QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
         <Q as Quantizer>::OutputItem: Float,
+        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
     {
         let mut reverse_links_data = Vec::with_capacity(forward_neighbors.len());
 
@@ -782,6 +783,7 @@ impl GrowableGraph {
         <Q as Quantizer>::Evaluator<'a>:
             QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
         <Q as Quantizer>::OutputItem: Float,
+        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
     {
         if closest_vectors.len() <= max_size {
             return closest_vectors
@@ -851,6 +853,7 @@ impl GrowableGraph {
         <Q as Quantizer>::Evaluator<'a>:
             QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
         <Q as Quantizer>::OutputItem: Float,
+        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
     {
         // 1. Get candidate neighbors
         let mut neighbors_nodes =

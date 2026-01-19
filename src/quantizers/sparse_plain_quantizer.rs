@@ -2,7 +2,7 @@ use crate::distances::dot_product_dense_sparse;
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
 use crate::{Dataset, DistanceType, Float};
-use crate::{DenseVector1D, SparseVector1D, Vector1D};
+use crate::{DenseVector1D, SparseVector1D, VectorType};
 use crate::{DotProduct, EuclideanDistance};
 
 use crate::datasets::sparse_dataset::SparseDataset;
@@ -102,7 +102,8 @@ impl<'a, T: Float> QueryEvaluator<'a> for SparseQueryEvaluatorPlain<'a, T> {
     fn compute_distance(&self, dataset: &<Self::Q as Quantizer>::DatasetType, index: usize) -> f32 {
         let document = dataset.get(index);
         let dot_product = dot_product_dense_sparse(&self.dense_query, &document);
-        -dot_product
+        let result = -1.0 * dot_product;
+        result
     }
 
     #[inline]

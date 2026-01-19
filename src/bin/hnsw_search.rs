@@ -9,7 +9,7 @@ use kannolo::sparse_plain_quantizer::SparsePlainQuantizer;
 use std::fs::File;
 
 use kannolo::{
-    graph_index::GraphIndex,
+    index::Index,
     hnsw::{HNSWSearchParams, HNSW},
     plain_quantizer::PlainQuantizer,
     read_numpy_f32_flatten_2d, Dataset, DenseDataset, DistanceType, IndexSerializer, SparseDataset,

@@ -4,19 +4,18 @@ use crate::quantizers::encoder::{Encoder, PQEncoder8};
 use crate::quantizers::quantizer::{Quantizer, QueryEvaluator};
 #[cfg(target_arch = "x86_64")]
 use crate::simd_distances::{
-    compute_distance_table_avx2_d2, compute_distance_table_avx2_d4, compute_distance_table_ip_d4,
-    compute_distance_table_ip_d8,
+    compute_distance_table_avx2_d2, compute_distance_table_avx2_d4, compute_distance_table_avx2_d8, compute_distance_table_avx2_d16,
+    compute_distance_table_ip_d2, compute_distance_table_ip_d4, compute_distance_table_ip_d8, compute_distance_table_ip_d16,
 };
 
 use crate::simd_distances::find_nearest_centroid_idx;
 use crate::topk_selectors::OnlineTopKSelector;
-use crate::utils::{compute_vector_norm_squared, sgemm, MatrixLayout};
+use crate::utils::{sgemm, MatrixLayout};
 use crate::{euclidean_distance_simd, Dataset, DistanceType};
 use crate::{Float, PlainDenseDataset};
 use itertools::izip;
-use rayon::prelude::*;
 
-use crate::{AsRefItem, DenseVector1D, Vector1D};
+use crate::{AsRefItem, DenseVector1D, VectorType};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,11 +82,18 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
             return;
         }
 
-        if self.dsub() < 16 {
-            for i in 0..n {
-                let mut encoder = PQEncoder8::new(&mut output_vectors[i * M..(i + 1) * M]);
+        // Use parallel SIMD-optimized encoding for all dsub values.
+        // For dsub=4,8,16 we have specialized SIMD functions.
+        // For other values, find_nearest_centroid_general uses SIMD-friendly distance computation.
+        use rayon::prelude::*;
 
-                let query_vec = &input_vectors[i * self.d()..(i + 1) * self.d()];
+        // Parallelize over vectors: each vector encodes to M bytes independently.
+        input_vectors
+            .par_chunks(self.d())
+            .zip(output_vectors.par_chunks_mut(M))
+            .for_each(|(query_vec, out_code)| {
+                let mut encoder = PQEncoder8::new(out_code);
+
                 for m in 0..M {
                     let qvec_slice = &query_vec[m * self.dsub()..(m + 1) * self.dsub()];
                     let start = m * self.ksub() * self.dsub();
@@ -103,17 +109,7 @@ impl<const M: usize> Quantizer for ProductQuantizer<M> {
 
                     encoder.encode(nearest_centroid_idx);
                 }
-            }
-        } else {
-            let mut dis_tables = vec![0.0f32; n * self.ksub() * M];
-            self.compute_distance_tables(n, input_vectors, &mut dis_tables);
-
-            for i in 0..n {
-                let code_slice = &mut output_vectors[i * code_size..];
-                let tab_slice = &dis_tables[i * self.ksub() * M..];
-                self.compute_code_from_distance_table(tab_slice, code_slice);
-            }
-        }
+            });
     }
 
     #[inline]
@@ -156,6 +152,12 @@ impl<const M: usize> ProductQuantizer<M> {
         }
     }
 
+    /// Train a ProductQuantizer on the full dataset without sampling.
+    ///
+    /// # Arguments
+    /// * `training_data` - Dataset to train on (all vectors will be used)
+    /// * `nbits` - Number of bits per subspace (ksub = 2^nbits)
+    /// * `distance` - Distance type
     #[inline]
     pub fn train(
         training_data: &PlainDenseDataset<f32>,
@@ -163,12 +165,14 @@ impl<const M: usize> ProductQuantizer<M> {
         distance: DistanceType,
     ) -> Self {
         let d = training_data.dim();
+        let n = training_data.len();
         assert_eq!(M % 4, 0, "M ({}) is not divisible by 4", M);
         assert_eq!(d % M, 0, "d ({}) is not divisible by M ({})", d, M);
 
         let dsub = d / M;
         let ksub: usize = 2_usize.pow(nbits as u32);
 
+        println!("Training PQ on all {} vectors", n);
         let centroids = ProductQuantizer::<M>::train_centroids(training_data, ksub, dsub);
 
         ProductQuantizer {
@@ -181,37 +185,118 @@ impl<const M: usize> ProductQuantizer<M> {
         }
     }
 
+    /// Train a ProductQuantizer with optional sampling.
+    ///
+    /// # Arguments
+    /// * `training_data` - Dataset to train on
+    /// * `nbits` - Number of bits per subspace (ksub = 2^nbits)
+    /// * `distance` - Distance type
+    /// * `sample_size` - Optional sample size:
+    ///   - `None`: compute sample size using formula (min(10^7, N, max(10^6, 2*39*ksub, N/20)))
+    ///   - `Some(size)`: use the specified size
+    ///
+    /// If a sample size is determined, extracts a sample and calls `train()` on it.
+    #[inline]
+    pub fn train_with_sample_size(
+        training_data: &PlainDenseDataset<f32>,
+        nbits: usize,
+        distance: DistanceType,
+        sample_size: Option<usize>,
+    ) -> Self {
+        let dataset_len = training_data.len();
+        let ksub: usize = 2_usize.pow(nbits as u32);
+
+        // Determine the sample size
+        let n_samples = match sample_size {
+            Some(size) => size.min(dataset_len),
+            None => {
+                if dataset_len > 1_000_000 {
+                    // Auto-sampling logic for large datasets
+                    let min_points_per_centroid = 39;
+                    let n_iter_for_sampling = 10;
+                    let min_by_cluster = 2 * min_points_per_centroid * ksub;
+                    let min_by_iter = dataset_len / (2 * n_iter_for_sampling);
+                    let candidate = std::cmp::max(std::cmp::max(1_000_000, min_by_cluster), min_by_iter);
+                    std::cmp::min(std::cmp::min(10_000_000, dataset_len), candidate)
+                } else {
+                    dataset_len
+                }
+            }
+        };
+
+        // If we're using all data, just call train directly
+        if n_samples >= dataset_len {
+            return Self::train(training_data, nbits, distance);
+        }
+
+        // Sample the dataset using the Dataset::sample method
+        println!("Training PQ on {} sampled vectors (out of {})", n_samples, dataset_len);
+        let sampled_dataset = training_data.sample(n_samples);
+        Self::train(&sampled_dataset, nbits, distance)
+    }
+
     fn train_centroids(
         training_data: &PlainDenseDataset<f32>,
         ksub: usize,
         dsub: usize,
     ) -> Vec<f32> {
         let d = training_data.dim();
-        let n_samples = training_data.len();
+        let dataset_len = training_data.len();
 
         println!("Running K-Means for {} subspaces", M);
+        
         let run_kmeans = |i: usize| -> Vec<f32> {
-            let mut current_slice = Vec::<f32>::with_capacity(n_samples * dsub);
-            for ns in 0..n_samples {
+            // Extract the i-th subspace from ALL vectors
+            let mut current_slice = Vec::<f32>::with_capacity(dataset_len * dsub);
+            for vec_idx in 0..dataset_len {
                 for j in 0..dsub {
                     current_slice
-                        .push(training_data.data().values_as_slice()[ns * d + i * dsub + j]);
+                        .push(training_data.data().values_as_slice()[vec_idx * d + i * dsub + j]);
                 }
             }
 
             let temp_dataset = PlainDenseDataset::<f32>::from_vec_plain(current_slice, dsub);
-            let kmeans = KMeansBuilder::new().build();
+            // Train k-means on all the data (no sampling)
+            let kmeans = KMeansBuilder::new()
+                .sample_size(None)
+                .build();
             let current_centroids = kmeans.train(&temp_dataset, ksub, None);
             current_centroids.data().values_as_slice().to_vec()
         };
 
-        let centroids = (0..M).into_par_iter().map(|i| run_kmeans(i)).reduce(
-            || Vec::new(),
-            |mut acc, x| {
-                acc.extend_from_slice(&x);
-                acc
-            },
-        );
+        // Run kmeans for each subspace in parallel, but let the kmeans implementation
+        // use its own internal parallelism. We spawn M tasks (one per subspace) and
+        // collect their results into a shared vector protected by a Mutex. This avoids
+        // constraining the inner parallelism to a fixed per-subspace thread count.
+        use std::sync::{Arc, Mutex};
+
+        let results: Arc<Mutex<Vec<Option<Vec<f32>>>>> = Arc::new(Mutex::new(vec![None; M]));
+
+        rayon::scope(|s| {
+            for i in 0..M {
+                let results = Arc::clone(&results);
+                s.spawn(move |_| {
+                    let cent = run_kmeans(i);
+                    let mut guard = results.lock().unwrap();
+                    guard[i] = Some(cent);
+                });
+            }
+        });
+
+        // Flatten results into a single centroids Vec<f32>
+        let mut centroids: Vec<f32> = Vec::with_capacity(M * ksub * dsub);
+        let guard = Arc::try_unwrap(results)
+            .ok()
+            .expect("Arc still has multiple owners")
+            .into_inner()
+            .expect("Mutex poisoned");
+
+        for opt in guard.into_iter() {
+            match opt {
+                Some(mut v) => centroids.append(&mut v),
+                None => panic!("KMeans did not produce centroids for a subspace"),
+            }
+        }
 
         println!("K-Means finished");
 
@@ -219,12 +304,12 @@ impl<const M: usize> ProductQuantizer<M> {
     }
 
     #[inline]
-    fn ksub(&self) -> usize {
+    pub fn ksub(&self) -> usize {
         self.ksub
     }
 
     #[inline]
-    fn dsub(&self) -> usize {
+    pub fn dsub(&self) -> usize {
         self.dsub
     }
 
@@ -263,107 +348,8 @@ impl<const M: usize> ProductQuantizer<M> {
             }
         }
 
-        distance[0] + distance[1] + distance[2] + distance[3]
-    }
-
-    #[inline]
-    fn compute_code_from_distance_table(&self, distance_table: &[f32], code: &mut [u8]) {
-        let mut encoder = PQEncoder8::new(code);
-
-        for m in 0..M {
-            let mut min_distance = f32::MAX;
-            let mut closest_centroid_idx = 0;
-
-            for j in 0..self.ksub() {
-                let distance = distance_table[m * self.ksub() + j];
-                if distance < min_distance {
-                    min_distance = distance;
-                    closest_centroid_idx = j;
-                }
-            }
-
-            encoder.encode(closest_centroid_idx);
-        }
-    }
-
-    #[inline]
-    fn compute_distance_tables(&self, n_queries: usize, query_vec: &[f32], dis_tables: &mut [f32]) {
-        for m in 0..M {
-            let qvec_slice = &query_vec[m * self.dsub()..];
-            let centroids_slice = &self.centroids()[m * self.dsub() * self.ksub()..];
-            let dis_tables_slice = &mut dis_tables[m * self.ksub()..];
-
-            if n_queries == 0 || self.ksub() == 0 {
-                return;
-            }
-
-            self.compute_pairwise_distances(
-                n_queries,
-                qvec_slice,
-                centroids_slice,
-                dis_tables_slice,
-            );
-        }
-    }
-
-    #[inline]
-    fn compute_pairwise_distances(
-        &self,
-        n_queries: usize,
-        query_vec: &[f32],
-        centroids: &[f32],
-        distances: &mut [f32],
-    ) {
-        // Compute the squared L2 norm for each centroid segment and store in the beginning of the distances array.
-        for i in 0..self.ksub() {
-            distances[i] = compute_vector_norm_squared(
-                &centroids[i * self.dsub()..i * self.dsub() + self.dsub()],
-                self.dsub(),
-            );
-        }
-
-        // For each query vector (except the first one), compute the distances to all centroids.
-        for i in 1..n_queries {
-            let query_norm = compute_vector_norm_squared(&query_vec[i * self.d()..], self.dsub());
-            for j in 0..self.ksub() {
-                distances[i * (self.ksub() * M) + j] = query_norm + distances[j];
-            }
-        }
-
-        // Compute the squared L2 norm for the first query vector segment.
-        let query_norm = compute_vector_norm_squared(&query_vec, self.dsub());
-
-        for j in 0..self.ksub() {
-            distances[j] += query_norm;
-        }
-
-        let transpose_a = true;
-        let transpose_b = false;
-
-        let alpha = -2.0;
-        let beta = 1.0;
-        let lda = self.dsub() as isize;
-        let ldb = self.d() as isize;
-        let ldc = (self.ksub() * M) as isize;
-
-        // Perform matrix multiplication using sgemm function.
-        // This operation computes the final pairwise distances between the query vectors and centroids.
-        sgemm(
-            MatrixLayout::ColMajor,
-            transpose_a,
-            transpose_b,
-            alpha,
-            beta,
-            self.ksub(),
-            self.dsub(),
-            n_queries,
-            centroids.as_ptr(),
-            lda,
-            query_vec.as_ptr(),
-            ldb,
-            distances.as_mut_ptr(),
-            ldc,
-        );
+        let final_distance = distance[0] + distance[1] + distance[2] + distance[3];
+        final_distance
     }
 
     #[inline]
@@ -398,6 +384,22 @@ impl<const M: usize> ProductQuantizer<M> {
 
                     4 => unsafe {
                         compute_distance_table_avx2_d4(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    8 => unsafe {
+                        compute_distance_table_avx2_d8(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    16 => unsafe {
+                        compute_distance_table_avx2_d16(
                             distance_table_slice,
                             query_subvector,
                             centroids,
@@ -445,6 +447,14 @@ impl<const M: usize> ProductQuantizer<M> {
             #[cfg(target_arch = "x86_64")]
             {
                 match self.dsub() {
+                    2 => unsafe {
+                        compute_distance_table_ip_d2(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
                     4 => unsafe {
                         compute_distance_table_ip_d4(
                             distance_table_slice,
@@ -455,6 +465,14 @@ impl<const M: usize> ProductQuantizer<M> {
                     },
                     8 => unsafe {
                         compute_distance_table_ip_d8(
+                            distance_table_slice,
+                            query_subvector,
+                            centroids,
+                            self.ksub(),
+                        )
+                    },
+                    16 => unsafe {
+                        compute_distance_table_ip_d16(
                             distance_table_slice,
                             query_subvector,
                             centroids,
@@ -549,7 +567,7 @@ impl<'a, const M: usize> QueryEvaluator<'a> for QueryEvaluatorPQ<'a, M> {
 
         Self {
             _query: query,
-            distance_table,
+            distance_table: distance_table,
         }
     }
 

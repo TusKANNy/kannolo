@@ -1,7 +1,3 @@
-use crate::plain_quantizer::PlainQuantizer;
-use crate::{DenseDataset, DistanceType};
-use anyhow::Result as AnyResult;
-use hdf5::types::H5Type;
 use ndarray::{Array1, Array2};
 use ndarray_npy::ReadNpyExt;
 use std::fs::File;
@@ -124,60 +120,3 @@ pub fn read_tsv_file(fname: &str) -> IoResult<(Vec<Vec<u32>>, usize)> {
     Ok((data, dimension))
 }
 
-pub fn read_dataset(
-    hdf5_path: &str,
-    data_label: &str,
-    query_label: &str,
-    train_label: &str,
-    groundtruth_label: &str,
-    distance_type: DistanceType,
-) -> AnyResult<(
-    DenseDataset<PlainQuantizer<f32>, Vec<f32>>, // data
-    DenseDataset<PlainQuantizer<f32>, Vec<f32>>, // query
-    DenseDataset<PlainQuantizer<f32>, Vec<f32>>, // train
-    DenseDataset<PlainQuantizer<u32>, Vec<u32>>, // gt
-)> {
-    fn read_data<T: H5Type>(path: &str, label: &str) -> AnyResult<(Vec<T>, usize)> {
-        let file = hdf5::File::open(path)?;
-        let dataset = file.dataset(label)?;
-        let shape = dataset.shape();
-        let data: Vec<T> = dataset.read_raw::<T>()?;
-
-        Ok((data, shape[1]))
-    }
-
-    let (data, data_dim) = read_data(hdf5_path, data_label)?;
-    let data_dataset = DenseDataset::from_vec(
-        data,
-        data_dim,
-        PlainQuantizer::<f32>::new(data_dim, distance_type),
-    );
-
-    let (query, query_dim) = read_data(hdf5_path, query_label)?;
-    let query_dataset = DenseDataset::from_vec(
-        query,
-        query_dim,
-        PlainQuantizer::<f32>::new(query_dim, distance_type),
-    );
-
-    let (train, train_dim) = read_data(hdf5_path, train_label)?;
-    let train_dataset = DenseDataset::from_vec(
-        train,
-        train_dim,
-        PlainQuantizer::<f32>::new(train_dim, distance_type),
-    );
-
-    let (groundtruth, gt_dim) = read_data(hdf5_path, groundtruth_label)?;
-    let groundtruth_dataset = DenseDataset::from_vec(
-        groundtruth,
-        gt_dim,
-        PlainQuantizer::<u32>::new(gt_dim, distance_type),
-    );
-
-    Ok((
-        data_dataset,
-        query_dataset,
-        train_dataset,
-        groundtruth_dataset,
-    ))
-}

@@ -90,8 +90,7 @@ fn main() {
             .progress_count(queries.len() as u64)
             .map(|query| {
                 let mut heap = TopkHeap::new(k);
-                dataset.search(query, &mut heap);
-                heap.topk()
+                dataset.search(query, &mut heap)
             })
             .collect();
 
@@ -100,10 +99,12 @@ fn main() {
         for (query_id, result) in results.iter().enumerate() {
             // Writes results to a file in a parsable format
             for (idx, (score, doc_id)) in result.iter().enumerate() {
+                let out_score = *score;
                 writeln!(
                     &mut output_file,
                     "{query_id}\t{doc_id}\t{}\t{score}",
-                    idx + 1
+                    idx + 1,
+                    score = out_score
                 )
                 .unwrap();
             }
@@ -149,8 +150,7 @@ fn main() {
             .progress_count(queries.len() as u64)
             .map(|query| {
                 let mut heap = TopkHeap::new(k);
-                dataset.search(query, &mut heap);
-                heap.topk()
+                dataset.search(query, &mut heap)
             })
             .collect();
 
@@ -159,10 +159,12 @@ fn main() {
         for (query_id, result) in results.iter().enumerate() {
             // Writes results to a file in a parsable format
             for (idx, (score, doc_id)) in result.iter().enumerate() {
+                let out_score = *score;
                 writeln!(
                     &mut output_file,
                     "{query_id}\t{doc_id}\t{}\t{score}",
-                    idx + 1
+                    idx + 1,
+                    score = out_score
                 )
                 .unwrap();
             }

@@ -2,6 +2,7 @@ use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::topk_selectors::OnlineTopKSelector;
 use crate::{DotProduct, EuclideanDistance};
 use crate::{Float, Vector1D};
+use rayon::prelude::*;
 
 pub trait Dataset<Q>
 where
@@ -55,6 +56,11 @@ where
     fn iter<'a>(&'a self) -> impl Iterator<Item = Self::DataType<'a>>
     where
         Q::OutputItem: 'a;
+
+    fn par_iter<'a>(&'a self) -> impl ParallelIterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a + Sync + Send,
+        Self: Sync;
 
     fn search<'a, H: OnlineTopKSelector>(
         &self,

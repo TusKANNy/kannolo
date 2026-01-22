@@ -176,6 +176,15 @@ where
     }
 
     #[inline]
+    fn par_iter<'a>(&'a self) -> impl ParallelIterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a + Sync + Send,
+        Self: Sync,
+    {
+        self.into_par_iter()
+    }
+
+    #[inline]
     fn search<'a, H: OnlineTopKSelector>(
         &self,
         query: <Q::Evaluator<'a> as QueryEvaluator<'a>>::QueryType,
@@ -698,11 +707,13 @@ where
 
 impl<'a, Q, C> IntoParallelIterator for &'a SparseDataset<Q, C>
 where
-    Q: Quantizer + Sync,
-    Q::OutputItem: Sync,
-    C: Container<Type<Q::OutputItem> = Vec<Q::OutputItem>>,
-    C: Container<Type<u16> = Vec<u16>>,
-    C: Container<Type<usize> = Vec<usize>>,
+    Q: Quantizer,
+    Q::OutputItem: Sync + Send,
+    C: Container,
+    C::Type<Q::OutputItem>: AsRef<[Q::OutputItem]>,
+    C::Type<u16>: AsRef<[u16]>,
+    C::Type<usize>: AsRef<[usize]>,
+    SparseDataset<Q, C>: Sync,
 {
     type Iter = ParSparseDatasetIter<'a, Q>;
     type Item = SparseVector1D<&'a [u16], &'a [Q::OutputItem]>;
@@ -822,7 +833,11 @@ where
         let left_last_offset = self.last_offset;
 
         let (left_offsets, right_offsets) = self.offsets.split_at(index);
-        let right_last_offset = *left_offsets.last().unwrap();
+        let right_last_offset = if left_offsets.is_empty() {
+            left_last_offset
+        } else {
+            *left_offsets.last().unwrap()
+        };
 
         let (left_components, right_components) = self
             .components

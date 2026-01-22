@@ -6,6 +6,7 @@ use crate::{
     Dataset, DenseVector1D, DistanceType, Float, GrowableDataset, PlainDenseDataset, Vector1D,
 };
 use crate::{DotProduct, EuclideanDistance};
+use rayon::prelude::*;
 
 use serde::{Deserialize, Serialize};
 
@@ -115,6 +116,15 @@ where
     {
         // 1 is the batch size
         DenseDatasetIter::new(self, 1)
+    }
+
+    #[inline]
+    fn par_iter<'a>(&'a self) -> impl ParallelIterator<Item = Self::DataType<'a>>
+    where
+        Q::OutputItem: 'a + Sync + Send,
+        Self: Sync,
+    {
+        self.into_par_iter()
     }
 
     #[inline]
@@ -263,6 +273,80 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         DenseDatasetIter::new(self, 1)
+    }
+}
+
+impl<'a, Q, B> IntoParallelIterator for &'a DenseDataset<Q, B>
+where
+    Q: Quantizer,
+    B: AsRef<[Q::OutputItem]>,
+    Q::OutputItem: Sync + Send,
+    DenseDataset<Q, B>: Sync,
+{
+    type Item = DenseVector1D<&'a [Q::OutputItem]>;
+    type Iter = ParDenseDatasetIter<'a, Q>;
+
+    fn into_par_iter(self) -> Self::Iter {
+        ParDenseDatasetIter {
+            chunks: self.data.as_ref().par_chunks(self.d),
+        }
+    }
+}
+
+pub struct ParDenseDatasetIter<'a, Q>
+where
+    Q: Quantizer,
+    Q::OutputItem: Sync,
+{
+    chunks: rayon::slice::Chunks<'a, Q::OutputItem>,
+}
+
+impl<'a, Q> ParallelIterator for ParDenseDatasetIter<'a, Q>
+where
+    Q: Quantizer,
+    Q::OutputItem: Sync + Send,
+{
+    type Item = DenseVector1D<&'a [Q::OutputItem]>;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::UnindexedConsumer<Self::Item>,
+    {
+        self.chunks
+            .map(|chunk| DenseVector1D::new(chunk))
+            .drive_unindexed(consumer)
+    }
+
+    fn opt_len(&self) -> Option<usize> {
+        self.chunks.opt_len()
+    }
+}
+
+impl<'a, Q> IndexedParallelIterator for ParDenseDatasetIter<'a, Q>
+where
+    Q: Quantizer,
+    Q::OutputItem: Sync + Send,
+{
+    fn len(&self) -> usize {
+        self.chunks.len()
+    }
+
+    fn drive<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::Consumer<Self::Item>,
+    {
+        self.chunks
+            .map(|chunk| DenseVector1D::new(chunk))
+            .drive(consumer)
+    }
+
+    fn with_producer<CB>(self, callback: CB) -> CB::Output
+    where
+        CB: rayon::iter::plumbing::ProducerCallback<Self::Item>,
+    {
+        self.chunks
+            .map(|chunk| DenseVector1D::new(chunk))
+            .with_producer(callback)
     }
 }
 

@@ -45,6 +45,7 @@ pub use datasets::dataset::Dataset;
 pub use datasets::dataset::GrowableDataset;
 pub use datasets::dense_dataset::DenseDataset;
 pub use datasets::dense_dataset::DenseDatasetIter;
+pub use datasets::dense_dataset::ParDenseDatasetIter;
 pub use datasets::sparse_dataset::ParSparseDatasetIter;
 pub use datasets::sparse_dataset::SparseDataset;
 pub use datasets::sparse_dataset::SparseDatasetIter;

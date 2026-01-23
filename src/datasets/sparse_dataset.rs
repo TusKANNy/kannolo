@@ -206,7 +206,7 @@ where
         let evaluator = self.query_evaluator(query);
         let distances = evaluator.compute_distances(self, 0..self.len());
         evaluator.topk_retrieval(distances, heap);
-        
+
         if self.quantizer().distance() == DistanceType::DotProduct {
             // For dot-product, we stored negative distances to use the same heap logic
             heap.topk()

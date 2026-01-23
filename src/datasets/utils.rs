@@ -119,4 +119,3 @@ pub fn read_tsv_file(fname: &str) -> IoResult<(Vec<Vec<u32>>, usize)> {
 
     Ok((data, dimension))
 }
-

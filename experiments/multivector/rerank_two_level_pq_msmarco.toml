@@ -30,7 +30,7 @@ index =         "ms_marco_cocondenser_fixed" # Graph index filename (e.g., "inde
 [indexing_parameters]
 m =            32
 efc =          2000
-metric =       "ip"
+metric =       "dotproduct"
 
 [reranking]
 multivec_data_dir = "/data2/cosimorulli/indexes_for_silvio/indexes_jmpq/260k_m32" # Path to compressed multivector data (e.g., ms_marco_jmpq16 or ms_marco_mopq32 folder)

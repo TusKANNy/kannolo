@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::rngs::StdRng;
@@ -9,10 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
-use crate::quantizer::{self, IdentityQuantizer, Quantizer, QueryEvaluator};
-use crate::DotProduct;
-use crate::EuclideanDistance;
-use crate::{hnsw_utils::*, Dataset, DistanceType, Float, GrowableDataset};
+use crate::hnsw_utils::*;
+use vectorium::vector_encoder::VectorEncoder;
+use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
 
 /// A `HNSW` struct represents a Hierarchical Navigable Small World (HNSW) graph structure that is used
 /// for approximate nearest neighbor (ANN) search.
@@ -21,11 +19,10 @@ use crate::{hnsw_utils::*, Dataset, DistanceType, Float, GrowableDataset};
 /// vectors in the graph for a given query vector.
 ///
 /// # Type Parameters
-/// * `D`: The type of the dataset (e.g., `DenseDataset`, `SparseDataset`).
-/// * `Q`: The type of the quantizer used.
+/// * `D`: The type of the dataset (vectorium dataset).
 /// * `G`: The type of the graph implementation (e.g., `Graph`, `GraphFixedDegree`).
 #[derive(Serialize, Deserialize)]
-pub struct HNSW<D, Q, G> {
+pub struct HNSW<D, G> {
     /// A boxed slice containing the hierarchical levels of the HNSW graph.
     /// Each level is a graph structure. Level 0 is the highest level (most sparse),
     /// and the last level is the ground level (contains all nodes).
@@ -45,9 +42,6 @@ pub struct HNSW<D, Q, G> {
     /// The global ID of the vector from which every search begins.
     /// This node is located on the highest level of the hierarchy.
     entry_point: usize,
-    /// A `PhantomData` marker that indicates the type `Q` is used in the context of the struct,
-    /// ensuring proper type safety without actually storing a value of type `Q`.
-    _phantom: PhantomData<Q>,
 }
 
 /// Parameters for building the HNSW index.
@@ -119,18 +113,9 @@ impl Default for HNSWSearchParams {
     }
 }
 
-impl<D, Q, G> HNSW<D, Q, G>
+impl<D, G> HNSW<D, G>
 where
-    D: Dataset<Q> + GrowableDataset<Q>,
-    Q: Quantizer<DatasetType = D>,
-    G: GraphTrait,
-{
-}
-
-impl<D, Q, G> HNSW<D, Q, G>
-where
-    D: Dataset<Q> + Sync,
-    Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
+    D: Dataset,
     G: GraphTrait,
 {
     /// Return the maximum level of the HNSW graph (0-based).
@@ -151,11 +136,10 @@ where
     }
 }
 
-impl<D, Q, G> Index<D, Q> for HNSW<D, Q, G>
+impl<D, G> Index<D> for HNSW<D, G>
 where
-    D: Dataset<Q> + GrowableDataset<Q> + Sync,
-    Q: Quantizer<DatasetType = D>,
-    Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
+    D: Dataset + Sync + SpaceUsage,
+    <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     G: GraphTrait,
 {
     type BuildParams = HNSWBuildParams;
@@ -168,11 +152,11 @@ where
 
     #[inline]
     fn dim(&self) -> usize {
-        self.dataset.dim()
+        self.dataset.input_dim()
     }
 
     fn print_space_usage_bytes(&self) {
-        let dataset_size = self.dataset.get_space_usage_bytes();
+        let dataset_size = self.dataset.space_usage_bytes();
         let index_size = self
             .levels
             .iter()
@@ -185,27 +169,25 @@ where
         );
     }
 
-    fn search<'a, QD, QQ>(
-        &'a self,
-        query: QD::DataType<'a>,
+    fn search<'q>(
+        &'q self,
+        query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
         k: usize,
         search_params: &Self::SearchParams,
-    ) -> Vec<(f32, usize)>
-    where
-        QD: Dataset<QQ> + Sync + 'a,
-        QQ: Quantizer<DatasetType = QD> + Sync + 'a,
-        <Q as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <QD as Dataset<QQ>>::DataType<'a>>,
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>,
-        <Q as Quantizer>::InputItem: 'a,
-    {
-        let query_eval = self.dataset.query_evaluator(query);
+    ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>> {
+        let query_eval = self.dataset.encoder().query_evaluator(query);
         let num_levels = self.levels.len();
 
         // --- Stage 1: Search upper levels ---
         // Start at the single entry point on the highest level.
-        let mut entry_node = Candidate(f32::MAX, self.entry_point);
+        let entry_graph = if num_levels > 1 {
+            &self.levels[0]
+        } else {
+            &self.levels[num_levels - 1]
+        };
+        let entry_external_id = entry_graph.get_external_id(self.entry_point) as VectorId;
+        let entry_distance = query_eval.compute_distance(self.dataset.get(entry_external_id));
+        let mut entry_node = Candidate(entry_distance, self.entry_point);
         if num_levels > 1 {
             // Greedily search from the top level down to level 1.
             for level_graph in &self.levels[..num_levels - 1] {
@@ -238,12 +220,14 @@ where
             search_params.ef_search,
         );
 
-        // Adjust distance if using DotProduct distance type
-        if self.dataset.quantizer().distance() == DistanceType::DotProduct {
-            // TODO: Trait distanze per gestire il -
-            topk.iter_mut().for_each(|(dis, _)| *dis = -(*dis));
-        }
+        // Map local IDs to global vector IDs and return scored vectors
         topk
+            .drain(..)
+            .map(|candidate| vectorium::dataset::ScoredVector {
+                distance: candidate.distance(),
+                vector: candidate.id_vec() as VectorId,
+            })
+            .collect()
     }
 
     /// Builds the HNSW index from a source dataset.
@@ -255,20 +239,8 @@ where
     /// 4. It iterates through all HNSW levels, from highest to lowest, inserting nodes.
     ///    - A hybrid sequential/parallel strategy is used based on the number of nodes at each level.
     /// 5. It finalizes the graph structures and creates the final `HNSW` index struct.
-    fn build_index<'a, BD, IQ>(
-        source_dataset: &'a BD,
-        quantizer: Q,
-        build_params: &Self::BuildParams,
-    ) -> Self
-    where
-        BD: Dataset<IQ> + Sync + 'a,
-        IQ: IdentityQuantizer<DatasetType = BD, T: Float> + Sync + 'a,
-        <IQ as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <BD as Dataset<IQ>>::DataType<'a>>,
-        D: GrowableDataset<Q, InputDataType<'a> = <BD as Dataset<IQ>>::DataType<'a>>,
-        <Q as Quantizer>::InputItem: 'a + Float,
-    {
-        let num_vectors = source_dataset.len();
+    fn build_index(dataset: D, build_params: &Self::BuildParams) -> Self {
+        let num_vectors = dataset.len();
         let m = build_params.num_neighbors_per_vec;
         let default_probabs =
             compute_levels_probabilities(1.0 / (m as f32).ln(), num_vectors as f32);
@@ -336,7 +308,7 @@ where
                     max_level,
                     m,
                     &mut growable_levels,
-                    source_dataset,
+                    &dataset,
                     build_params,
                     entry_point_local_id,
                     &level1_to_level0_mapping,
@@ -350,7 +322,7 @@ where
                     max_level,
                     m,
                     &mut growable_levels,
-                    source_dataset,
+                    &dataset,
                     build_params,
                     entry_point_local_id,
                     &level1_to_level0_mapping,
@@ -368,19 +340,12 @@ where
             .map(|g| G::from_growable_graph(&g))
             .collect();
 
-        let mut dataset = D::new(quantizer, source_dataset.dim());
-        for id in 0..source_dataset.len() {
-            // Encode and add each vector to the final dataset.
-            dataset.push(&source_dataset.get(id));
-        }
-
         Self {
             levels: final_levels.into_boxed_slice(),
             level1_to_level0_mapping: level1_to_level0_mapping.into_boxed_slice(),
             dataset,
             num_neighbors_per_vec: m,
             entry_point: entry_point_local_id,
-            _phantom: PhantomData,
         }
     }
 }
@@ -550,10 +515,10 @@ fn compute_levels(
 }
 
 // --- Private Helper Methods for HNSW build process ---
-impl<D, Q, G> HNSW<D, Q, G>
+impl<D, G> HNSW<D, G>
 where
-    D: Dataset<Q> + GrowableDataset<Q> + Sync,
-    Q: Quantizer<InputItem: Float, DatasetType = D> + Sync,
+    D: Dataset + Sync,
+    <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     G: GraphTrait,
 {
     fn insert_entry_point(
@@ -580,28 +545,27 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn process_level_sequentially<'a, BD, IQ>(
+    fn process_level_sequentially(
         nodes_to_insert_slice: &[usize],
         level: u8,
         max_level: u8,
         m: usize,
         growable_levels: &mut [GrowableGraph],
-        source_dataset: &'a BD,
+        source_dataset: &D,
         build_params: &HNSWBuildParams,
         entry_point_local_id: usize,
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],
         pb: &ProgressBar,
-    ) where
-        BD: Dataset<IQ> + Sync + 'a,
-        IQ: IdentityQuantizer<DatasetType = BD, T: Float> + Sync + 'a,
-        <IQ as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <BD as Dataset<IQ>>::DataType<'a>>,
-        <Q as Quantizer>::InputItem: 'a + Float,
-    {
+    ) {
+        let entry_point_global_id = ids_sorted_by_level[0];
         for &global_id in nodes_to_insert_slice {
-            let query_eval = source_dataset.query_evaluator(source_dataset.get(global_id));
-            let mut entry_node = Candidate(f32::MAX, entry_point_local_id);
+            let query_eval = source_dataset
+                .encoder()
+                .vector_evaluator(source_dataset.get(global_id as VectorId));
+            let entry_distance = query_eval
+                .compute_distance(source_dataset.get(entry_point_global_id as VectorId));
+            let mut entry_node = Candidate(entry_distance, entry_point_local_id);
 
             if level > 0 {
                 for current_level in ((level + 1)..=max_level).rev() {
@@ -643,7 +607,8 @@ where
             } else {
                 ids_sorted_by_level[0]
             };
-            let dist = query_eval.compute_distance(source_dataset, ground_entry_global_id);
+            let dist = query_eval
+                .compute_distance(source_dataset.get(ground_entry_global_id as VectorId));
             let ground_entry_node = Candidate(dist, ground_entry_global_id);
 
             let (ground_neighbors, ground_reverse_links, _) = ground_graph
@@ -667,30 +632,25 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn process_level_parallelly<'a, BD, IQ>(
+    fn process_level_parallelly(
         nodes_to_insert_slice: &[usize],
         level: u8,
         max_level: u8,
         m: usize,
         growable_levels: &mut [GrowableGraph],
-        source_dataset: &'a BD,
+        source_dataset: &D,
         build_params: &HNSWBuildParams,
         entry_point_local_id: usize,
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],
         pb: &ProgressBar,
-    ) where
-        BD: Dataset<IQ> + Sync + 'a,
-        IQ: IdentityQuantizer<DatasetType = BD, T: Float> + Sync + 'a,
-        <IQ as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <BD as Dataset<IQ>>::DataType<'a>>,
-        <Q as Quantizer>::InputItem: 'a + Float,
-    {
+    ) {
         let mut current_batch_size = build_params.initial_build_batch_size;
         let max_batch_size = build_params.max_build_batch_size;
         let level_start_local_ids: Vec<usize> =
             growable_levels.iter().map(|g| g.inserted_nodes()).collect();
         let mut processed_nodes = 0;
+        let entry_point_global_id = ids_sorted_by_level[0];
 
         while processed_nodes < nodes_to_insert_slice.len() {
             let remaining_nodes = nodes_to_insert_slice.len() - processed_nodes;
@@ -702,8 +662,12 @@ where
                 .par_iter()
                 .enumerate()
                 .map(|(i, &global_id)| {
-                    let query_eval = source_dataset.query_evaluator(source_dataset.get(global_id));
-                    let mut entry_node = Candidate(f32::MAX, entry_point_local_id);
+                    let query_eval = source_dataset
+                        .encoder()
+                        .vector_evaluator(source_dataset.get(global_id as VectorId));
+                    let entry_distance = query_eval
+                        .compute_distance(source_dataset.get(entry_point_global_id as VectorId));
+                    let mut entry_node = Candidate(entry_distance, entry_point_local_id);
                     let mut upper_level_data = Vec::new();
 
                     if level > 0 {
@@ -739,7 +703,8 @@ where
                     } else {
                         ids_sorted_by_level[0]
                     };
-                    let dist = query_eval.compute_distance(source_dataset, ground_entry_global_id);
+                    let dist = query_eval
+                        .compute_distance(source_dataset.get(ground_entry_global_id as VectorId));
                     let ground_entry_node = Candidate(dist, ground_entry_global_id);
 
                     let (ground_neighbors, ground_reverse_links, _) = ground_graph

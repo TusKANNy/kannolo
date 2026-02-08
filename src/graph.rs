@@ -3,11 +3,11 @@ use std::collections::BinaryHeap;
 
 use optional::Optioned;
 use serde::{Deserialize, Serialize};
+use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
+use vectorium::{Dataset, VectorId};
 
 use crate::hnsw_utils::{add_neighbor_to_heaps, from_max_heap_to_min_heap, Candidate};
-use crate::quantizer::{Quantizer, QueryEvaluator};
 use crate::visited_set::set::{create_visited_set, VisitedSet};
-use crate::{Dataset, DotProduct, EuclideanDistance, Float};
 
 /// A trait that defines the common interface for different graph implementations.
 ///
@@ -65,16 +65,15 @@ pub trait GraphTrait {
     /// # Returns
     /// The best `Candidate` found during the search.
     #[must_use]
-    fn greedy_search_nearest<'a, Q, D, E>(
+    fn greedy_search_nearest<'e, D>(
         &self,
         dataset: &D,
-        query_evaluator: &E,
-        entry_point: Candidate,
-    ) -> Candidate
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        entry_point: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+    ) -> Candidate<<D::Encoder as VectorEncoder>::Distance>
     where
-        Q: Quantizer<DatasetType = D>,
-        D: Dataset<Q>,
-        E: QueryEvaluator<'a, Q = Q>,
+        D: Dataset,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let mut nearest_id = entry_point.id_vec();
         let mut nearest_distance = entry_point.distance();
@@ -85,7 +84,8 @@ pub trait GraphTrait {
 
             for neighbor in self.neighbors(nearest_id) {
                 let external_id = self.get_external_id(neighbor);
-                let distance_neighbor = query_evaluator.compute_distance(dataset, external_id);
+                let distance_neighbor =
+                    query_evaluator.compute_distance(dataset.get(external_id as VectorId));
 
                 if distance_neighbor < nearest_distance {
                     nearest_distance = distance_neighbor;
@@ -112,64 +112,48 @@ pub trait GraphTrait {
     /// # Returns
     /// A `Vec` containing tuples of `(distance, id)` for the `k` nearest neighbors.
     #[must_use]
-    fn greedy_search_topk<'a, D, Q, E>(
+    fn greedy_search_topk<'e, D>(
         &self,
-        dataset: &'a D,
-        starting_node: Candidate,
-        query_evaluator: &E,
+        dataset: &'e D,
+        starting_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         k: usize,
         ef: usize,
-    ) -> Vec<(f32, usize)>
+    ) -> Vec<Candidate<<D::Encoder as VectorEncoder>::Distance>>
     where
-        D: Dataset<Q> + Sync,
-        Q: Quantizer<DatasetType = D> + 'a,
-        E: QueryEvaluator<'a, Q = Q>, // tie evaluator’s Q = our Q
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>
-            + Float,
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let top_candidates =
             self.search_candidates(dataset, starting_node, query_evaluator, ef, Some(k));
-        // Collect the top candidates from the max-heap
-        let mut top_k = top_candidates
-            .iter()
-            .map(|candidate| (candidate.distance(), candidate.id_vec()))
-            .collect::<Vec<_>>();
 
-        // Sort the top k candidates by distance
-        top_k.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-        // Truncate the top_k to keep only the k best candidates
+        let mut top_k = top_candidates.into_sorted_vec();
         top_k.truncate(k);
-
         top_k
     }
 
     #[must_use]
-    fn search_candidates<'a, D, Q, E>(
+    fn search_candidates<'e, D>(
         &self,
-        dataset: &'a D,
-        entry_node: Candidate,
-        query_evaluator: &E,
+        dataset: &'e D,
+        entry_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         ef: usize,
         k: Option<usize>,
-    ) -> BinaryHeap<Candidate>
+    ) -> BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>>
     where
-        Q: Quantizer<DatasetType = D> + 'a,
-        D: Dataset<Q> + Sync,
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>
-            + Float
-            + 'a,
-        E: QueryEvaluator<'a, Q = Q>, // tie evaluator’s Q = our Q
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let k = k.unwrap_or(0); // Default to 0 if k is not provided
 
         // max-heap: We want to substitute worst result with a better one
-        let mut top_candidates: BinaryHeap<Candidate> = BinaryHeap::new();
+        let mut top_candidates: BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>> =
+            BinaryHeap::new();
 
         // min-heap: We want to extract best candidate first to visit it
-        let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        let mut candidates: BinaryHeap<Reverse<Candidate<<D::Encoder as VectorEncoder>::Distance>>> =
+            BinaryHeap::new();
 
         let mut visited_table = create_visited_set(dataset.len(), ef);
 
@@ -223,53 +207,27 @@ pub trait GraphTrait {
     /// * `visited_table`: A `HashSet` to keep track of visited node IDs.
     /// * `query_evaluator`: An evaluator that can compute distances to the query.
     /// * `add_distances_fn`: A callback function that takes `(distance, id)` and adds the neighbor to the candidate heaps.
-    fn process_neighbors<'a, D, Q, E, F>(
+    fn process_neighbors<'e, D, F>(
         &self,
         dataset: &D,
         neighbors: impl Iterator<Item = usize>,
         visited_table: &mut dyn VisitedSet,
-        query_evaluator: &E,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         mut add_distances_fn: F,
     ) where
-        D: Dataset<Q>,
-        Q: Quantizer<DatasetType = D>,
-        E: QueryEvaluator<'a, Q = Q>,
-        F: FnMut(f32, usize),
+        D: Dataset,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
+        F: FnMut(<D::Encoder as VectorEncoder>::Distance, usize),
     {
-        // Stores the IDs of the neighbors whose distances will be computed
-        let mut local_ids: [usize; 4] = [0; 4];
-
-        let mut counter = 0;
         for neighbor_local_id in neighbors {
             if !visited_table.contains(neighbor_local_id) {
                 visited_table.insert(neighbor_local_id);
 
-                local_ids[counter] = neighbor_local_id; // Store the LOCAL ID
-                counter += 1;
-
-                if counter == 4 {
-                    // Get external IDs just for the distance computation
-                    let external_ids_for_dist: [usize; 4] = [
-                        self.get_external_id(local_ids[0]),
-                        self.get_external_id(local_ids[1]),
-                        self.get_external_id(local_ids[2]),
-                        self.get_external_id(local_ids[3]),
-                    ];
-                    let distances = query_evaluator
-                        .compute_four_distances(&dataset, external_ids_for_dist.iter().copied());
-                    for (dis_neigh, &neighbor) in distances.zip(local_ids.iter()) {
-                        add_distances_fn(dis_neigh, neighbor);
-                    }
-                    counter = 0;
-                }
+                let external_id = self.get_external_id(neighbor_local_id) as VectorId;
+                let distance_neighbor =
+                    query_evaluator.compute_distance(dataset.get(external_id));
+                add_distances_fn(distance_neighbor, neighbor_local_id);
             }
-        }
-
-        // Add the remaining neighbors, if there are any left
-        for &local_id in local_ids.iter().take(counter) {
-            let distance_neighbor: f32 =
-                query_evaluator.compute_distance(dataset, self.get_external_id(local_id));
-            add_distances_fn(distance_neighbor, local_id);
         }
     }
 }
@@ -694,68 +652,43 @@ impl GrowableGraph {
         }
     }
 
-    pub fn precompute_reverse_links<'a, D, Q>(
+    pub fn precompute_reverse_links<'e, D>(
         &self,
-        dataset: &'a D,
+        dataset: &'e D,
         node_to_insert_local_id: usize,
         forward_neighbors: &[usize],
     ) -> Vec<(usize, Vec<usize>)>
     // (neighbor_local_id, new_neighbor_list_for_it)
     where
-        Q: Quantizer<DatasetType = D> + 'a,
-        D: Dataset<Q> + Sync,
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>
-            + Float
-            + 'a,
-        <Q as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
-        <Q as Quantizer>::OutputItem: Float,
-        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let mut reverse_links_data = Vec::with_capacity(forward_neighbors.len());
 
         for &neighbor_local_id in forward_neighbors {
             // The "query" for the heuristic is the neighbor itself, whose neighbor list we are updating.
-            let neighbor_external_id = self.get_external_id(neighbor_local_id);
-            let neighbor_query_eval = dataset.query_evaluator(dataset.get(neighbor_external_id));
+            let neighbor_external_id = self.get_external_id(neighbor_local_id) as VectorId;
+            let neighbor_query_eval =
+                dataset.encoder().vector_evaluator(dataset.get(neighbor_external_id));
 
             // 1. Build a max-heap containing the neighbor's current neighbors and the new node.
             //    The distances are all relative to the neighbor.
-            let mut closest_vectors = BinaryHeap::new();
+            let mut closest_vectors =
+                BinaryHeap::<Candidate<<D::Encoder as VectorEncoder>::Distance>>::new();
 
             // Add its current neighbors
             let neighbors_of_neighbor: Vec<usize> = self.neighbors(neighbor_local_id).collect();
 
-            // Process neighbors in chunks of 4 for batched distance calculation
-            for chunk in neighbors_of_neighbor.chunks(4) {
-                if chunk.len() == 4 {
-                    let external_ids_for_dist: [usize; 4] = [
-                        self.get_external_id(chunk[0]),
-                        self.get_external_id(chunk[1]),
-                        self.get_external_id(chunk[2]),
-                        self.get_external_id(chunk[3]),
-                    ];
-                    let distances = neighbor_query_eval
-                        .compute_four_distances(dataset, external_ids_for_dist.iter().copied());
-
-                    for (dist, &local_id) in distances.zip(chunk.iter()) {
-                        closest_vectors.push(Candidate(dist, local_id));
-                    }
-                } else {
-                    // Process the remainder chunk (less than 4 elements) individually
-                    for &local_id in chunk {
-                        let external_id = self.get_external_id(local_id);
-                        let dist = neighbor_query_eval.compute_distance(dataset, external_id);
-                        closest_vectors.push(Candidate(dist, local_id));
-                    }
-                }
+            for &local_id in &neighbors_of_neighbor {
+                let external_id = self.get_external_id(local_id) as VectorId;
+                let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
+                closest_vectors.push(Candidate(dist, local_id));
             }
 
             // Add the new reverse link (the node we are inserting)
-            let node_to_insert_external_id = self.get_external_id(node_to_insert_local_id);
+            let node_to_insert_external_id = self.get_external_id(node_to_insert_local_id) as VectorId;
             let dist_to_inserted_node =
-                neighbor_query_eval.compute_distance(dataset, node_to_insert_external_id);
+                neighbor_query_eval.compute_distance(dataset.get(node_to_insert_external_id));
             closest_vectors.push(Candidate(dist_to_inserted_node, node_to_insert_local_id));
 
             // 2. Use the robust `shrink_neighbor_list` heuristic to prune the list.
@@ -767,23 +700,15 @@ impl GrowableGraph {
         reverse_links_data
     }
 
-    pub fn shrink_neighbor_list<'a, D, Q>(
+    pub fn shrink_neighbor_list<'e, D>(
         &self,
-        dataset: &'a D,
-        closest_vectors: &mut BinaryHeap<Candidate>,
+        dataset: &'e D,
+        closest_vectors: &mut BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>>,
         max_size: usize,
     ) -> Vec<usize>
     where
-        Q: Quantizer<DatasetType = D> + 'a,
-        D: Dataset<Q> + Sync,
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>
-            + Float
-            + 'a,
-        <Q as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
-        <Q as Quantizer>::OutputItem: Float,
-        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         if closest_vectors.len() <= max_size {
             return closest_vectors
@@ -793,7 +718,9 @@ impl GrowableGraph {
         }
 
         let mut min_heap = from_max_heap_to_min_heap(closest_vectors);
-        let mut new_closest_vectors: BinaryHeap<Candidate> = BinaryHeap::new();
+        let mut new_closest_vectors: BinaryHeap<
+            Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        > = BinaryHeap::new();
 
         while let Some(node) = min_heap.pop() {
             let node1 = node.0;
@@ -803,8 +730,12 @@ impl GrowableGraph {
             // For each candidate, check if it is closer to the query than it is to any
             // other candidate already in the result set.
             for node2 in new_closest_vectors.iter() {
+                let node1_external = self.get_external_id(node1.id_vec()) as VectorId;
+                let node2_external = self.get_external_id(node2.id_vec()) as VectorId;
+                let node1_eval =
+                    dataset.encoder().vector_evaluator(dataset.get(node1_external));
                 let dist_node_1_node2 =
-                    dataset.compute_distance_by_id(node1.id_vec(), node2.id_vec());
+                    node1_eval.compute_distance(dataset.get(node2_external));
                 if dist_node_1_node2 < node1.distance() {
                     keep_node_1 = false;
                     break;
@@ -834,26 +765,22 @@ impl GrowableGraph {
     /// - `Vec<(usize, Vec<usize>)>`: The pre-computed reverse links for existing neighbors.
     /// - `Candidate`: The best candidate found, to be used as the entry point for the next lower level.
     #[must_use]
-    pub fn find_and_prune_neighbors<'a, D, Q>(
+    pub fn find_and_prune_neighbors<'e, D>(
         &self,
-        dataset: &'a D,
-        query_evaluator: &<Q as Quantizer>::Evaluator<'a>,
-        entry_node: Candidate,
+        dataset: &'e D,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        entry_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
         ef_construction: usize,
         m: usize,
         future_local_id: usize,
-    ) -> (Vec<usize>, Vec<(usize, Vec<usize>)>, Candidate)
+    ) -> (
+        Vec<usize>,
+        Vec<(usize, Vec<usize>)>,
+        Candidate<<D::Encoder as VectorEncoder>::Distance>,
+    )
     where
-        Q: Quantizer<DatasetType = D> + 'a,
-        D: Dataset<Q> + Sync,
-        <Q as Quantizer>::InputItem: EuclideanDistance<<Q as Quantizer>::InputItem>
-            + DotProduct<<Q as Quantizer>::InputItem>
-            + Float
-            + 'a,
-        <Q as Quantizer>::Evaluator<'a>:
-            QueryEvaluator<'a, QueryType = <D as Dataset<Q>>::DataType<'a>>,
-        <Q as Quantizer>::OutputItem: Float,
-        <Q as Quantizer>::OutputItem: DotProduct<<Q as Quantizer>::OutputItem>,
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         // 1. Get candidate neighbors
         let mut neighbors_nodes =

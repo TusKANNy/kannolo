@@ -1,9 +1,0 @@
-pub mod decoder;
-pub mod encoder;
-pub mod multivector_plain_quantizer;
-pub mod multivector_product_quantizer;
-pub mod plain_quantizer;
-pub mod pq;
-pub mod quantizer;
-pub mod sparse_plain_quantizer;
-pub mod two_level_quantizer;

@@ -35,7 +35,7 @@ index =         "ecir_2025_star" # index file name
 [indexing_parameters]
 m =            32
 efc =          200
-metric =       "ip" # distance/similarity metric of the index, either "l2" or "ip"
+metric =       "dotproduct" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
 
 [query]
     [query.efs_10]

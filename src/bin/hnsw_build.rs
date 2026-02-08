@@ -2,17 +2,20 @@ use std::{fmt::Debug, time::Instant};
 
 use clap::{Parser, ValueEnum};
 use half::f16;
-use kannolo::graph::{Graph, GraphFixedDegree};
-use kannolo::index::Index;
-use kannolo::hnsw::{HNSWBuildParams, HNSW};
-use kannolo::plain_quantizer::PlainQuantizer;
-use kannolo::pq::ProductQuantizer;
-use kannolo::sparse_plain_quantizer::SparsePlainQuantizer;
-use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
+use serde::Serialize;
 use std::process;
 
-use kannolo::{read_numpy_f32_flatten_2d, DenseDataset, SparseDataset, VectorType};
-use kannolo::{Dataset, DistanceType, IndexSerializer};
+use kannolo::graph::{Graph, GraphFixedDegree};
+use kannolo::hnsw::{HNSWBuildParams, HNSW};
+use kannolo::index::Index;
+use kannolo::IndexSerializer;
+use vectorium::dataset::{ConvertFrom, ConvertInto};
+use vectorium::distances::{DotProduct, SquaredEuclideanDistance};
+use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
+use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
+use vectorium::encoders::sparse_scalar::ScalarSparseSupportedDistance;
+use vectorium::readers::{read_npy_f32, read_seismic_format};
+use vectorium::{Dataset, DenseDataset, PlainDenseDataset, PlainSparseDataset, ValueType, FromF32, Float, SpaceUsage};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum VectorRepresentation {
@@ -78,9 +81,9 @@ struct Args {
     #[arg(default_value_t = 150)]
     efc: usize,
 
-    /// The type of distance to use. Either 'l2' (Euclidean) or 'ip' (Inner product).
+    /// The type of distance to use. Either 'euclidean' or 'dotproduct'.
     #[clap(long, value_parser)]
-    #[arg(default_value_t = String::from("ip"))]
+    #[arg(default_value_t = String::from("dotproduct"))]
     metric: String,
 
     /// The number of subspaces for Product Quantization (only for PQ).
@@ -88,22 +91,37 @@ struct Args {
     #[arg(default_value_t = 16)]
     m_pq: usize,
 
-    /// The number of bits per subspace for Product Quantization (only for PQ).
+    /// The number of bits per subspace for Product Quantization (ignored; vectorium PQ is fixed).
     #[clap(long, value_parser)]
     #[arg(default_value_t = 8)]
     nbits: usize,
 
-    /// The size of the sample used for training Product Quantization (only for PQ).
+    /// The size of the sample used for training Product Quantization (ignored; vectorium PQ samples automatically).
     #[clap(long, value_parser)]
     #[arg(default_value_t = 100_000)]
     sample_size: usize,
 }
 
+#[derive(Clone, Copy)]
+enum Metric {
+    L2,
+    Ip,
+}
+
+fn parse_metric(metric: &str) -> Metric {
+    match metric {
+        "euclidean" | "l2" => Metric::L2,
+        "dotproduct" | "ip" => Metric::Ip,
+        _ => {
+            eprintln!("Error: Invalid distance type. Choose between 'euclidean' and 'dotproduct'.");
+            process::exit(1);
+        }
+    }
+}
+
 fn main() {
-    // Parse command line arguments
     let args: Args = Args::parse();
 
-    // Validate arguments
     match (&args.vector_representation, &args.quantizer) {
         (VectorRepresentation::Sparse, QuantizerType::Pq) => {
             eprintln!("Error: PQ quantizer is only available for dense vectors.");
@@ -115,27 +133,16 @@ fn main() {
         _ => {}
     }
 
-    // Validate m_pq parameter for PQ quantizer
     if matches!(args.quantizer, QuantizerType::Pq) {
-        match args.m_pq {
-            4 | 8 | 16 | 32 | 48 | 64 | 96 | 128 | 192 | 256 | 384 => {
-                // Valid value, continue
-            }
-            _ => {
-                eprintln!("Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
-                process::exit(1);
-            }
+        if args.nbits != 8 {
+            eprintln!("Warning: vectorium PQ ignores --nbits (fixed codebook size)." );
+        }
+        if args.sample_size != 100_000 {
+            eprintln!("Warning: vectorium PQ ignores --sample-size and uses automatic sampling.");
         }
     }
 
-    let distance = match args.metric.as_str() {
-        "l2" => DistanceType::Euclidean,
-        "ip" => DistanceType::DotProduct,
-        _ => {
-            eprintln!("Error: Invalid distance type. Choose between 'l2' and 'ip'.");
-            process::exit(1);
-        }
-    };
+    let metric = parse_metric(&args.metric);
 
     let config = HNSWBuildParams::new(args.m, args.efc, 4, 320);
 
@@ -152,288 +159,201 @@ fn main() {
     ) {
         // Dense vectors with plain quantizer
         (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
-            build_dense_plain_f32_standard(&args, distance, &config);
+            build_dense_plain::<f32, Graph>(&args, metric, &config);
         }
         (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
-            build_dense_plain_f32_fixed(&args, distance, &config);
+            build_dense_plain::<f32, GraphFixedDegree>(&args, metric, &config);
         }
         (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
-            build_dense_plain_f16_standard(&args, distance, &config);
+            build_dense_plain::<f16, Graph>(&args, metric, &config);
         }
         (VectorRepresentation::Dense, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
-            build_dense_plain_f16_fixed(&args, distance, &config);
+            build_dense_plain::<f16, GraphFixedDegree>(&args, metric, &config);
         }
         // Dense vectors with PQ quantizer (always f32)
         (VectorRepresentation::Dense, QuantizerType::Pq, _, GraphType::Standard) => {
-            build_dense_pq_standard(&args, distance, &config);
+            build_dense_pq::<Graph>(&args, metric, &config);
         }
         (VectorRepresentation::Dense, QuantizerType::Pq, _, GraphType::FixedDegree) => {
-            build_dense_pq_fixed(&args, distance, &config);
+            build_dense_pq::<GraphFixedDegree>(&args, metric, &config);
         }
-        // Sparse vectors with plain quantizer (f16 only)
+        // Sparse vectors with plain quantizer
         (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
-            build_sparse_plain_f16_standard(&args, distance, &config);
+            build_sparse_plain::<f16, Graph>(&args, metric, &config);
         }
         (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
-            build_sparse_plain_f16_fixed(&args, distance, &config);
+            build_sparse_plain::<f16, GraphFixedDegree>(&args, metric, &config);
         }
-        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F32, _) => {
-            eprintln!("Error: Sparse vectors currently only support f16 precision.");
-            process::exit(1);
+        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
+            build_sparse_plain::<f32, Graph>(&args, metric, &config);
         }
-        // This case is already handled by validation above
+        (VectorRepresentation::Sparse, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
+            build_sparse_plain::<f32, GraphFixedDegree>(&args, metric, &config);
+        }
         (VectorRepresentation::Sparse, QuantizerType::Pq, _, _) => unreachable!(),
     }
 }
 
-fn build_dense_plain_f32_standard(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
+fn build_dense_plain<V, G>(args: &Args, metric: Metric, config: &HNSWBuildParams)
+where
+    V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
+    G: GraphBound,
+{
+    match metric {
+        Metric::L2 => build_dense_plain_with_distance::<V, SquaredEuclideanDistance, G>(args, config),
+        Metric::Ip => build_dense_plain_with_distance::<V, DotProduct, G>(args, config),
+    }
+}
+
+fn build_dense_plain_with_distance<V, D, G>(args: &Args, config: &HNSWBuildParams)
+where
+    V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
+    D: ScalarDenseSupportedDistance,
+    G: GraphBound,
+{
+    let dataset_f32 = read_npy_dataset::<D>(&args.data_file);
+    let d = dataset_f32.input_dim();
+    let n_vecs = dataset_f32.len();
+    let data: Vec<V> = dataset_f32
+        .values()
+        .iter()
+        .map(|v| V::from_f32_saturating(*v))
+        .collect();
+
+    let encoder = PlainDenseQuantizer::<V, D>::new(d);
+    let dataset: DenseDataset<_> =
+        DenseDataset::from_raw(data.into_boxed_slice(), n_vecs, encoder);
 
     let start_time = Instant::now();
-    let index: HNSW<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>, Graph> =
-        HNSW::build_index(&dataset, quantizer, config);
+    let index: HNSW<_, G> = HNSW::build_index(dataset, config);
     let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
+    println!("Time to build: {} s (before serializing)", duration.as_secs());
 
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }
 
-fn build_dense_plain_f32_fixed(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-    let quantizer: PlainQuantizer<f32> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
-
-    let start_time = Instant::now();
-    let index: HNSW<
-        DenseDataset<PlainQuantizer<f32>, Vec<f32>>,
-        PlainQuantizer<f32>,
-        GraphFixedDegree,
-    > = HNSW::build_index(&dataset, quantizer, config);
-    let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
-
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
+fn build_dense_pq<G>(args: &Args, metric: Metric, config: &HNSWBuildParams)
+where
+    G: GraphBound,
+{
+    match metric {
+        Metric::L2 => build_dense_pq_l2::<G>(args, config),
+        Metric::Ip => build_dense_pq_ip::<G>(args, config),
+    }
 }
 
-fn build_dense_plain_f16_standard(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let docs_vec = docs_vec.into_iter().map(f16::from_f32).collect();
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f16>::new(d, distance));
-    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
-
-    let start_time = Instant::now();
-    let index: HNSW<DenseDataset<PlainQuantizer<f16>, Vec<f16>>, PlainQuantizer<f16>, Graph> =
-        HNSW::build_index(&dataset, quantizer, config);
-    let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
-
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
-}
-
-fn build_dense_plain_f16_fixed(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let docs_vec = docs_vec.into_iter().map(f16::from_f32).collect();
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f16>::new(d, distance));
-    let quantizer: PlainQuantizer<f16> = PlainQuantizer::new(Dataset::dim(&dataset), distance);
-
-    let start_time = Instant::now();
-    let index: HNSW<
-        DenseDataset<PlainQuantizer<f16>, Vec<f16>>,
-        PlainQuantizer<f16>,
-        GraphFixedDegree,
-    > = HNSW::build_index(&dataset, quantizer, config);
-    let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
-
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
-}
-
-fn build_dense_pq_standard(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-
+fn build_dense_pq_l2<G>(args: &Args, config: &HNSWBuildParams)
+where
+    G: GraphBound,
+{
+    let dataset: PlainDenseDataset<f32, SquaredEuclideanDistance> =
+        read_dense_plain_dataset::<SquaredEuclideanDistance>(args);
     match args.m_pq {
-        4 => build_dense_pq_typed_standard::<4>(args, &dataset, distance, config),
-        8 => build_dense_pq_typed_standard::<8>(args, &dataset, distance, config),
-        16 => build_dense_pq_typed_standard::<16>(args, &dataset, distance, config),
-        32 => build_dense_pq_typed_standard::<32>(args, &dataset, distance, config),
-        48 => build_dense_pq_typed_standard::<48>(args, &dataset, distance, config),
-        64 => build_dense_pq_typed_standard::<64>(args, &dataset, distance, config),
-        96 => build_dense_pq_typed_standard::<96>(args, &dataset, distance, config),
-        128 => build_dense_pq_typed_standard::<128>(args, &dataset, distance, config),
-        192 => build_dense_pq_typed_standard::<192>(args, &dataset, distance, config),
-        256 => build_dense_pq_typed_standard::<256>(args, &dataset, distance, config),
-        384 => build_dense_pq_typed_standard::<384>(args, &dataset, distance, config),
+        4 => build_dense_pq_with_m::<4, SquaredEuclideanDistance, G>(dataset, args, config),
+        8 => build_dense_pq_with_m::<8, SquaredEuclideanDistance, G>(dataset, args, config),
+        16 => build_dense_pq_with_m::<16, SquaredEuclideanDistance, G>(dataset, args, config),
+        32 => build_dense_pq_with_m::<32, SquaredEuclideanDistance, G>(dataset, args, config),
+        48 => build_dense_pq_with_m::<48, SquaredEuclideanDistance, G>(dataset, args, config),
+        64 => build_dense_pq_with_m::<64, SquaredEuclideanDistance, G>(dataset, args, config),
+        96 => build_dense_pq_with_m::<96, SquaredEuclideanDistance, G>(dataset, args, config),
+        128 => build_dense_pq_with_m::<128, SquaredEuclideanDistance, G>(dataset, args, config),
+        192 => build_dense_pq_with_m::<192, SquaredEuclideanDistance, G>(dataset, args, config),
+        256 => build_dense_pq_with_m::<256, SquaredEuclideanDistance, G>(dataset, args, config),
+        384 => build_dense_pq_with_m::<384, SquaredEuclideanDistance, G>(dataset, args, config),
         _ => {
-            // This should never happen due to early validation, but keep for safety
-            unreachable!("Invalid m_pq value should have been caught earlier");
+            eprintln!("Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
+            process::exit(1);
         }
     }
 }
 
-fn build_dense_pq_fixed(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (docs_vec, d) = read_numpy_f32_flatten_2d(args.data_file.clone());
-    let dataset = DenseDataset::from_vec(docs_vec, d, PlainQuantizer::<f32>::new(d, distance));
-
+fn build_dense_pq_ip<G>(args: &Args, config: &HNSWBuildParams)
+where
+    G: GraphBound,
+{
+    let dataset: PlainDenseDataset<f32, DotProduct> =
+        read_dense_plain_dataset::<DotProduct>(args);
     match args.m_pq {
-        4 => build_dense_pq_typed_fixed::<4>(args, &dataset, distance, config),
-        8 => build_dense_pq_typed_fixed::<8>(args, &dataset, distance, config),
-        16 => build_dense_pq_typed_fixed::<16>(args, &dataset, distance, config),
-        32 => build_dense_pq_typed_fixed::<32>(args, &dataset, distance, config),
-        48 => build_dense_pq_typed_fixed::<48>(args, &dataset, distance, config),
-        64 => build_dense_pq_typed_fixed::<64>(args, &dataset, distance, config),
-        96 => build_dense_pq_typed_fixed::<96>(args, &dataset, distance, config),
-        128 => build_dense_pq_typed_fixed::<128>(args, &dataset, distance, config),
-        192 => build_dense_pq_typed_fixed::<192>(args, &dataset, distance, config),
-        256 => build_dense_pq_typed_fixed::<256>(args, &dataset, distance, config),
-        384 => build_dense_pq_typed_fixed::<384>(args, &dataset, distance, config),
+        4 => build_dense_pq_with_m::<4, DotProduct, G>(dataset, args, config),
+        8 => build_dense_pq_with_m::<8, DotProduct, G>(dataset, args, config),
+        16 => build_dense_pq_with_m::<16, DotProduct, G>(dataset, args, config),
+        32 => build_dense_pq_with_m::<32, DotProduct, G>(dataset, args, config),
+        48 => build_dense_pq_with_m::<48, DotProduct, G>(dataset, args, config),
+        64 => build_dense_pq_with_m::<64, DotProduct, G>(dataset, args, config),
+        96 => build_dense_pq_with_m::<96, DotProduct, G>(dataset, args, config),
+        128 => build_dense_pq_with_m::<128, DotProduct, G>(dataset, args, config),
+        192 => build_dense_pq_with_m::<192, DotProduct, G>(dataset, args, config),
+        256 => build_dense_pq_with_m::<256, DotProduct, G>(dataset, args, config),
+        384 => build_dense_pq_with_m::<384, DotProduct, G>(dataset, args, config),
         _ => {
-            // This should never happen due to early validation, but keep for safety
-            unreachable!("Invalid m_pq value should have been caught earlier");
+            eprintln!("Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
+            process::exit(1);
         }
     }
 }
 
-fn build_dense_pq_typed_standard<const M: usize>(
-    args: &Args,
-    dataset: &DenseDataset<PlainQuantizer<f32>, Vec<f32>>,
-    distance: DistanceType,
-    config: &HNSWBuildParams,
-) {
-    let mut rng = StdRng::seed_from_u64(523);
-    let mut training_vec: Vec<f32> = Vec::new();
-    for vec in dataset.iter().choose_multiple(&mut rng, args.sample_size) {
-        training_vec.extend(vec.values_as_slice());
+fn read_dense_plain_dataset<D>(args: &Args) -> PlainDenseDataset<f32, D>
+where
+    D: ScalarDenseSupportedDistance,
+{
+    read_npy_dataset::<D>(&args.data_file)
+}
+
+fn build_sparse_plain<V, G>(args: &Args, metric: Metric, config: &HNSWBuildParams)
+where
+    V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
+    G: GraphBound,
+{
+    match metric {
+        Metric::L2 => build_sparse_plain_with_distance::<V, SquaredEuclideanDistance, G>(args, config),
+        Metric::Ip => build_sparse_plain_with_distance::<V, DotProduct, G>(args, config),
     }
-    let training_dataset = DenseDataset::from_vec(
-        training_vec,
-        Dataset::dim(dataset),
-        PlainQuantizer::<f32>::new(Dataset::dim(dataset), distance),
-    );
-
-    let pq = ProductQuantizer::<M>::train(&training_dataset, args.nbits, distance);
-
-    let start_time = Instant::now();
-    let index: HNSW<DenseDataset<ProductQuantizer<M>, Vec<u8>>, ProductQuantizer<M>, Graph> =
-        HNSW::build_index(dataset, pq, config);
-    let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
-
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
 }
 
-fn build_dense_pq_typed_fixed<const M: usize>(
+fn build_dense_pq_with_m<const M: usize, D, G>(
+    dataset: PlainDenseDataset<f32, D>,
     args: &Args,
-    dataset: &DenseDataset<PlainQuantizer<f32>, Vec<f32>>,
-    distance: DistanceType,
     config: &HNSWBuildParams,
-) {
-    let mut rng = StdRng::seed_from_u64(523);
-    let mut training_vec: Vec<f32> = Vec::new();
-    for vec in dataset.iter().choose_multiple(&mut rng, args.sample_size) {
-        training_vec.extend(vec.values_as_slice());
-    }
-    let training_dataset = DenseDataset::from_vec(
-        training_vec,
-        Dataset::dim(dataset),
-        PlainQuantizer::<f32>::new(Dataset::dim(dataset), distance),
-    );
-
-    let pq = ProductQuantizer::<M>::train(&training_dataset, args.nbits, distance);
-
+) where
+    D: ProductQuantizerDistance + ScalarDenseSupportedDistance + 'static,
+    G: GraphBound,
+    DenseDataset<ProductQuantizer<M, D>>: ConvertFrom<PlainDenseDataset<f32, D>>,
+{
+    let pq_dataset: DenseDataset<ProductQuantizer<M, D>> = dataset.convert_into();
     let start_time = Instant::now();
-    let index: HNSW<
-        DenseDataset<ProductQuantizer<M>, Vec<u8>>,
-        ProductQuantizer<M>,
-        GraphFixedDegree,
-    > = HNSW::build_index(dataset, pq, config);
+    let index: HNSW<_, G> = HNSW::build_index(pq_dataset, config);
     let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
+    println!("Time to build: {} s (before serializing)", duration.as_secs());
 
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }
 
-fn build_sparse_plain_f16_standard(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (components, values, offsets) =
-        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
-            args.data_file.as_str(),
-            None,
-        )
-        .unwrap();
+fn read_npy_dataset<D>(path: &str) -> PlainDenseDataset<f32, D>
+where
+    D: ScalarDenseSupportedDistance,
+{
+    read_npy_f32::<D>(path).unwrap_or_else(|e| {
+        eprintln!("Error reading .npy file: {e:?}");
+        process::exit(1);
+    })
+}
 
-    let d = *components.iter().max().unwrap() as usize + 1;
-
-    let dataset: SparseDataset<SparsePlainQuantizer<f16>> = SparseDataset::<
-        SparsePlainQuantizer<f16>,
-    >::from_vecs_f16(
-        &components, &values, &offsets, d
-    )
-    .unwrap();
-
-    let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
+fn build_sparse_plain_with_distance<V, D, G>(args: &Args, config: &HNSWBuildParams)
+where
+    V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
+    D: ScalarSparseSupportedDistance,
+    G: GraphBound,
+{
+    let dataset: PlainSparseDataset<u16, V, D> =
+        read_seismic_format::<u16, V, D>(&args.data_file).unwrap();
 
     let start_time = Instant::now();
-    let index: HNSW<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>, Graph> =
-        HNSW::build_index(&dataset, quantizer, config);
+    let index: HNSW<_, G> = HNSW::build_index(dataset, config);
     let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
+    println!("Time to build: {} s (before serializing)", duration.as_secs());
 
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }
 
-fn build_sparse_plain_f16_fixed(args: &Args, distance: DistanceType, config: &HNSWBuildParams) {
-    let (components, values, offsets) =
-        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
-            args.data_file.as_str(),
-            None,
-        )
-        .unwrap();
-
-    let d = *components.iter().max().unwrap() as usize + 1;
-
-    let dataset: SparseDataset<SparsePlainQuantizer<f16>> = SparseDataset::<
-        SparsePlainQuantizer<f16>,
-    >::from_vecs_f16(
-        &components, &values, &offsets, d
-    )
-    .unwrap();
-
-    let quantizer = SparsePlainQuantizer::<f16>::new(Dataset::dim(&dataset), distance);
-
-    let start_time = Instant::now();
-    let index: HNSW<
-        SparseDataset<SparsePlainQuantizer<f16>>,
-        SparsePlainQuantizer<f16>,
-        GraphFixedDegree,
-    > = HNSW::build_index(&dataset, quantizer, config);
-    let duration = start_time.elapsed();
-    println!(
-        "Time to build: {} s (before serializing)",
-        duration.as_secs()
-    );
-
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
-}
+trait GraphBound: kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> {}
+impl<T> GraphBound for T where T: kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> {}

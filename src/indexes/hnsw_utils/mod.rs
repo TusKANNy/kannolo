@@ -4,44 +4,51 @@ use std::{
     sync::Mutex,
 };
 
-use crate::{
-    quantizer::{Quantizer, QueryEvaluator},
-    Dataset,
-};
+use vectorium::distances::Distance;
+use vectorium::vector_encoder::VectorEncoder;
+use vectorium::{Dataset, QueryEvaluator, VectorId};
 
 #[derive(Debug, Clone, Copy)]
-pub struct Candidate(pub f32, pub usize);
+pub struct Candidate<D: Ord + Copy>(pub D, pub usize);
 
-impl Candidate {
-    pub fn distance(&self) -> f32 {
+impl<D: Ord + Copy> Candidate<D> {
+    #[inline]
+    pub fn distance(&self) -> D {
         self.0
     }
+
+    #[inline]
     pub fn id_vec(&self) -> usize {
         self.1
     }
 }
 
-impl PartialOrd for Candidate {
+impl<D: Distance> Candidate<D> {
+    #[inline]
+    pub fn distance_value(&self) -> f32 {
+        self.0.distance()
+    }
+}
+
+impl<D: Ord + Copy> PartialOrd for Candidate<D> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance().partial_cmp(&other.distance())
+        Some(self.cmp(other))
     }
 }
 
-impl Ord for Candidate {
+impl<D: Ord + Copy> Ord for Candidate<D> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.distance()
-            .partial_cmp(&other.distance())
-            .unwrap_or(Ordering::Equal)
+        self.0.cmp(&other.0)
     }
 }
 
-impl PartialEq for Candidate {
+impl<D: Ord + Copy> PartialEq for Candidate<D> {
     fn eq(&self, other: &Self) -> bool {
-        self.distance() == other.distance()
+        self.0.eq(&other.0)
     }
 }
 
-impl Eq for Candidate {}
+impl<D: Ord + Copy> Eq for Candidate<D> {}
 
 /// Adds a candidate to the min and max heaps used during the construction and search processes in the HNSW algorithm.
 ///
@@ -78,16 +85,16 @@ impl Eq for Candidate {}
 ///
 /// add_neighbor_to_heaps(&mut min_heap, &mut max_heap, candidate, ef_parameter);
 /// ```
-pub fn add_neighbor_to_heaps(
-    min_heap: &mut BinaryHeap<Reverse<Candidate>>,
-    max_heap: &mut BinaryHeap<Candidate>,
-    candidate: Candidate,
+pub fn add_neighbor_to_heaps<D: Ord + Copy>(
+    min_heap: &mut BinaryHeap<Reverse<Candidate<D>>>,
+    max_heap: &mut BinaryHeap<Candidate<D>>,
+    candidate: Candidate<D>,
     ef_parameter: usize,
 ) {
     let should_add_node = if max_heap.len() < ef_parameter {
         true
     } else if let Some(top_node) = max_heap.peek() {
-        top_node.distance() > candidate.distance()
+        candidate < *top_node
     } else {
         false
     };
@@ -102,10 +109,10 @@ pub fn add_neighbor_to_heaps(
     }
 }
 
-pub fn add_neighbors_to_heaps(
-    min_heap: &mut BinaryHeap<Reverse<Candidate>>,
-    max_heap: &mut BinaryHeap<Candidate>,
-    distances: &[f32],
+pub fn add_neighbors_to_heaps<D: Ord + Copy>(
+    min_heap: &mut BinaryHeap<Reverse<Candidate<D>>>,
+    max_heap: &mut BinaryHeap<Candidate<D>>,
+    distances: &[D],
     ids: &[usize],
     ef_parameter: usize,
 ) {
@@ -113,7 +120,7 @@ pub fn add_neighbors_to_heaps(
         let should_add_node = if max_heap.len() < ef_parameter {
             true
         } else if let Some(top_node) = max_heap.peek() {
-            top_node.distance() > *distance
+            Candidate(*distance, *id) < *top_node
         } else {
             false
         };
@@ -146,55 +153,20 @@ pub fn add_neighbors_to_heaps(
 ///  the function updates
 /// `nearest_vec` to the current neighbor and `dis_nearest_vec` to the new shortest distance.
 ///
-/// # Example
-/// ```rust
-/// use kannolo::hnsw_utils::compute_closest_from_neighbors;
-/// use kannolo::DenseDataset;
-/// use kannolo::DistanceType;
-/// use kannolo::plain_quantizer::PlainQuantizer;
-/// use kannolo::DenseVector1D;
-/// use kannolo::Dataset;
-///
-/// // Create a query vector
-/// let query_vector: &[f32; 2] = &[1.0, 1.0];
-/// let query = DenseVector1D::new(query_vector.as_slice());
-///
-/// let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
-/// let quantizer = PlainQuantizer::new(2, DistanceType::Euclidean);
-/// let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-///
-/// // Create a query evaluator
-/// let evaluator = dataset.query_evaluator(query);
-///
-/// // Define neighbors and find the closest one to the query
-/// let neighbors = vec![0, 1, 2];
-/// let mut nearest_vec = 0;
-/// let mut dis_nearest_vec = f32::MAX;
-///
-/// compute_closest_from_neighbors(
-///     &dataset,
-///     &evaluator,
-///     &neighbors,
-///     &mut nearest_vec,
-///     &mut dis_nearest_vec,
-/// );
-/// // Verify the result
-/// assert_eq!(nearest_vec, 1);
-/// ```
 #[inline]
-pub fn compute_closest_from_neighbors<'a, Q, D, E>(
+pub fn compute_closest_from_neighbors<'e, D>(
     dataset: &D,
-    query_evaluator: &E,
+    query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
     neighbors: &[usize],
     nearest_vec: &mut usize,
-    dis_nearest_vec: &mut f32,
+    dis_nearest_vec: &mut <D::Encoder as VectorEncoder>::Distance,
 ) where
-    Q: Quantizer<DatasetType = D>, // 1) your quantizer’s associated type must be exactly D
-    D: Dataset<Q>,                 // 2) dataset must implement Dataset<Q>
-    E: QueryEvaluator<'a, Q = Q>,  // 3) evaluator’s Q must be your Q
+    D: Dataset,
+    <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
 {
     for &neighbor in neighbors {
-        let distance_neighbor = query_evaluator.compute_distance(dataset, neighbor);
+        let distance_neighbor =
+            query_evaluator.compute_distance(dataset.get(neighbor as VectorId));
 
         if distance_neighbor < *dis_nearest_vec {
             *nearest_vec = neighbor;
@@ -331,9 +303,9 @@ pub fn prefetch_read_NTA<T>(data: &[T], offset: usize) {
 /// let min_heap = from_max_heap_to_min_heap(&mut max_heap);
 /// assert_eq!(min_heap.len(), 3);
 /// ```
-pub fn from_max_heap_to_min_heap(
-    max_heap: &mut BinaryHeap<Candidate>,
-) -> BinaryHeap<Reverse<Candidate>> {
+pub fn from_max_heap_to_min_heap<D: Ord + Copy>(
+    max_heap: &mut BinaryHeap<Candidate<D>>,
+) -> BinaryHeap<Reverse<Candidate<D>>> {
     let vec: Vec<_> = max_heap.drain().collect();
     BinaryHeap::from(vec.into_iter().map(Reverse).collect::<Vec<_>>())
 }
@@ -953,222 +925,5 @@ mod tests_add_neighbors_to_heaps {
         assert_eq!(max_heap.len(), 2);
         assert_eq!(max_heap.peek().unwrap().distance(), 5.0);
         assert_eq!(min_heap.peek().unwrap().0.distance(), 3.0);
-    }
-}
-
-#[cfg(test)]
-mod tests_compute_closest_from_neighbors_euclidean_distance {
-
-    use core::f32;
-
-    use crate::{
-        hnsw_utils::compute_closest_from_neighbors, plain_quantizer::PlainQuantizer, Dataset,
-        DenseDataset, DenseVector1D, DistanceType,
-    };
-
-    /// Tests that `compute_closest_from_neighbors` correctly updates the nearest neighbor.
-    ///
-    /// This test verifies that the function correctly identifies and updates the nearest neighbor
-    /// from a set of multiple neighbor vectors.
-    #[test]
-    fn test_compute_closest_from_neighbors_updates_nearest() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        let neighbor_vectors = &[2.0, 2.0, 1.0, 1.5, 0.0, 0.0];
-
-        let quantizer = PlainQuantizer::new(2, DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-
-        let neighbors = vec![0, 1, 2];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        assert_eq!(nearest_vec, 1);
-    }
-
-    /// Tests `compute_closest_from_neighbors` when there is only a single neighbor.
-    ///
-    /// This test checks that the function can handle the case where there is only one neighbor
-    /// and correctly identifies it as the nearest.
-    #[test]
-    fn test_compute_closest_from_neighbors_single_neighbor() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        let neighbor_vectors = &[2.0, 2.0];
-
-        let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-
-        let neighbors = vec![0];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        assert_eq!(nearest_vec, 0);
-    }
-
-    /// Tests `compute_closest_from_neighbors` when multiple neighbors are equidistant from the query.
-    ///
-    /// This test examines the behavior of the function when several neighbors are equidistant,
-    /// ensuring that the first equidistant vector is selected as the closest, since the function does
-    /// not replace it with other equidistant neighbors.
-    #[test]
-    fn test_compute_closest_from_neighbors_equidistant_neighbors() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        // Neighbor vectors: 0 is farther; 1, 2, 3 are equidistant to the query
-        let neighbor_vectors = &[
-            2.0, 5.0, // idx 0 (farther)
-            3.0, 1.0, // idx 1 (distance 2.0)
-            1.0, 3.0, // idx 2 (distance 2.0)
-            -1.0, 1.0, // idx 3 (distance 2.0)
-        ];
-
-        let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-
-        let neighbors = vec![0, 1, 2, 3];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        // First equidistant encountered should be index 1
-        assert_eq!(nearest_vec, 1);
-    }
-
-    /// Tests `compute_closest_from_neighbors` when there are no neighbors to compare.
-    ///
-    /// This test verifies that the function handles the case of having no neighbors by
-    /// ensuring that the nearest neighbor remains unchanged.
-    #[test]
-    fn test_compute_closest_from_neighbors_no_neighbors() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        let neighbor_vectors = &[];
-
-        let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-        let neighbors: Vec<usize> = vec![];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        // Nothing should change because there are no neighbors
-        assert_eq!(nearest_vec, 0);
-        assert_eq!(dis_nearest_vec, f32::MAX);
-    }
-
-    /// Tests `compute_closest_from_neighbors` when the neighbor distances are set to extreme values.
-    ///
-    /// This test checks how the function behaves when neighbor vectors are at extreme distances,
-    /// ensuring that no changes are made to the nearest neighbor if none are closer.
-    #[test]
-    fn test_compute_closest_from_neighbors_max_distance() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        let neighbor_vectors = &[f32::INFINITY, f32::INFINITY, -f32::INFINITY, -f32::INFINITY];
-
-        let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-
-        let neighbors = vec![0, 1];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        // The nearest neighbor should remain unchanged, as none are closer
-        assert_eq!(nearest_vec, 0);
-        assert_eq!(dis_nearest_vec, f32::MAX);
-    }
-
-    /// Tests `compute_closest_from_neighbors` when one of the neighbors is an exact match with the query vector.
-    ///
-    /// This test confirms that the function can correctly identify a neighbor that exactly matches
-    /// the query vector and updates the nearest neighbor accordingly.
-
-    #[test]
-    fn test_compute_closest_from_neighbors_exact_match() {
-        let query_vector: &[f32] = &[1.0, 1.0];
-        let query = DenseVector1D::new(query_vector);
-
-        // One neighbor is exactly as the query vecor
-        let neighbor_vectors = &[2.0, 2.0, 1.0, 1.0];
-
-        let quantizer = PlainQuantizer::new(2, crate::DistanceType::Euclidean);
-        let dataset = DenseDataset::from_vec(neighbor_vectors.to_vec(), 2, quantizer);
-
-        let evaluator = dataset.query_evaluator(query);
-
-        let neighbors = vec![0, 1];
-
-        let mut nearest_vec = 0;
-        let mut dis_nearest_vec = f32::MAX;
-
-        compute_closest_from_neighbors(
-            &dataset,
-            &evaluator,
-            &neighbors,
-            &mut nearest_vec,
-            &mut dis_nearest_vec,
-        );
-
-        assert_eq!(nearest_vec, 1);
-        assert_eq!(dis_nearest_vec, 0.0);
     }
 }

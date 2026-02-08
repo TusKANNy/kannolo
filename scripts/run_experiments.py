@@ -137,13 +137,21 @@ def build_index(configs, experiment_dir):
     if not build_command:
         raise ValueError("Build command must be specified!!!")
 
+    metric = configs["indexing_parameters"]["metric"]
+    if metric == "l2":
+        print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
+        metric = "euclidean"
+    elif metric == "ip":
+        print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
+        metric = "dotproduct"
+
     command_and_params = [
         build_command,
         f"--data-file {input_file}",
         f"--output-file {output_file}",
         f"--m {configs['indexing_parameters']['m']}",
         f"--efc {configs['indexing_parameters']['efc']}",
-        f"--metric {configs['indexing_parameters']['metric']}",
+        f"--metric {metric}",
     ] 
 
     # Add new unified binary parameters
@@ -320,6 +328,14 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
     query_file = os.path.join(configs["folder"]["data"], configs["filename"]["queries"])
     output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
     
+    metric = configs["indexing_parameters"]["metric"]
+    if metric == "l2":
+        print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
+        metric = "euclidean"
+    elif metric == "ip":
+        print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
+        metric = "dotproduct"
+
     command_and_params = [
         configs['settings']['NUMA'] if "NUMA" in configs['settings'] else "",
         query_command, 
@@ -327,6 +343,7 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
         f"--query-file {query_file}",
         f"--k {configs['settings']['k']}",
         f"--ef-search {query_config['ef-search']}",
+        f"--metric {metric}",
         f"--output-path {output_file}",
     ]
 

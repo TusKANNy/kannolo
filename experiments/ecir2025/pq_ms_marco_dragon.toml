@@ -27,7 +27,7 @@ experiment =    "."     # stdout and stderr here of running the experiment is sa
 [filename]
 dataset =       "dataset.npy" # dataset input file name
 queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth.npy" # ground truth input file
+groundtruth =   "groundtruth_ip_k_10.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
 index =         "ecir_2025_pq_dragon" # index file name
@@ -35,7 +35,7 @@ index =         "ecir_2025_pq_dragon" # index file name
 [indexing_parameters]
 m =            32
 efc =          200
-metric =       "ip" # distance/similarity metric of the index, either "l2" or "ip"
+metric =       "dotproduct" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
 
 [pq_parameters]
 m-pq =         192     # Number of PQ subspaces. Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384

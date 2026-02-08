@@ -1,19 +1,20 @@
 use std::io::Write;
-use std::{fmt::Debug, time::Instant};
+use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 use half::f16;
-use kannolo::graph::{Graph, GraphFixedDegree};
-use kannolo::pq::ProductQuantizer;
-use kannolo::sparse_plain_quantizer::SparsePlainQuantizer;
 use std::fs::File;
 
-use kannolo::{
-    index::Index,
-    hnsw::{HNSWSearchParams, HNSW},
-    plain_quantizer::PlainQuantizer,
-    read_numpy_f32_flatten_2d, Dataset, DenseDataset, DistanceType, IndexSerializer, SparseDataset,
-};
+use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait};
+use kannolo::hnsw::{HNSWSearchParams, HNSW};
+use kannolo::index::Index;
+use kannolo::IndexSerializer;
+use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
+use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
+use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
+use vectorium::encoders::sparse_scalar::ScalarSparseSupportedDistance;
+use vectorium::readers::{read_npy_f32, read_seismic_format};
+use vectorium::{Dataset, DenseDataset, PlainDenseDataset, PlainSparseDataset};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum VectorType {
@@ -37,6 +38,36 @@ enum QuantizerType {
 enum GraphType {
     Standard,
     FixedDegree,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MetricKind {
+    Euclidean,
+    DotProduct,
+}
+
+trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> {}
+impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> {}
+
+fn parse_metric(metric: &str) -> MetricKind {
+    match metric {
+        "euclidean" | "l2" => MetricKind::Euclidean,
+        "dotproduct" | "ip" => MetricKind::DotProduct,
+        _ => {
+            eprintln!("Error: Invalid distance type. Choose between 'euclidean' and 'dotproduct'.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn read_npy_queries<D>(path: &str) -> PlainDenseDataset<f32, D>
+where
+    D: ScalarDenseSupportedDistance,
+{
+    read_npy_f32::<D>(path).unwrap_or_else(|e| {
+        eprintln!("Error reading .npy file: {e:?}");
+        std::process::exit(1);
+    })
 }
 
 #[derive(Parser, Debug)]
@@ -73,6 +104,10 @@ struct Args {
     #[arg(default_value_t = GraphType::Standard)]
     graph_type: GraphType,
 
+    /// The distance metric ("euclidean" or "dotproduct").
+    #[clap(long, value_parser)]
+    metric: String,
+
     /// The number of subspaces for Product Quantization (only for PQ).
     #[clap(long, value_parser)]
     #[arg(default_value_t = 16)]
@@ -95,10 +130,8 @@ struct Args {
 }
 
 fn main() {
-    // Parse command line arguments
     let args: Args = Args::parse();
 
-    // Validate arguments
     match (&args.vector_type, &args.quantizer) {
         (VectorType::Sparse, QuantizerType::Pq) => {
             eprintln!("Error: PQ quantizer is only available for dense vectors.");
@@ -110,7 +143,7 @@ fn main() {
         _ => {}
     }
 
-    println!("Starting search");
+    let metric = parse_metric(&args.metric);
 
     match (
         &args.vector_type,
@@ -118,73 +151,72 @@ fn main() {
         &args.precision,
         &args.graph_type,
     ) {
-        // Dense vectors with plain quantizer
         (VectorType::Dense, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
-            search_dense_plain_f32_standard(&args);
+            search_dense_plain_f32::<Graph>(&args, metric);
         }
         (VectorType::Dense, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
-            search_dense_plain_f32_fixed(&args);
+            search_dense_plain_f32::<GraphFixedDegree>(&args, metric);
         }
         (VectorType::Dense, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
-            search_dense_plain_f16_standard(&args);
+            search_dense_plain_f16::<Graph>(&args, metric);
         }
         (VectorType::Dense, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
-            search_dense_plain_f16_fixed(&args);
+            search_dense_plain_f16::<GraphFixedDegree>(&args, metric);
         }
-        // Dense vectors with PQ quantizer (always f32)
         (VectorType::Dense, QuantizerType::Pq, _, GraphType::Standard) => {
-            search_dense_pq_standard(&args);
+            search_dense_pq::<Graph>(&args, metric);
         }
         (VectorType::Dense, QuantizerType::Pq, _, GraphType::FixedDegree) => {
-            search_dense_pq_fixed(&args);
+            search_dense_pq::<GraphFixedDegree>(&args, metric);
         }
-        // Sparse vectors with plain quantizer (f16 only)
         (VectorType::Sparse, QuantizerType::Plain, Precision::F16, GraphType::Standard) => {
-            search_sparse_plain_f16_standard(&args);
+            search_sparse_plain_f16::<Graph>(&args, metric);
         }
         (VectorType::Sparse, QuantizerType::Plain, Precision::F16, GraphType::FixedDegree) => {
-            search_sparse_plain_f16_fixed(&args);
+            search_sparse_plain_f16::<GraphFixedDegree>(&args, metric);
         }
-        (VectorType::Sparse, QuantizerType::Plain, Precision::F32, _) => {
-            eprintln!("Error: Sparse vectors currently only support f16 precision.");
-            std::process::exit(1);
+        (VectorType::Sparse, QuantizerType::Plain, Precision::F32, GraphType::Standard) => {
+            search_sparse_plain_f32::<Graph>(&args, metric);
         }
-        // This case is already handled by validation above
+        (VectorType::Sparse, QuantizerType::Plain, Precision::F32, GraphType::FixedDegree) => {
+            search_sparse_plain_f32::<GraphFixedDegree>(&args, metric);
+        }
         (VectorType::Sparse, QuantizerType::Pq, _, _) => unreachable!(),
     }
 }
 
-fn search_dense_plain_f32_standard(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f32>::new(d, DistanceType::Euclidean),
-    );
+fn search_dense_plain_f32<G>(args: &Args, metric: MetricKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        MetricKind::Euclidean => search_dense_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::DotProduct => search_dense_plain_f32_with_distance::<DotProduct, G>(args),
+    }
+}
 
-    let index: HNSW<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>, Graph> =
+fn search_dense_plain_f32_with_distance<D, G>(args: &Args)
+where
+    D: ScalarDenseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let queries = read_npy_queries::<D>(&args.query_file);
+    let num_queries = queries.len();
+
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> =
         IndexSerializer::load_index(&args.index_file);
 
-    let num_queries = queries.len();
     let config = HNSWSearchParams::new(args.ef_search);
 
-    println!("N queries {num_queries}");
-
-    // Search
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
         for query in queries.iter() {
             let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
+            let res = index.search(query, args.k, &config);
+            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            total_time_search += start_time.elapsed().as_micros();
         }
     }
 
@@ -198,85 +230,38 @@ fn search_dense_plain_f32_standard(args: &Args) {
     }
 }
 
-fn search_dense_plain_f32_fixed(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f32>::new(d, DistanceType::Euclidean),
-    );
-
-    let index: HNSW<
-        DenseDataset<PlainQuantizer<f32>, Vec<f32>>,
-        PlainQuantizer<f32>,
-        GraphFixedDegree,
-    > = IndexSerializer::load_index(&args.index_file);
-
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
-    let mut total_time_search = 0;
-    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
-
-    for _ in 0..args.n_run {
-        for query in queries.iter() {
-            let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
-        }
-    }
-
-    let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
-    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
-
-    index.print_space_usage_bytes();
-
-    if let Some(output_path) = &args.output_path {
-        write_results_to_file(output_path, &results, args.k);
+fn search_dense_plain_f16<G>(args: &Args, metric: MetricKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        MetricKind::Euclidean => search_dense_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::DotProduct => search_dense_plain_f16_with_distance::<DotProduct, G>(args),
     }
 }
 
-fn search_dense_plain_f16_standard(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries_vec = queries_vec.into_iter().map(f16::from_f32).collect();
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f16>::new(d, DistanceType::Euclidean),
-    );
+fn search_dense_plain_f16_with_distance<D, G>(args: &Args)
+where
+    D: ScalarDenseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let queries = read_npy_queries::<D>(&args.query_file);
+    let num_queries = queries.len();
 
-    let index: HNSW<DenseDataset<PlainQuantizer<f16>, Vec<f16>>, PlainQuantizer<f16>, Graph> =
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> =
         IndexSerializer::load_index(&args.index_file);
 
-    let num_queries = queries.len();
     let config = HNSWSearchParams::new(args.ef_search);
 
-    println!("N queries {num_queries}");
-
-    // Search
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
         for query in queries.iter() {
             let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f16>, Vec<f16>>, PlainQuantizer<f16>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
+            let res = index.search(query, args.k, &config);
+            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            total_time_search += start_time.elapsed().as_micros();
         }
     }
 
@@ -290,127 +275,211 @@ fn search_dense_plain_f16_standard(args: &Args) {
     }
 }
 
-fn search_dense_plain_f16_fixed(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries_vec = queries_vec.into_iter().map(f16::from_f32).collect();
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f16>::new(d, DistanceType::Euclidean),
-    );
-
-    let index: HNSW<
-        DenseDataset<PlainQuantizer<f16>, Vec<f16>>,
-        PlainQuantizer<f16>,
-        GraphFixedDegree,
-    > = IndexSerializer::load_index(&args.index_file);
-
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
-    let mut total_time_search = 0;
-    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
-
-    for _ in 0..args.n_run {
-        for query in queries.iter() {
-            let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f16>, Vec<f16>>, PlainQuantizer<f16>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
-        }
-    }
-
-    let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
-    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
-
-    index.print_space_usage_bytes();
-
-    if let Some(output_path) = &args.output_path {
-        write_results_to_file(output_path, &results, args.k);
+fn search_dense_pq<G>(args: &Args, metric: MetricKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        MetricKind::Euclidean => search_dense_pq_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::DotProduct => search_dense_pq_with_distance::<DotProduct, G>(args),
     }
 }
 
-fn search_dense_pq_standard(args: &Args) {
+fn search_dense_pq_with_distance<D, G>(args: &Args)
+where
+    D: ProductQuantizerDistance + ScalarDenseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let queries = read_npy_queries::<D>(&args.query_file);
+    let num_queries = queries.len();
+
+    let config = HNSWSearchParams::new(args.ef_search);
+
+    let mut total_time_search = 0;
+    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
+
     match args.m_pq {
-        4 => search_dense_pq_typed_standard::<4>(args),
-        8 => search_dense_pq_typed_standard::<8>(args),
-        16 => search_dense_pq_typed_standard::<16>(args),
-        32 => search_dense_pq_typed_standard::<32>(args),
-        48 => search_dense_pq_typed_standard::<48>(args),
-        64 => search_dense_pq_typed_standard::<64>(args),
-        96 => search_dense_pq_typed_standard::<96>(args),
-        128 => search_dense_pq_typed_standard::<128>(args),
-        192 => search_dense_pq_typed_standard::<192>(args),
-        256 => search_dense_pq_typed_standard::<256>(args),
-        384 => search_dense_pq_typed_standard::<384>(args),
+        8 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        16 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        32 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        48 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        64 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        96 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        128 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        192 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        256 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
+        384 => {
+            let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, G> =
+                IndexSerializer::load_index(&args.index_file);
+            for _ in 0..args.n_run {
+                for query in queries.iter() {
+                    let start_time = Instant::now();
+                    let res = index.search(query, args.k, &config);
+                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    total_time_search += start_time.elapsed().as_micros();
+                }
+            }
+            index.print_space_usage_bytes();
+        }
         _ => {
-            // This should never happen due to proper CLI validation, but keeping error message for safety
-            eprintln!("Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
+            eprintln!("Error: Invalid m_pq value. Choose between 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
             std::process::exit(1);
         }
     }
+
+    let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
+    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
+
+    if let Some(output_path) = &args.output_path {
+        write_results_to_file(output_path, &results, args.k);
+    }
 }
 
-fn search_dense_pq_fixed(args: &Args) {
-    match args.m_pq {
-        4 => search_dense_pq_typed_fixed::<4>(args),
-        8 => search_dense_pq_typed_fixed::<8>(args),
-        16 => search_dense_pq_typed_fixed::<16>(args),
-        32 => search_dense_pq_typed_fixed::<32>(args),
-        48 => search_dense_pq_typed_fixed::<48>(args),
-        64 => search_dense_pq_typed_fixed::<64>(args),
-        96 => search_dense_pq_typed_fixed::<96>(args),
-        128 => search_dense_pq_typed_fixed::<128>(args),
-        192 => search_dense_pq_typed_fixed::<192>(args),
-        256 => search_dense_pq_typed_fixed::<256>(args),
-        384 => search_dense_pq_typed_fixed::<384>(args),
-        _ => {
-            // This should never happen due to proper CLI validation, but keeping error message for safety
-            eprintln!("Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
+fn search_sparse_plain_f16<G>(args: &Args, metric: MetricKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        MetricKind::Euclidean => search_sparse_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::DotProduct => search_sparse_plain_f16_with_distance::<DotProduct, G>(args),
+    }
+}
+
+fn search_sparse_plain_f16_with_distance<D, G>(args: &Args)
+where
+    D: ScalarSparseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let config = HNSWSearchParams::new(args.ef_search);
+
+    let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading query file: {e:?}");
             std::process::exit(1);
-        }
-    }
-}
+        });
 
-fn search_dense_pq_typed_standard<const M: usize>(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f32>::new(d, DistanceType::Euclidean),
-    );
+    let num_queries = queries.len();
 
-    let index: HNSW<DenseDataset<ProductQuantizer<M>, Vec<u8>>, ProductQuantizer<M>, Graph> =
+    let index: HNSW<PlainSparseDataset<u16, f16, D>, G> =
         IndexSerializer::load_index(&args.index_file);
 
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
         for query in queries.iter() {
             let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
+            let res = index.search(query, args.k, &config);
+            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            total_time_search += start_time.elapsed().as_micros();
         }
     }
 
@@ -424,151 +493,43 @@ fn search_dense_pq_typed_standard<const M: usize>(args: &Args) {
     }
 }
 
-fn search_dense_pq_typed_fixed<const M: usize>(args: &Args) {
-    println!("Reading Queries");
-    let (queries_vec, d) = read_numpy_f32_flatten_2d(args.query_file.clone());
-    let queries = DenseDataset::from_vec(
-        queries_vec,
-        d,
-        PlainQuantizer::<f32>::new(d, DistanceType::Euclidean),
-    );
-
-    let index: HNSW<
-        DenseDataset<ProductQuantizer<M>, Vec<u8>>,
-        ProductQuantizer<M>,
-        GraphFixedDegree,
-    > = IndexSerializer::load_index(&args.index_file);
-
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
-    let mut total_time_search = 0;
-    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
-
-    for _ in 0..args.n_run {
-        for query in queries.iter() {
-            let start_time = Instant::now();
-            results.extend(
-                index.search::<DenseDataset<PlainQuantizer<f32>, Vec<f32>>, PlainQuantizer<f32>>(
-                    query, args.k, &config,
-                ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
-        }
-    }
-
-    let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
-    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
-
-    index.print_space_usage_bytes();
-
-    if let Some(output_path) = &args.output_path {
-        write_results_to_file(output_path, &results, args.k);
+fn search_sparse_plain_f32<G>(args: &Args, metric: MetricKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        MetricKind::Euclidean => search_sparse_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::DotProduct => search_sparse_plain_f32_with_distance::<DotProduct, G>(args),
     }
 }
 
-fn search_sparse_plain_f16_standard(args: &Args) {
-    println!("Reading Queries");
-    let (components, values, offsets) =
-        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
-            args.query_file.as_str(),
-            None,
-        )
-        .unwrap();
+fn search_sparse_plain_f32_with_distance<D, G>(args: &Args)
+where
+    D: ScalarSparseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let config = HNSWSearchParams::new(args.ef_search);
 
-    let d = *components.iter().max().unwrap() as usize + 1;
+    let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading query file: {e:?}");
+            std::process::exit(1);
+        });
 
-    let queries: SparseDataset<SparsePlainQuantizer<f16>> = SparseDataset::<
-        SparsePlainQuantizer<f16>,
-    >::from_vecs_f16(
-        &components, &values, &offsets, d
-    )
-    .unwrap();
+    let num_queries = queries.len();
 
-    let index: HNSW<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>, Graph> =
+    let index: HNSW<PlainSparseDataset<u16, f32, D>, G> =
         IndexSerializer::load_index(&args.index_file);
 
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
         for query in queries.iter() {
             let start_time = Instant::now();
-            results.extend(
-                index
-                    .search::<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>(
-                        query, args.k, &config,
-                    ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
-        }
-    }
-
-    let avg_time_search_per_query = total_time_search / (num_queries * args.n_run) as u128;
-    println!("[######] Average Query Time: {avg_time_search_per_query} μs");
-
-    index.print_space_usage_bytes();
-
-    if let Some(output_path) = &args.output_path {
-        write_results_to_file(output_path, &results, args.k);
-    }
-}
-
-fn search_sparse_plain_f16_fixed(args: &Args) {
-    println!("Reading Queries");
-    let (components, values, offsets) =
-        SparseDataset::<SparsePlainQuantizer<f16>>::read_bin_file_parts_f16(
-            args.query_file.as_str(),
-            None,
-        )
-        .unwrap();
-
-    let d = *components.iter().max().unwrap() as usize + 1;
-
-    let queries: SparseDataset<SparsePlainQuantizer<f16>> = SparseDataset::<
-        SparsePlainQuantizer<f16>,
-    >::from_vecs_f16(
-        &components, &values, &offsets, d
-    )
-    .unwrap();
-
-    let index: HNSW<
-        SparseDataset<SparsePlainQuantizer<f16>>,
-        SparsePlainQuantizer<f16>,
-        GraphFixedDegree,
-    > = IndexSerializer::load_index(&args.index_file);
-
-    let num_queries = queries.len();
-    let config = HNSWSearchParams::new(args.ef_search);
-
-    println!("N queries {num_queries}");
-
-    // Search
-    let mut total_time_search = 0;
-    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
-
-    for _ in 0..args.n_run {
-        for query in queries.iter() {
-            let start_time = Instant::now();
-            results.extend(
-                index
-                    .search::<SparseDataset<SparsePlainQuantizer<f16>>, SparsePlainQuantizer<f16>>(
-                        query, args.k, &config,
-                    ),
-            );
-            let duration_search = start_time.elapsed();
-            total_time_search += duration_search.as_micros();
+            let res = index.search(query, args.k, &config);
+            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            total_time_search += start_time.elapsed().as_micros();
         }
     }
 
@@ -583,17 +544,10 @@ fn search_sparse_plain_f16_fixed(args: &Args) {
 }
 
 fn write_results_to_file(output_path: &str, results: &[(f32, usize)], k: usize) {
-    let mut output_file = File::create(output_path).unwrap();
-
-    for (query_id, result) in results.chunks_exact(k).enumerate() {
-        // Writes results to a file in a parsable format
-        for (idx, (score, doc_id)) in result.iter().enumerate() {
-            writeln!(
-                &mut output_file,
-                "{query_id}\t{doc_id}\t{}\t{score}",
-                idx + 1,
-            )
-            .unwrap();
-        }
+    let mut file = File::create(output_path).unwrap();
+    for (i, (score, doc_id)) in results.iter().enumerate() {
+        let query_id = i / k;
+        let rank = (i % k) + 1;
+        writeln!(file, "{}\t{}\t{}\t{}", query_id, doc_id, rank, score).unwrap();
     }
 }

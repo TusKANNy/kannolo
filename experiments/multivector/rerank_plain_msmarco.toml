@@ -30,7 +30,7 @@ index =         "ms_marco_cocondenser_fixed" # Graph index filename (e.g., "inde
 [indexing_parameters]
 m =            32
 efc =          2000
-metric =       "ip"
+metric =       "dotproduct"
 
 [reranking]
 multivec_data_dir = "/data1/knn_datasets/dense_datasets/msmarco_v1_passage/colbert_v2" # Path to compressed multivector data (e.g., ms_marco_jmpq16 or ms_marco_mopq32 folder)

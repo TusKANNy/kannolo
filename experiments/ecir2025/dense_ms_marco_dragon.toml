@@ -15,7 +15,7 @@ k =             10
 n-runs =        1       # Number of runs. PLEASE think carefully how increasing 
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
-build =         true   # Need to build the index or the index is already built?
+build =         false   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
@@ -27,7 +27,7 @@ experiment =    "."     # stdout and stderr here of running the experiment is sa
 [filename]
 dataset =       "embeddings_dragon_centered.npy" # dataset input file name
 queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth.npy" # ground truth input file
+groundtruth =   "groundtruth_ip_k_10.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
 index =         "ecir_2025_dragon" # index file name
@@ -35,7 +35,7 @@ index =         "ecir_2025_dragon" # index file name
 [indexing_parameters]
 m =            32
 efc =          200
-metric =       "ip" # distance/similarity metric of the index, either "l2" or "ip"
+metric =       "dotproduct" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
 
 [query]
     [query.efs_10]

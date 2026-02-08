@@ -147,8 +147,9 @@ def build_index(configs, experiment_dir):
     ] 
 
     # Add new unified binary parameters
+    # hnsw_build expects --vector-representation (not --vector-type)
     if "vector-type" in configs:
-        command_and_params.append(f"--vector-type {configs['vector-type']}")
+        command_and_params.append(f"--vector-representation {configs['vector-type']}")
     if "precision" in configs:
         command_and_params.append(f"--precision {configs['precision']}")
     if "quantizer" in configs:

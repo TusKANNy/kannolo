@@ -21,7 +21,7 @@ use vectorium::{Dataset, QueryEvaluator, VectorId};
 ///    is removed from the `max_heap`.
 ///
 /// # Parameters
-/// - `min_heap`: A mutable reference to a `BinaryHeap` of `Reverse<ScoredItemGeneric<f32, usize>>` objects.
+/// - `min_heap`: A mutable reference to a `BinaryHeap` of `Reverse<ScoredItemGeneric<i32, usize>>` objects.
 /// - `max_heap`: A mutable reference to a `BinaryHeap` of `ScoredItemGeneric` objects.
 /// - `candidate`: The `ScoredItemGeneric` to be potentially added to the heaps.
 /// - `ef_parameter`: The maximum number of elements that should be maintained in the heaps during the construction and search processes.
@@ -33,9 +33,9 @@ use vectorium::{Dataset, QueryEvaluator, VectorId};
 /// use kannolo::hnsw_utils::add_neighbor_to_heaps;
 /// use vectorium::core::dataset::ScoredItemGeneric;
 ///
-/// let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-/// let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-/// let candidate = ScoredItemGeneric { distance: 0.5, vector: 1 }; // Example candidate
+/// let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+/// let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+/// let candidate = ScoredItemGeneric { distance: 5, vector: 1 }; // Example candidate
 /// let ef_parameter = 10;
 ///
 /// add_neighbor_to_heaps(&mut min_heap, &mut max_heap, candidate, ef_parameter);
@@ -259,9 +259,9 @@ pub fn prefetch_read_NTA<T>(data: &[T], offset: usize) {
 /// use vectorium::core::dataset::ScoredItemGeneric;
 ///
 /// let mut max_heap = BinaryHeap::new();
-/// max_heap.push(ScoredItemGeneric { distance: 10.0, vector: 1 });
-/// max_heap.push(ScoredItemGeneric { distance: 20.0, vector: 2 });
-/// max_heap.push(ScoredItemGeneric { distance: 15.0, vector: 3 });
+/// max_heap.push(ScoredItemGeneric { distance: 10, vector: 1 });
+/// max_heap.push(ScoredItemGeneric { distance: 20, vector: 2 });
+/// max_heap.push(ScoredItemGeneric { distance: 15, vector: 3 });
 ///
 /// let min_heap = from_max_heap_to_min_heap(&mut max_heap);
 /// assert_eq!(min_heap.len(), 3);
@@ -283,31 +283,31 @@ mod tests_from_max_heap_to_min_heap {
     /// The result is checked to ensure that the elements are ordered correctly in the min-heap.
     #[test]
     fn test_from_max_heap_to_min_heap() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-        max_heap.push(ScoredItemGeneric { distance: 3.2, vector: 10 });
-        max_heap.push(ScoredItemGeneric { distance: 2.2, vector: 8 });
-        max_heap.push(ScoredItemGeneric { distance: 6.2, vector: 12 });
-        max_heap.push(ScoredItemGeneric { distance: 7.2, vector: 2 });
-        max_heap.push(ScoredItemGeneric { distance: 32.2, vector: 4 });
-        max_heap.push(ScoredItemGeneric { distance: 4.2, vector: 14 });
-        max_heap.push(ScoredItemGeneric { distance: 1.2, vector: 6 });
-        max_heap.push(ScoredItemGeneric { distance: 7.2, vector: 6 });
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+        max_heap.push(ScoredItemGeneric { distance: 32, vector: 10 });
+        max_heap.push(ScoredItemGeneric { distance: 22, vector: 8 });
+        max_heap.push(ScoredItemGeneric { distance: 62, vector: 12 });
+        max_heap.push(ScoredItemGeneric { distance: 72, vector: 2 });
+        max_heap.push(ScoredItemGeneric { distance: 322, vector: 4 });
+        max_heap.push(ScoredItemGeneric { distance: 42, vector: 14 });
+        max_heap.push(ScoredItemGeneric { distance: 12, vector: 6 });
+        max_heap.push(ScoredItemGeneric { distance: 72, vector: 6 });
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut min_heap_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         while let Some(node) = min_heap.pop() {
             min_heap_vec.push(node.0);
         }
 
-        let expected_vec: Vec<ScoredItemGeneric<f32, usize>> = vec![
-            ScoredItemGeneric { distance: 1.2, vector: 6 },
-            ScoredItemGeneric { distance: 2.2, vector: 8 },
-            ScoredItemGeneric { distance: 3.2, vector: 10 },
-            ScoredItemGeneric { distance: 4.2, vector: 14 },
-            ScoredItemGeneric { distance: 6.2, vector: 12 },
-            ScoredItemGeneric { distance: 7.2, vector: 2 },
-            ScoredItemGeneric { distance: 7.2, vector: 6 },
-            ScoredItemGeneric { distance: 32.2, vector: 4 },
+        let expected_vec: Vec<ScoredItemGeneric<i32, usize>> = vec![
+            ScoredItemGeneric { distance: 12, vector: 6 },
+            ScoredItemGeneric { distance: 22, vector: 8 },
+            ScoredItemGeneric { distance: 32, vector: 10 },
+            ScoredItemGeneric { distance: 42, vector: 14 },
+            ScoredItemGeneric { distance: 62, vector: 12 },
+            ScoredItemGeneric { distance: 72, vector: 2 },
+            ScoredItemGeneric { distance: 72, vector: 6 },
+            ScoredItemGeneric { distance: 322, vector: 4 },
         ];
         assert_eq!(expected_vec, min_heap_vec);
     }
@@ -319,21 +319,21 @@ mod tests_from_max_heap_to_min_heap {
     #[test]
     fn test_from_max_heap_to_min_heap_with_large_data() {
         let n = 100000;
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
 
         for i in 0..n {
-            max_heap.push(ScoredItemGeneric { distance: i as f32, vector: i });
+            max_heap.push(ScoredItemGeneric { distance: i as i32, vector: i });
         }
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut min_heap_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         while let Some(node) = min_heap.pop() {
             min_heap_vec.push(node.0);
         }
 
-        let mut expected_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut expected_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         for i in 0..n {
-            expected_vec.push(ScoredItemGeneric { distance: i as f32, vector: i });
+            expected_vec.push(ScoredItemGeneric { distance: i as i32, vector: i });
         }
 
         assert_eq!(expected_vec, min_heap_vec);
@@ -345,7 +345,7 @@ mod tests_from_max_heap_to_min_heap {
     /// The resulting min-heap should also be empty.
     #[test]
     fn test_from_max_heap_to_min_heap_empty() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let min_heap = from_max_heap_to_min_heap(&mut max_heap);
         assert!(min_heap.is_empty());
     }
@@ -356,13 +356,13 @@ mod tests_from_max_heap_to_min_heap {
     /// ensuring that the single element is correctly handled.
     #[test]
     fn test_from_max_heap_to_min_heap_single_element() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-        max_heap.push(ScoredItemGeneric { distance: 42.0, vector: 1 });
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+        max_heap.push(ScoredItemGeneric { distance: 42, vector: 1 });
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
         let node = min_heap.pop().unwrap().0;
 
-        assert_eq!(node, ScoredItemGeneric { distance: 42.0, vector: 1 });
+        assert_eq!(node, ScoredItemGeneric { distance: 42, vector: 1 });
         assert!(min_heap.is_empty());
     }
 
@@ -372,18 +372,18 @@ mod tests_from_max_heap_to_min_heap {
     /// and verifies that the min-heap retains the correct number of elements.
     #[test]
     fn test_from_max_heap_to_min_heap_all_elements_same() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         for _ in 0..10 {
-            max_heap.push(ScoredItemGeneric { distance: 5.0, vector: 100 });
+            max_heap.push(ScoredItemGeneric { distance: 5, vector: 100 });
         }
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut min_heap_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<ScoredItemGeneric<f32, usize>> = vec![ScoredItemGeneric { distance: 5.0, vector: 100 }; 10];
+        let expected_vec: Vec<ScoredItemGeneric<i32, usize>> = vec![ScoredItemGeneric { distance: 5, vector: 100 }; 10];
         assert_eq!(expected_vec, min_heap_vec);
     }
 
@@ -393,19 +393,19 @@ mod tests_from_max_heap_to_min_heap {
     /// when converting a max-heap to a min-heap.
     #[test]
     fn test_from_max_heap_to_min_heap_with_negative_values() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-        max_heap.push(ScoredItemGeneric { distance: -1.0, vector: 1 });
-        max_heap.push(ScoredItemGeneric { distance: -2.0, vector: 2 });
-        max_heap.push(ScoredItemGeneric { distance: -3.0, vector: 3 });
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+        max_heap.push(ScoredItemGeneric { distance: -1, vector: 1 });
+        max_heap.push(ScoredItemGeneric { distance: -2, vector: 2 });
+        max_heap.push(ScoredItemGeneric { distance: -3, vector: 3 });
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut min_heap_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<ScoredItemGeneric<f32, usize>> =
-            vec![ScoredItemGeneric { distance: -3.0, vector: 3 }, ScoredItemGeneric { distance: -2.0, vector: 2 }, ScoredItemGeneric { distance: -1.0, vector: 1 }];
+        let expected_vec: Vec<ScoredItemGeneric<i32, usize>> =
+            vec![ScoredItemGeneric { distance: -3, vector: 3 }, ScoredItemGeneric { distance: -2, vector: 2 }, ScoredItemGeneric { distance: -1, vector: 1 }];
         assert_eq!(expected_vec, min_heap_vec);
     }
 
@@ -415,25 +415,25 @@ mod tests_from_max_heap_to_min_heap {
     /// and zero values. The resulting min-heap should correctly reflect the min-heap order.
     #[test]
     fn test_from_max_heap_to_min_heap_with_mixed_values() {
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-        max_heap.push(ScoredItemGeneric { distance: 0.0, vector: 0 });
-        max_heap.push(ScoredItemGeneric { distance: -1.0, vector: 1 });
-        max_heap.push(ScoredItemGeneric { distance: 2.0, vector: 2 });
-        max_heap.push(ScoredItemGeneric { distance: -2.0, vector: 3 });
-        max_heap.push(ScoredItemGeneric { distance: 1.0, vector: 4 });
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+        max_heap.push(ScoredItemGeneric { distance: 0, vector: 0 });
+        max_heap.push(ScoredItemGeneric { distance: -1, vector: 1 });
+        max_heap.push(ScoredItemGeneric { distance: 2, vector: 2 });
+        max_heap.push(ScoredItemGeneric { distance: -2, vector: 3 });
+        max_heap.push(ScoredItemGeneric { distance: 1, vector: 4 });
 
         let mut min_heap = from_max_heap_to_min_heap(&mut max_heap);
-        let mut min_heap_vec: Vec<ScoredItemGeneric<f32, usize>> = Vec::new();
+        let mut min_heap_vec: Vec<ScoredItemGeneric<i32, usize>> = Vec::new();
         while let Some(Reverse(node)) = min_heap.pop() {
             min_heap_vec.push(node);
         }
 
-        let expected_vec: Vec<ScoredItemGeneric<f32, usize>> = vec![
-            ScoredItemGeneric { distance: -2.0, vector: 3 },
-            ScoredItemGeneric { distance: -1.0, vector: 1 },
-            ScoredItemGeneric { distance: 0.0, vector: 0 },
-            ScoredItemGeneric { distance: 1.0, vector: 4 },
-            ScoredItemGeneric { distance: 2.0, vector: 2 },
+        let expected_vec: Vec<ScoredItemGeneric<i32, usize>> = vec![
+            ScoredItemGeneric { distance: -2, vector: 3 },
+            ScoredItemGeneric { distance: -1, vector: 1 },
+            ScoredItemGeneric { distance: 0, vector: 0 },
+            ScoredItemGeneric { distance: 1, vector: 4 },
+            ScoredItemGeneric { distance: 2, vector: 2 },
         ];
         assert_eq!(expected_vec, min_heap_vec);
     }
@@ -744,9 +744,9 @@ mod tests_add_neighbors_to_heaps {
 
     #[test]
     fn test_add_to_empty_heaps() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
-        let candidate = ScoredItemGeneric { distance: 10.0, vector: 1 };
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
+        let candidate = ScoredItemGeneric { distance: 10, vector: 1 };
         let ef_parameter = 3;
 
         add_neighbor_to_heaps(&mut min_heap, &mut max_heap, candidate, ef_parameter);
@@ -765,11 +765,11 @@ mod tests_add_neighbors_to_heaps {
     /// distance, and the top of the `min_heap` containing the smallest distance.
     #[test]
     fn test_add_within_ef_parameter_limit() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let ef_parameter = 3;
 
-        let nodes = [ScoredItemGeneric { distance: 10.0, vector: 1 }, ScoredItemGeneric { distance: 5.0, vector: 2 }, ScoredItemGeneric { distance: 7.0, vector: 3 }];
+        let nodes = [ScoredItemGeneric { distance: 10, vector: 1 }, ScoredItemGeneric { distance: 5, vector: 2 }, ScoredItemGeneric { distance: 7, vector: 3 }];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -777,8 +777,8 @@ mod tests_add_neighbors_to_heaps {
 
         assert_eq!(min_heap.len(), 3);
         assert_eq!(max_heap.len(), 3);
-        assert_eq!(max_heap.peek().unwrap().distance, 10.0);
-        assert_eq!(min_heap.peek().unwrap().0.distance, 5.0);
+        assert_eq!(max_heap.peek().unwrap().distance, 10);
+        assert_eq!(min_heap.peek().unwrap().0.distance, 5);
     }
 
     /// Tests the `add_neighbor_to_heaps` function when the number of nodes exceeds the `ef_parameter` limit.
@@ -790,15 +790,15 @@ mod tests_add_neighbors_to_heaps {
     /// will contain the distance 3.0.
     #[test]
     fn test_add_beyond_ef_parameter_limit() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let ef_parameter = 3;
 
         let nodes = [
-            ScoredItemGeneric { distance: 10.0, vector: 1 },
-            ScoredItemGeneric { distance: 5.0, vector: 2 },
-            ScoredItemGeneric { distance: 7.0, vector: 3 },
-            ScoredItemGeneric { distance: 3.0, vector: 4 },
+            ScoredItemGeneric { distance: 10, vector: 1 },
+            ScoredItemGeneric { distance: 5, vector: 2 },
+            ScoredItemGeneric { distance: 7, vector: 3 },
+            ScoredItemGeneric { distance: 3, vector: 4 },
         ];
 
         for node in nodes.iter().cloned() {
@@ -807,8 +807,8 @@ mod tests_add_neighbors_to_heaps {
 
         assert_eq!(min_heap.len(), 4);
         assert_eq!(max_heap.len(), 3);
-        assert_eq!(max_heap.peek().unwrap().distance, 7.0);
-        assert_eq!(min_heap.peek().unwrap().0.distance, 3.0);
+        assert_eq!(max_heap.peek().unwrap().distance, 7);
+        assert_eq!(min_heap.peek().unwrap().0.distance, 3);
     }
 
     /// Tests the `add_neighbor_to_heaps` function when adding a node with a higher distance than the current maximum.
@@ -819,24 +819,24 @@ mod tests_add_neighbors_to_heaps {
     /// as the new node's distance is greater than the current maximum at the top of the `max_heap`, which is 5.0.
     #[test]
     fn test_add_node_with_higher_distance_than_current_max() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = [ScoredItemGeneric { distance: 5.0, vector: 1 }, ScoredItemGeneric { distance: 3.0, vector: 2 }];
+        let nodes = [ScoredItemGeneric { distance: 5, vector: 1 }, ScoredItemGeneric { distance: 3, vector: 2 }];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
         }
 
-        let new_node = ScoredItemGeneric { distance: 8.0, vector: 3 };
+        let new_node = ScoredItemGeneric { distance: 8, vector: 3 };
         add_neighbor_to_heaps(&mut min_heap, &mut max_heap, new_node, ef_parameter);
 
         // No change should be made, as the new node's distance is greater than current max
         assert_eq!(min_heap.len(), 2);
         assert_eq!(max_heap.len(), 2);
-        assert_eq!(max_heap.peek().unwrap().distance, 5.0);
-        assert_eq!(min_heap.peek().unwrap().0.distance, 3.0);
+        assert_eq!(max_heap.peek().unwrap().distance, 5);
+        assert_eq!(min_heap.peek().unwrap().0.distance, 3);
     }
 
     /// Tests the `add_neighbor_to_heaps` function with an edge case where `ef_parameter` is set to 1.
@@ -847,11 +847,11 @@ mod tests_add_neighbors_to_heaps {
     /// all 3 nodes, with the smallest distance node at the top.
     #[test]
     fn test_ef_parameter_of_one() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let ef_parameter = 1;
 
-        let nodes = [ScoredItemGeneric { distance: 5.0, vector: 1 }, ScoredItemGeneric { distance: 3.0, vector: 2 }, ScoredItemGeneric { distance: 2.0, vector: 3 }];
+        let nodes = [ScoredItemGeneric { distance: 5, vector: 1 }, ScoredItemGeneric { distance: 3, vector: 2 }, ScoredItemGeneric { distance: 2, vector: 3 }];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
@@ -859,8 +859,8 @@ mod tests_add_neighbors_to_heaps {
 
         assert_eq!(min_heap.len(), 3);
         assert_eq!(max_heap.len(), 1);
-        assert_eq!(max_heap.peek().unwrap().distance, 2.0);
-        assert_eq!(min_heap.peek().unwrap().0.distance, 2.0);
+        assert_eq!(max_heap.peek().unwrap().distance, 2);
+        assert_eq!(min_heap.peek().unwrap().0.distance, 2);
     }
 
     /// Tests the `add_neighbor_to_heaps` function when adding a node with a distance equal to the current maximum.
@@ -871,22 +871,22 @@ mod tests_add_neighbors_to_heaps {
     /// the top of the `max_heap` containing the distance 5.0, and the top of the `min_heap` containing the distance 3.0.
     #[test]
     fn test_add_node_equal_to_current_max() {
-        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<f32, usize>>> = BinaryHeap::new();
-        let mut max_heap: BinaryHeap<ScoredItemGeneric<f32, usize>> = BinaryHeap::new();
+        let mut min_heap: BinaryHeap<Reverse<ScoredItemGeneric<i32, usize>>> = BinaryHeap::new();
+        let mut max_heap: BinaryHeap<ScoredItemGeneric<i32, usize>> = BinaryHeap::new();
         let ef_parameter = 2;
 
-        let nodes = [ScoredItemGeneric { distance: 5.0, vector: 1 }, ScoredItemGeneric { distance: 3.0, vector: 2 }];
+        let nodes = [ScoredItemGeneric { distance: 5, vector: 1 }, ScoredItemGeneric { distance: 3, vector: 2 }];
 
         for node in nodes.iter().cloned() {
             add_neighbor_to_heaps(&mut min_heap, &mut max_heap, node, ef_parameter);
         }
 
-        let new_node = ScoredItemGeneric { distance: 5.0, vector: 3 };
+        let new_node = ScoredItemGeneric { distance: 5, vector: 3 };
         add_neighbor_to_heaps(&mut min_heap, &mut max_heap, new_node, ef_parameter);
 
         assert_eq!(min_heap.len(), 2);
         assert_eq!(max_heap.len(), 2);
-        assert_eq!(max_heap.peek().unwrap().distance, 5.0);
-        assert_eq!(min_heap.peek().unwrap().0.distance, 3.0);
+        assert_eq!(max_heap.peek().unwrap().distance, 5);
+        assert_eq!(min_heap.peek().unwrap().0.distance, 3);
     }
 }

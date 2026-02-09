@@ -19,8 +19,8 @@ build =         true   # Need to build the index or the index is already built?
 metric =        "RR@10" # ir_measures metric (e.g. RR)
 
 [folder] 
-data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/splade" # data base path
-index =         "~/knn_indexes/sparse_datasets/msmarco_v1_passage/splade" # index input path
+data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data/" # data base path
+index =         "~/knn_indexes/sparse_datasets/msmarco_v1_passage/cocondenser/" # index input path
 qrels_path =    "~/knn_datasets/sparse_datasets/msmarco_v1_passage/qrels.dev.small.tsv" 
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
@@ -30,7 +30,7 @@ queries =       "queries.bin" # queries input file
 groundtruth =   "groundtruth.tsv" # ground truth input file
 doc_ids =       "doc_ids.npy"
 query_ids =     "queries_ids.npy"
-index =         "ecir_2025_splade" # index input file name
+index =         "ecir_2025_splade_vectorium" # index input file name
 
 [indexing_parameters]
 m =            32

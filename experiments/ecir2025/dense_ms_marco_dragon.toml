@@ -30,7 +30,7 @@ queries =       "queries.npy" # queries input file name
 groundtruth =   "groundtruth_ip_k_10.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_dragon" # index file name
+index =         "ecir_2025_dragon_vectorium" # index file name
 
 [indexing_parameters]
 m =            32

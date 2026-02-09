@@ -19,8 +19,8 @@ build =         true   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
-data =          "~/knn_datasets/dense_datasets/sift1M" # data base path
-index =         "~/knn_indexes/dense_datasets/sift1M" # index input path
+data =          "~/knn_datasets/dense_datasets/sift_1M" # data base path
+index =         "~/knn_indexes/dense_datasets/sift_1M" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
@@ -30,7 +30,7 @@ queries =       "queries.npy" # queries input file name
 groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_sift1m" # index file name
+index =         "ecir_2025_sift_1M_vectorium" # index file name
 
 [indexing_parameters]
 m =            16

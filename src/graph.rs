@@ -3,10 +3,11 @@ use std::collections::BinaryHeap;
 
 use optional::Optioned;
 use serde::{Deserialize, Serialize};
+use vectorium::core::dataset::ScoredItemGeneric;
 use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
-use crate::hnsw_utils::{add_neighbor_to_heaps, from_max_heap_to_min_heap, Candidate};
+use crate::hnsw_utils::{add_neighbor_to_heaps, from_max_heap_to_min_heap};
 use crate::visited_set::set::{create_visited_set, VisitedSet};
 
 /// A trait that defines the common interface for different graph implementations.
@@ -63,20 +64,20 @@ pub trait GraphTrait {
     /// * `entry_point`: The candidate (`distance`, `id`) from which the search begins.
     ///
     /// # Returns
-    /// The best `Candidate` found during the search.
+    /// The best `ScoredItemGeneric` found during the search.
     #[must_use]
     fn greedy_search_nearest<'e, D>(
         &self,
         dataset: &D,
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
-        entry_point: Candidate<<D::Encoder as VectorEncoder>::Distance>,
-    ) -> Candidate<<D::Encoder as VectorEncoder>::Distance>
+        entry_point: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+    ) -> ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>
     where
         D: Dataset,
         <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
-        let mut nearest_id = entry_point.id_vec();
-        let mut nearest_distance = entry_point.distance();
+        let mut nearest_id = entry_point.vector;
+        let mut nearest_distance = entry_point.distance;
         let mut updated = true;
 
         while updated {
@@ -95,7 +96,7 @@ pub trait GraphTrait {
             }
         }
 
-        Candidate(nearest_distance, nearest_id)
+        ScoredItemGeneric { distance: nearest_distance, vector: nearest_id }
     }
 
     /// Performs a greedy search on the graph to find the top `k` nearest neighbors.
@@ -115,11 +116,11 @@ pub trait GraphTrait {
     fn greedy_search_topk<'e, D>(
         &self,
         dataset: &'e D,
-        starting_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        starting_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         k: usize,
         ef: usize,
-    ) -> Vec<Candidate<<D::Encoder as VectorEncoder>::Distance>>
+    ) -> Vec<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
         <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
@@ -136,11 +137,11 @@ pub trait GraphTrait {
     fn search_candidates<'e, D>(
         &self,
         dataset: &'e D,
-        entry_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         ef: usize,
         k: Option<usize>,
-    ) -> BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>>
+    ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
         <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
@@ -148,11 +149,11 @@ pub trait GraphTrait {
         let k = k.unwrap_or(0); // Default to 0 if k is not provided
 
         // max-heap: We want to substitute worst result with a better one
-        let mut top_candidates: BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>> =
+        let mut top_candidates: BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>> =
             BinaryHeap::new();
 
         // min-heap: We want to extract best candidate first to visit it
-        let mut candidates: BinaryHeap<Reverse<Candidate<<D::Encoder as VectorEncoder>::Distance>>> =
+        let mut candidates: BinaryHeap<Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>> =
             BinaryHeap::new();
 
         let mut visited_table = create_visited_set(dataset.len(), ef);
@@ -160,14 +161,14 @@ pub trait GraphTrait {
         top_candidates.push(entry_node);
         candidates.push(Reverse(entry_node));
 
-        visited_table.insert(entry_node.id_vec());
+        visited_table.insert(entry_node.vector);
 
         while let Some(Reverse(node)) = candidates.pop() {
-            let id_candidate = node.id_vec();
-            let distance_candidate = node.distance();
+            let id_candidate = node.vector;
+            let distance_candidate = node.distance;
 
             if top_candidates.len() >= k // Ensure we have enough candidates
-                && distance_candidate > top_candidates.peek().unwrap().distance()
+                && distance_candidate > top_candidates.peek().unwrap().distance
             // Is the best candidate is worse than the worst in top_candidates?
             {
                 break;
@@ -182,7 +183,7 @@ pub trait GraphTrait {
                     add_neighbor_to_heaps(
                         &mut candidates,
                         &mut top_candidates,
-                        Candidate(dis_neigh, neighbor),
+                        ScoredItemGeneric { distance: dis_neigh, vector: neighbor },
                         ef,
                     );
                 },
@@ -674,7 +675,7 @@ impl GrowableGraph {
             // 1. Build a max-heap containing the neighbor's current neighbors and the new node.
             //    The distances are all relative to the neighbor.
             let mut closest_vectors =
-                BinaryHeap::<Candidate<<D::Encoder as VectorEncoder>::Distance>>::new();
+                BinaryHeap::<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>::new();
 
             // Add its current neighbors
             let neighbors_of_neighbor: Vec<usize> = self.neighbors(neighbor_local_id).collect();
@@ -682,14 +683,14 @@ impl GrowableGraph {
             for &local_id in &neighbors_of_neighbor {
                 let external_id = self.get_external_id(local_id) as VectorId;
                 let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
-                closest_vectors.push(Candidate(dist, local_id));
+                closest_vectors.push(ScoredItemGeneric { distance: dist, vector: local_id });
             }
 
             // Add the new reverse link (the node we are inserting)
             let node_to_insert_external_id = self.get_external_id(node_to_insert_local_id) as VectorId;
             let dist_to_inserted_node =
                 neighbor_query_eval.compute_distance(dataset.get(node_to_insert_external_id));
-            closest_vectors.push(Candidate(dist_to_inserted_node, node_to_insert_local_id));
+            closest_vectors.push(ScoredItemGeneric { distance: dist_to_inserted_node, vector: node_to_insert_local_id });
 
             // 2. Use the robust `shrink_neighbor_list` heuristic to prune the list.
             let new_neighbor_list =
@@ -703,7 +704,7 @@ impl GrowableGraph {
     pub fn shrink_neighbor_list<'e, D>(
         &self,
         dataset: &'e D,
-        closest_vectors: &mut BinaryHeap<Candidate<<D::Encoder as VectorEncoder>::Distance>>,
+        closest_vectors: &mut BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         max_size: usize,
     ) -> Vec<usize>
     where
@@ -713,13 +714,13 @@ impl GrowableGraph {
         if closest_vectors.len() <= max_size {
             return closest_vectors
                 .iter()
-                .map(|candidate| candidate.id_vec())
+                .map(|candidate| candidate.vector)
                 .collect();
         }
 
         let mut min_heap = from_max_heap_to_min_heap(closest_vectors);
         let mut new_closest_vectors: BinaryHeap<
-            Candidate<<D::Encoder as VectorEncoder>::Distance>,
+            ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
         > = BinaryHeap::new();
 
         while let Some(node) = min_heap.pop() {
@@ -730,13 +731,13 @@ impl GrowableGraph {
             // For each candidate, check if it is closer to the query than it is to any
             // other candidate already in the result set.
             for node2 in new_closest_vectors.iter() {
-                let node1_external = self.get_external_id(node1.id_vec()) as VectorId;
-                let node2_external = self.get_external_id(node2.id_vec()) as VectorId;
+                let node1_external = self.get_external_id(node1.vector) as VectorId;
+                let node2_external = self.get_external_id(node2.vector) as VectorId;
                 let node1_eval =
                     dataset.encoder().vector_evaluator(dataset.get(node1_external));
                 let dist_node_1_node2 =
                     node1_eval.compute_distance(dataset.get(node2_external));
-                if dist_node_1_node2 < node1.distance() {
+                if dist_node_1_node2 < node1.distance {
                     keep_node_1 = false;
                     break;
                 }
@@ -745,7 +746,7 @@ impl GrowableGraph {
             if keep_node_1 {
                 new_closest_vectors.push(node1);
                 if new_closest_vectors.len() >= max_size {
-                    return new_closest_vectors.iter().map(|c| c.id_vec()).collect();
+                    return new_closest_vectors.iter().map(|c| c.vector).collect();
                 }
             }
         }
@@ -753,7 +754,7 @@ impl GrowableGraph {
         // Return the IDs of the closest vectors
         new_closest_vectors
             .iter()
-            .map(|candidate| candidate.id_vec())
+            .map(|candidate| candidate.vector)
             .collect()
     }
 
@@ -763,20 +764,20 @@ impl GrowableGraph {
     /// A tuple containing:
     /// - `Vec<usize>`: The pruned forward neighbors for the new node.
     /// - `Vec<(usize, Vec<usize>)>`: The pre-computed reverse links for existing neighbors.
-    /// - `Candidate`: The best candidate found, to be used as the entry point for the next lower level.
+    /// - `ScoredItemGeneric`: The best candidate found, to be used as the entry point for the next lower level.
     #[must_use]
     pub fn find_and_prune_neighbors<'e, D>(
         &self,
         dataset: &'e D,
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
-        entry_node: Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
         ef_construction: usize,
         m: usize,
         future_local_id: usize,
     ) -> (
         Vec<usize>,
         Vec<(usize, Vec<usize>)>,
-        Candidate<<D::Encoder as VectorEncoder>::Distance>,
+        ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
     )
     where
         D: Dataset + Sync,

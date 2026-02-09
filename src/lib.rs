@@ -14,12 +14,6 @@ use crate::pylib::SparsePlainHNSWf16 as SparsePlainIndexPyf16;
 use pyo3::prelude::PyModule;
 use pyo3::{pymodule, Bound, PyResult};
 
-pub mod clustering {
-    pub mod kmeans;
-    pub use kmeans::KMeans;
-    pub use kmeans::KMeansBuilder;
-}
-
 pub mod graph;
 pub mod visited_set;
 

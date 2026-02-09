@@ -221,11 +221,13 @@ impl DensePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWEnum::DotProduct(index)
             }
         };
@@ -411,11 +413,13 @@ impl DensePlainHNSWf16 {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWf16Enum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWf16Enum::DotProduct(index)
             }
         };
@@ -625,11 +629,13 @@ impl SparsePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWEnum::DotProduct(index)
             }
         };
@@ -864,11 +870,13 @@ impl SparsePlainHNSWf16 {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWf16Enum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWf16Enum::DotProduct(index)
             }
         };
@@ -1114,43 +1122,53 @@ where
     fn load(path: &str, m_pq: usize) -> PyResult<Self> {
         let inner = match m_pq {
             8 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ8(index)
             }
             16 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ16(index)
             }
             32 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ32(index)
             }
             48 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ48(index)
             }
             64 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ64(index)
             }
             96 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ96(index)
             }
             128 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ128(index)
             }
             192 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ192(index)
             }
             256 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ256(index)
             }
             384 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> as IndexSerializer>::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePQHNSWGeneric::PQ384(index)
             }
             _ => {

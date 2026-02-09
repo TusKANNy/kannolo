@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
+use crate::IndexSerializer;
 use vectorium::core::dataset::ScoredItemGeneric;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
@@ -350,6 +351,8 @@ where
         }
     }
 }
+
+impl<D, G> IndexSerializer for HNSW<D, G> {}
 
 /// Computes the probabilities for a node to be assigned to each level in the HNSW graph.
 ///

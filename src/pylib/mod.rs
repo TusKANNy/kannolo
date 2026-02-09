@@ -3,7 +3,7 @@ use std::f32;
 use crate::graph::Graph;
 use crate::hnsw::{HNSWBuildParams, HNSWSearchParams, HNSW};
 use crate::index::Index;
-use crate::index_serializer::IndexSerializer;
+use crate::IndexSerializer;
 
 use half::f16;
 use numpy::{PyArray1, PyReadonlyArray1};
@@ -198,7 +198,7 @@ impl DensePlainHNSW {
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -206,7 +206,7 @@ impl DensePlainHNSW {
                 })
             }
             DensePlainHNSWEnum::DotProduct(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -221,13 +221,11 @@ impl DensePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path);
                 DensePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> as IndexSerializer>::load_index(path);
                 DensePlainHNSWEnum::DotProduct(index)
             }
         };
@@ -390,7 +388,7 @@ impl DensePlainHNSWf16 {
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
             DensePlainHNSWf16Enum::Euclidean(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -398,7 +396,7 @@ impl DensePlainHNSWf16 {
                 })
             }
             DensePlainHNSWf16Enum::DotProduct(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -413,13 +411,11 @@ impl DensePlainHNSWf16 {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path);
                 DensePlainHNSWf16Enum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path);
                 DensePlainHNSWf16Enum::DotProduct(index)
             }
         };
@@ -606,7 +602,7 @@ impl SparsePlainHNSW {
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
             SparsePlainHNSWEnum::Euclidean(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -614,7 +610,7 @@ impl SparsePlainHNSW {
                 })
             }
             SparsePlainHNSWEnum::DotProduct(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -629,13 +625,11 @@ impl SparsePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path);
                 SparsePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> as IndexSerializer>::load_index(path);
                 SparsePlainHNSWEnum::DotProduct(index)
             }
         };
@@ -847,7 +841,7 @@ impl SparsePlainHNSWf16 {
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
             SparsePlainHNSWf16Enum::Euclidean(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -855,7 +849,7 @@ impl SparsePlainHNSWf16 {
                 })
             }
             SparsePlainHNSWf16Enum::DotProduct(index) => {
-                IndexSerializer::save_index(path, index).map_err(|e| {
+                index.save_index(path).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Error saving index: {:?}",
                         e
@@ -870,13 +864,11 @@ impl SparsePlainHNSWf16 {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path);
                 SparsePlainHNSWf16Enum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path);
                 SparsePlainHNSWf16Enum::DotProduct(index)
             }
         };
@@ -1122,53 +1114,43 @@ where
     fn load(path: &str, m_pq: usize) -> PyResult<Self> {
         let inner = match m_pq {
             8 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ8(index)
             }
             16 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ16(index)
             }
             32 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ32(index)
             }
             48 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ48(index)
             }
             64 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ64(index)
             }
             96 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ96(index)
             }
             128 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ128(index)
             }
             192 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ192(index)
             }
             256 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ256(index)
             }
             384 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> =
-                    IndexSerializer::load_index(path);
+                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> as IndexSerializer>::load_index(path);
                 DensePQHNSWGeneric::PQ384(index)
             }
             _ => {
@@ -1182,16 +1164,16 @@ where
 
     fn save(&self, path: &str) -> PyResult<()> {
         let result = match self {
-            DensePQHNSWGeneric::PQ8(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ16(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ32(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ48(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ64(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ96(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ128(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ192(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ256(index) => IndexSerializer::save_index(path, index),
-            DensePQHNSWGeneric::PQ384(index) => IndexSerializer::save_index(path, index),
+            DensePQHNSWGeneric::PQ8(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ16(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ32(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ48(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ64(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ96(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ128(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ192(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ256(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ384(index) => index.save_index(path),
         };
 
         result.map_err(|e| {

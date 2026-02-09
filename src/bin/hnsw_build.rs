@@ -229,7 +229,7 @@ where
     let duration = start_time.elapsed();
     println!("Time to build: {} s (before serializing)", duration.as_secs());
 
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
+    let _ = index.save_index(&args.output_file);
 }
 
 fn build_dense_pq<G>(args: &Args, metric: Metric, config: &HNSWBuildParams)
@@ -325,7 +325,7 @@ fn build_dense_pq_with_m<const M: usize, D, G>(
     let duration = start_time.elapsed();
     println!("Time to build: {} s (before serializing)", duration.as_secs());
 
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
+    let _ = index.save_index(&args.output_file);
 }
 
 fn read_npy_dataset<D>(path: &str) -> PlainDenseDataset<f32, D>
@@ -352,7 +352,7 @@ where
     let duration = start_time.elapsed();
     println!("Time to build: {} s (before serializing)", duration.as_secs());
 
-    let _ = IndexSerializer::save_index(&args.output_file, &index);
+    let _ = index.save_index(&args.output_file);
 }
 
 trait GraphBound:

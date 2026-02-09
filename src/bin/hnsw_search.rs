@@ -203,8 +203,7 @@ where
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
 
-    let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> =
-        IndexSerializer::load_index(&args.index_file);
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> as IndexSerializer>::load_index(&args.index_file);
 
     let config = HNSWSearchParams::new(args.ef_search);
 
@@ -248,8 +247,7 @@ where
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
 
-    let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> =
-        IndexSerializer::load_index(&args.index_file);
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> as IndexSerializer>::load_index(&args.index_file);
 
     let config = HNSWSearchParams::new(args.ef_search);
 
@@ -300,8 +298,7 @@ where
 
     match args.m_pq {
         8 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -313,8 +310,7 @@ where
             index.print_space_usage_bytes();
         }
         16 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -326,8 +322,7 @@ where
             index.print_space_usage_bytes();
         }
         32 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -339,8 +334,7 @@ where
             index.print_space_usage_bytes();
         }
         48 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -352,8 +346,7 @@ where
             index.print_space_usage_bytes();
         }
         64 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -365,8 +358,7 @@ where
             index.print_space_usage_bytes();
         }
         96 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -378,8 +370,7 @@ where
             index.print_space_usage_bytes();
         }
         128 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -391,8 +382,7 @@ where
             index.print_space_usage_bytes();
         }
         192 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -404,8 +394,7 @@ where
             index.print_space_usage_bytes();
         }
         256 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -417,8 +406,7 @@ where
             index.print_space_usage_bytes();
         }
         384 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, G> =
-                IndexSerializer::load_index(&args.index_file);
+            let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, G> as IndexSerializer>::load_index(&args.index_file);
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
@@ -468,8 +456,7 @@ where
 
     let num_queries = queries.len();
 
-    let index: HNSW<PlainSparseDataset<u16, f16, D>, G> =
-        IndexSerializer::load_index(&args.index_file);
+    let index: HNSW<PlainSparseDataset<u16, f16, D>, G> = <HNSW<PlainSparseDataset<u16, f16, D>, G> as IndexSerializer>::load_index(&args.index_file);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -518,8 +505,7 @@ where
 
     let num_queries = queries.len();
 
-    let index: HNSW<PlainSparseDataset<u16, f32, D>, G> =
-        IndexSerializer::load_index(&args.index_file);
+    let index: HNSW<PlainSparseDataset<u16, f32, D>, G> = <HNSW<PlainSparseDataset<u16, f32, D>, G> as IndexSerializer>::load_index(&args.index_file);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);

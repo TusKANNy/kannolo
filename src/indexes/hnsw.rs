@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
-use crate::IndexSerializer;
+use vectorium::IndexSerializer;
 use vectorium::core::dataset::ScoredItemGeneric;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};

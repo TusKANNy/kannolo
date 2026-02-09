@@ -3,7 +3,7 @@ use std::f32;
 use crate::graph::Graph;
 use crate::hnsw::{HNSWBuildParams, HNSWSearchParams, HNSW};
 use crate::index::Index;
-use crate::IndexSerializer;
+use vectorium::IndexSerializer;
 
 use half::f16;
 use numpy::{PyArray1, PyReadonlyArray1};

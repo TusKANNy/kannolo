@@ -18,31 +18,7 @@ pub mod graph;
 pub mod visited_set;
 
 pub mod indexes;
-pub use indexes::{index, hnsw, hnsw_utils};
-
-use std::{fs, io::Error, path::PathBuf};
-
-use serde::{de::DeserializeOwned, Serialize};
-
-pub trait IndexSerializer: Sized {
-    fn save_index(&self, filename: &str) -> Result<(), Error>
-    where
-        Self: Serialize,
-    {
-        let filepath = PathBuf::from(filename);
-        let serialized = bincode::serialize(self).unwrap();
-        fs::write(filepath, serialized)
-    }
-
-    fn load_index(filename: &str) -> Self
-    where
-        Self: DeserializeOwned,
-    {
-        let filepath = PathBuf::from(filename);
-        let serialized: Vec<u8> = fs::read(filepath).unwrap();
-        bincode::deserialize::<Self>(&serialized).unwrap()
-    }
-}
+pub use indexes::{hnsw, hnsw_utils, index};
 
 /// A Python module implemented in Rust. The name of this function must match the `lib.name`
 /// setting in the `Cargo.toml`, otherwise Python will not be able to import the module.

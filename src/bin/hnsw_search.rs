@@ -8,7 +8,7 @@ use std::fs::File;
 use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
 use kannolo::hnsw::{HNSWSearchParams, HNSW};
 use kannolo::index::Index;
-use kannolo::IndexSerializer;
+use vectorium::IndexSerializer;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
 use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};

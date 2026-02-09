@@ -3,19 +3,11 @@
 """
 kANNolo Experiment Runner
 
-This script supports both hnsw_search and hnsw_rerank_search binaries.
+This script supports the unified `hnsw_build` and `hnsw_search` binaries.
 
-For reranking experiments, add a [reranking] section to your TOML config:
-
-[reranking]
-multivec_docs_file = "embeddings_u16.npy"    # Required: multivector documents file
-k_candidates = 100                            # Optional: candidates from graph search (default: 100)
-multivec_type = "plain"                       # Optional: "plain" or "pq" (default: "plain")
-    # pq_components_dir was removed: PQ components should be placed under
-    # `multivec_data_dir` and will be discovered by the binaries.
-
-Example usage:
-    python run_experiments.py --exp config_rerank.toml
+Reranking and multivector experiments are no longer supported. If a TOML file
+includes `vector-type = "multivector"` or a `[reranking]` section, the runner
+will error out with a clear message.
 """
 
 import re 
@@ -123,6 +115,8 @@ def get_index_filename(base_filename, configs):
 
 def build_index(configs, experiment_dir):
     """Build the index using the provided configuration."""
+    if configs.get("vector-type") == "multivector":
+        raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
     input_file =  os.path.join(configs["folder"]["data"], configs["filename"]["dataset"])
     index_folder = configs["folder"]["index"]
 
@@ -164,15 +158,6 @@ def build_index(configs, experiment_dir):
         command_and_params.append(f"--quantizer {configs['quantizer']}")
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
-
-    # Add multivector-specific parameters
-    if configs.get("vector-type") == "multivector":
-        if "sparse_dataset" in configs["filename"]:
-            sparse_file = os.path.join(configs["folder"]["data"], configs["filename"]["sparse_dataset"])
-            command_and_params.append(f"--sparse-data-file {sparse_file}")
-        if "doc_lens" in configs["filename"]:
-            doc_lens_file = os.path.join(configs["folder"]["data"], configs["filename"]["doc_lens"])
-            command_and_params.append(f"--doc-lens-file {doc_lens_file}")
 
     # If there is a section [pq_params] in the configuration file, add the parameters to the command
     if "pq_parameters" in configs:
@@ -317,6 +302,10 @@ def compute_accuracy(query_file, gt_file):
 
 def query_execution(configs, query_config, experiment_dir, subsection_name):
     """Execute a query based on the provided configuration."""
+    if configs.get("vector-type") == "multivector":
+        raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
+    if "reranking" in configs:
+        raise ValueError("reranking support was removed; update the experiment config to use hnsw_search only.")
     
     query_command = configs.get("query-command", None)
     if not query_command:
@@ -356,42 +345,6 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
         command_and_params.append(f"--quantizer {configs['quantizer']}")
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
-
-    # Add multivector-specific parameters
-    if configs.get("vector-type") == "multivector":
-        # multivector data is now provided as a directory; binaries will infer
-        # queries/doclens inside that folder (e.g. `queries.npy`, `doclens.npy`).
-        if "vector_dim" in configs["indexing_parameters"]:
-            command_and_params.append(f"--vector-dim {configs['indexing_parameters']['vector_dim']}")
-
-    # Add reranking-specific parameters
-    if "reranking" in configs:
-        rerank_config = configs["reranking"]
-
-        # Required reranking parameters
-        # Prefer the new unified `multivec_data_dir` which points to a folder
-        # containing `queries.npy`, `doclens.npy`, etc. Fall back to the
-        # dataset data folder if not provided.
-        if "multivec_data_dir" in rerank_config:
-            command_and_params.append(f"--multivec-data-dir {rerank_config['multivec_data_dir']}")
-        else:
-            command_and_params.append(f"--multivec-data-dir {configs['folder']['data']}")
-        if "vector_dim" in rerank_config:
-            command_and_params.append(f"--vector-dim {rerank_config['vector_dim']}")
-
-        # Optional reranking parameters
-        if "k_candidates" in rerank_config:
-            command_and_params.append(f"--k-candidates {rerank_config['k_candidates']}")
-        if "multivec_type" in rerank_config:
-            command_and_params.append(f"--multivec-type {rerank_config['multivec_type']}")
-        # PQ components are expected to live inside `multivec_data_dir` now.
-        # The binaries will look for `pq_centroids.npy` and
-        # `vector_codes_uint8.npy` inside that folder when `multivec_type = "pq"`.
-        # Optional pruning/early-exit parameters
-        if "alpha" in rerank_config:
-            command_and_params.append(f"--alpha {rerank_config['alpha']}")
-        if "beta" in rerank_config:
-            command_and_params.append(f"--beta {rerank_config['beta']}")
 
     # Add PQ-specific parameters if needed
     if "pq_parameters" in configs and "m-pq" in configs['pq_parameters']:

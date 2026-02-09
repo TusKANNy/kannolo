@@ -1,3 +1,5 @@
+# Deprecated: multivector reranking was removed during the vectorium integration.
+# This config is preserved for reference only.
 name =          "sparse_hnsw_rerank_plain"
 title =         "Rerank on MS-MARCOv1 with two-levels quantization encoded multivectors"
 description =   "Two-stage search: sparse HNSW + two-levels quantization encoded multivector reranking on MS-MARCOv1"

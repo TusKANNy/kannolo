@@ -1,4 +1,3 @@
-
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -8,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
-use crate::hnsw_utils::*;
 use vectorium::core::dataset::ScoredItemGeneric;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
@@ -188,7 +186,10 @@ where
         };
         let entry_external_id = entry_graph.get_external_id(self.entry_point) as VectorId;
         let entry_distance = query_eval.compute_distance(self.dataset.get(entry_external_id));
-        let mut entry_node = ScoredItemGeneric { distance: entry_distance, vector: self.entry_point };
+        let mut entry_node = ScoredItemGeneric {
+            distance: entry_distance,
+            vector: self.entry_point,
+        };
         if num_levels > 1 {
             // Greedily search from the top level down to level 1.
             for level_graph in &self.levels[..num_levels - 1] {
@@ -210,7 +211,10 @@ where
         };
 
         // The distance from the previous level's search is a good starting point.
-        let ground_entry_node = ScoredItemGeneric { distance: entry_node.distance, vector: entry_global_id };
+        let ground_entry_node = ScoredItemGeneric {
+            distance: entry_node.distance,
+            vector: entry_global_id,
+        };
 
         // Perform the final, most extensive search on the ground level.
         let mut topk = ground_graph.greedy_search_topk(
@@ -222,8 +226,7 @@ where
         );
 
         // Map local IDs to global vector IDs and return scored vectors
-        topk
-            .drain(..)
+        topk.drain(..)
             .map(|candidate| vectorium::dataset::ScoredVector {
                 distance: candidate.distance,
                 vector: candidate.vector as VectorId,
@@ -561,9 +564,12 @@ where
             let query_eval = source_dataset
                 .encoder()
                 .vector_evaluator(source_dataset.get(global_id as VectorId));
-            let entry_distance = query_eval
-                .compute_distance(source_dataset.get(entry_point_global_id as VectorId));
-            let mut entry_node = ScoredItemGeneric { distance: entry_distance, vector: entry_point_local_id };
+            let entry_distance =
+                query_eval.compute_distance(source_dataset.get(entry_point_global_id as VectorId));
+            let mut entry_node = ScoredItemGeneric {
+                distance: entry_distance,
+                vector: entry_point_local_id,
+            };
 
             if level > 0 {
                 for current_level in ((level + 1)..=max_level).rev() {
@@ -605,9 +611,12 @@ where
             } else {
                 ids_sorted_by_level[0]
             };
-            let dist = query_eval
-                .compute_distance(source_dataset.get(ground_entry_global_id as VectorId));
-            let ground_entry_node = ScoredItemGeneric { distance: dist, vector: ground_entry_global_id };
+            let dist =
+                query_eval.compute_distance(source_dataset.get(ground_entry_global_id as VectorId));
+            let ground_entry_node = ScoredItemGeneric {
+                distance: dist,
+                vector: ground_entry_global_id,
+            };
 
             let (ground_neighbors, ground_reverse_links, _) = ground_graph
                 .find_and_prune_neighbors(
@@ -665,7 +674,10 @@ where
                         .vector_evaluator(source_dataset.get(global_id as VectorId));
                     let entry_distance = query_eval
                         .compute_distance(source_dataset.get(entry_point_global_id as VectorId));
-                    let mut entry_node = ScoredItemGeneric { distance: entry_distance, vector: entry_point_local_id };
+                    let mut entry_node = ScoredItemGeneric {
+                        distance: entry_distance,
+                        vector: entry_point_local_id,
+                    };
                     let mut upper_level_data = Vec::new();
 
                     if level > 0 {
@@ -703,7 +715,10 @@ where
                     };
                     let dist = query_eval
                         .compute_distance(source_dataset.get(ground_entry_global_id as VectorId));
-                    let ground_entry_node = ScoredItemGeneric { distance: dist, vector: ground_entry_global_id };
+                    let ground_entry_node = ScoredItemGeneric {
+                        distance: dist,
+                        vector: ground_entry_global_id,
+                    };
 
                     let (ground_neighbors, ground_reverse_links, _) = ground_graph
                         .find_and_prune_neighbors(

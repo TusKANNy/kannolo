@@ -69,7 +69,6 @@ pub trait GraphTrait {
     ) -> ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>
     where
         D: Dataset,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let mut nearest_id = entry_point.vector;
         let mut nearest_distance = entry_point.distance;
@@ -121,7 +120,6 @@ pub trait GraphTrait {
     ) -> Vec<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let top_candidates =
             self.search_candidates(dataset, starting_node, query_evaluator, ef, Some(k));
@@ -142,9 +140,8 @@ pub trait GraphTrait {
     ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
-        let k = k.unwrap_or(0); // Default to 0 if k is not provided
+        let k = k.unwrap_or(0); // Default to 0 if k is not provided. Used by insertions when we don't need to keep track of the top k candidates, but just want to explore the neighborhood.
 
         // max-heap: We want to substitute worst result with a better one
         let mut top_candidates: BinaryHeap<
@@ -154,7 +151,7 @@ pub trait GraphTrait {
         // min-heap: We want to extract best candidate first to visit it
         let mut candidates: BinaryHeap<
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
-        > = BinaryHeap::new();
+        > = BinaryHeap::with_capacity(ef);
 
         let mut visited_table = create_visited_set(dataset.len(), ef);
 
@@ -220,7 +217,6 @@ pub trait GraphTrait {
         mut add_distances_fn: F,
     ) where
         D: Dataset,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
         F: FnMut(<D::Encoder as VectorEncoder>::Distance, usize),
     {
         for neighbor_local_id in neighbors {
@@ -689,7 +685,6 @@ impl GrowableGraph {
     // (neighbor_local_id, new_neighbor_list_for_it)
     where
         D: Dataset + Sync,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         let mut reverse_links_data = Vec::with_capacity(forward_neighbors.len());
 
@@ -747,7 +742,6 @@ impl GrowableGraph {
     ) -> Vec<usize>
     where
         D: Dataset + Sync,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         if closest_vectors.len() <= max_size {
             return closest_vectors
@@ -819,7 +813,6 @@ impl GrowableGraph {
     )
     where
         D: Dataset + Sync,
-        <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     {
         // 1. Get candidate neighbors
         let mut neighbors_nodes =

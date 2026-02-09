@@ -38,7 +38,6 @@ pub trait GraphTrait {
 
     /// Returns the external (original dataset) ID of a node given its local graph ID.
     /// If the graph has no external ID mapping, this function returns the local ID itself.
-    /// CODE_REVIEW: why do we need this?
     #[must_use]
     #[inline]
     fn get_external_id(&self, id: usize) -> usize {
@@ -228,7 +227,7 @@ pub trait GraphTrait {
 /// A representation of a graph where the adjacency lists of the nodes are stored spanning a variable length
 /// portion of a vector.
 /// A vector of offsets is used to indicate the start of each node's neighbors in the neighbors node.
-/// Nodes ids are represented as `u32` but thei are returned as usize ones.
+/// Node ids are represented as `u32` but they are returned as usize ones.
 ///
 /// # Fields
 /// - `neighbors`: A list of all neighbors for nodes in the graph. The neighbors for each node
@@ -239,7 +238,7 @@ pub trait GraphTrait {
 ///
 #[derive(Serialize, Deserialize)]
 pub struct Graph {
-    neighbors: Box<[u32]>, // Using usize to represent neighbors, where `None` is represented by usize::MAX
+    neighbors: Box<[u32]>, // Compact array of neighbor node IDs
     offsets: Box<[usize]>,
     ids_mapping: Option<Box<[usize]>>, // This is used to map the internal IDs to external IDs
     max_degree: usize,
@@ -344,7 +343,7 @@ impl From<GrowableGraph> for Graph {
 /// A representation of a graph where the adjacency lists of the nodes are stored in a fixed degree format.
 /// If a node's degree is less than the maximum degree, it is padded with `None` values.
 /// None values are represented as `usize::MAX`. The nodes ids are in the range `[0, len)`
-/// Nodes ids are represented as `u32` but thei are returned as usize ones.
+/// Node ids are represented as `u32` but they are returned as usize ones.
 /// Moreover, the largest value is reserved. This means that we allow a
 /// maximum of `u32::MAX - 1` nodes.
 ///
@@ -596,9 +595,9 @@ impl GrowableGraph {
     }
 
     /// Sets the ID mapping for the graph, converting local IDs to external/original IDs.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if the mapping length does not match the number of nodes in the graph.
     pub fn set_mapping(&mut self, mapping: Vec<usize>) -> Result<(), String> {
         if mapping.len() != self.n_nodes {

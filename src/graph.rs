@@ -8,7 +8,7 @@ use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
 use crate::hnsw_utils::{add_neighbor_to_heaps, from_max_heap_to_min_heap};
-use crate::visited_set::{create_visited_set, VisitedSet};
+use crate::visited_set::{VisitedSet, create_visited_set};
 
 /// A trait that defines the common interface for different graph implementations.
 ///

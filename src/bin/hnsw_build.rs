@@ -5,7 +5,7 @@ use half::f16;
 use serde::Serialize;
 use std::process;
 
-use kannolo::graph::{Graph, GraphFixedDegree};
+use kannolo::graph::{Graph, GraphFixedDegree, GrowableGraph};
 use kannolo::hnsw::{HNSWBuildParams, HNSW};
 use kannolo::index::Index;
 use kannolo::IndexSerializer;
@@ -355,5 +355,11 @@ where
     let _ = IndexSerializer::save_index(&args.output_file, &index);
 }
 
-trait GraphBound: kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> {}
-impl<T> GraphBound for T where T: kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> {}
+trait GraphBound:
+    kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> + From<GrowableGraph>
+{
+}
+impl<T> GraphBound for T where
+    T: kannolo::graph::GraphTrait + Serialize + for<'de> serde::Deserialize<'de> + From<GrowableGraph>
+{
+}

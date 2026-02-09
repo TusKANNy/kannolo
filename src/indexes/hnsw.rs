@@ -117,7 +117,7 @@ impl Default for HNSWSearchParams {
 impl<D, G> HNSW<D, G>
 where
     D: Dataset,
-    G: GraphTrait,
+    G: GraphTrait + From<GrowableGraph>,
 {
     /// Return the maximum level of the HNSW graph (0-based).
     #[must_use]
@@ -141,7 +141,7 @@ impl<D, G> Index<D> for HNSW<D, G>
 where
     D: Dataset + Sync + SpaceUsage,
     <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
-    G: GraphTrait,
+    G: GraphTrait + From<GrowableGraph>,
 {
     type BuildParams = HNSWBuildParams;
     type SearchParams = HNSWSearchParams;
@@ -336,10 +336,7 @@ where
         pb.finish_with_message("HNSW build complete.");
 
         // 4. Finalize and create the HNSW struct.
-        let final_levels: Vec<G> = growable_levels
-            .into_iter()
-            .map(|g| G::from_growable_graph(&g))
-            .collect();
+        let final_levels: Vec<G> = growable_levels.into_iter().map(Into::into).collect();
 
         Self {
             levels: final_levels.into_boxed_slice(),

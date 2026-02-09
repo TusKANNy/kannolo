@@ -40,17 +40,12 @@ pub trait GraphTrait {
 
     /// Returns the external (original dataset) ID of a node given its local graph ID.
     /// If the graph has no external ID mapping, this function returns the local ID itself.
+    /// CODE_REVIEW: why do we need this?
     #[must_use]
     #[inline]
     fn get_external_id(&self, id: usize) -> usize {
         id
     }
-
-    /// Creates a new graph from a `GrowableGraph`.
-    /// This is typically used to convert a temporary, mutable graph used during the build process
-    /// into a final, more compact and immutable graph for searching.
-    #[must_use]
-    fn from_growable_graph(growable_graph: &GrowableGraph) -> Self;
 
     /// Returns the memory space used by the graph structure in bytes.
     #[must_use]
@@ -96,7 +91,10 @@ pub trait GraphTrait {
             }
         }
 
-        ScoredItemGeneric { distance: nearest_distance, vector: nearest_id }
+        ScoredItemGeneric {
+            distance: nearest_distance,
+            vector: nearest_id,
+        }
     }
 
     /// Performs a greedy search on the graph to find the top `k` nearest neighbors.
@@ -149,12 +147,14 @@ pub trait GraphTrait {
         let k = k.unwrap_or(0); // Default to 0 if k is not provided
 
         // max-heap: We want to substitute worst result with a better one
-        let mut top_candidates: BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>> =
-            BinaryHeap::new();
+        let mut top_candidates: BinaryHeap<
+            ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        > = BinaryHeap::new();
 
         // min-heap: We want to extract best candidate first to visit it
-        let mut candidates: BinaryHeap<Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>> =
-            BinaryHeap::new();
+        let mut candidates: BinaryHeap<
+            Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
+        > = BinaryHeap::new();
 
         let mut visited_table = create_visited_set(dataset.len(), ef);
 
@@ -183,7 +183,10 @@ pub trait GraphTrait {
                     add_neighbor_to_heaps(
                         &mut candidates,
                         &mut top_candidates,
-                        ScoredItemGeneric { distance: dis_neigh, vector: neighbor },
+                        ScoredItemGeneric {
+                            distance: dis_neigh,
+                            vector: neighbor,
+                        },
                         ef,
                     );
                 },
@@ -225,8 +228,7 @@ pub trait GraphTrait {
                 visited_table.insert(neighbor_local_id);
 
                 let external_id = self.get_external_id(neighbor_local_id) as VectorId;
-                let distance_neighbor =
-                    query_evaluator.compute_distance(dataset.get(external_id));
+                let distance_neighbor = query_evaluator.compute_distance(dataset.get(external_id));
                 add_distances_fn(distance_neighbor, neighbor_local_id);
             }
         }
@@ -304,49 +306,6 @@ impl GraphTrait for Graph {
         }
     }
 
-    /// Creates a new `Graph` from a `GrowableGraph`.
-    /// This function converts a `GrowableGraph` into a graph by removing the padding
-    fn from_growable_graph(growable_graph: &GrowableGraph) -> Self {
-        let n_nodes = growable_graph.n_nodes();
-        let max_degree = growable_graph.max_degree();
-
-        let mut neighbors = Vec::with_capacity(growable_graph.neighbors.len());
-        let mut offsets = Vec::with_capacity(n_nodes + 1);
-
-        offsets.push(0); // Start with the first offset at 0
-        for v in 0..n_nodes {
-            let start = v * max_degree;
-            let end = start + max_degree;
-            // Collect only the non-None neighbors
-            let cur_neighbors: Vec<u32> = growable_graph.neighbors[start..end]
-                .iter()
-                .filter_map(|&opt| {
-                    if opt.is_some() {
-                        Some(opt.unwrap())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            neighbors.extend(cur_neighbors);
-            offsets.push(neighbors.len());
-        }
-
-        let final_mapping = if let Some(mapping) = &growable_graph.ids_mapping {
-            Some(mapping.clone().into_boxed_slice())
-        } else {
-            None
-        };
-
-        Graph {
-            neighbors: neighbors.into_boxed_slice(),
-            offsets: offsets.into_boxed_slice(),
-            ids_mapping: final_mapping,
-            max_degree,
-            n_nodes,
-        }
-    }
-
     fn get_space_usage_bytes(&self) -> usize {
         let neighbors_size = self.neighbors.len() * std::mem::size_of::<u32>();
         let offsets_size = self.offsets.len() * std::mem::size_of::<usize>();
@@ -357,6 +316,41 @@ impl GraphTrait for Graph {
 
         let total_size = neighbors_size + offsets_size + ids_mapping_size;
         total_size
+    }
+}
+
+impl From<GrowableGraph> for Graph {
+    /// Converts a `GrowableGraph` into a compact `Graph` by removing padding.
+    fn from(growable_graph: GrowableGraph) -> Self {
+        let n_nodes = growable_graph.n_nodes();
+        let max_degree = growable_graph.max_degree();
+
+        let mut neighbors = Vec::with_capacity(growable_graph.neighbors.len());
+        let mut offsets = Vec::with_capacity(n_nodes + 1);
+
+        offsets.push(0);
+        for v in 0..n_nodes {
+            let start = v * max_degree;
+            let end = start + max_degree;
+            let cur_neighbors: Vec<u32> = growable_graph.neighbors[start..end]
+                .iter()
+                .filter_map(|&opt| opt.is_some().then_some(opt.unwrap()))
+                .collect();
+            neighbors.extend(cur_neighbors);
+            offsets.push(neighbors.len());
+        }
+
+        let final_mapping = growable_graph
+            .ids_mapping
+            .map(|mapping| mapping.into_boxed_slice());
+
+        Graph {
+            neighbors: neighbors.into_boxed_slice(),
+            offsets: offsets.into_boxed_slice(),
+            ids_mapping: final_mapping,
+            max_degree,
+            n_nodes,
+        }
     }
 }
 
@@ -436,24 +430,6 @@ impl GraphTrait for GraphFixedDegree {
         }
     }
 
-    /// Creates a new `Graph` from a `GrowableGraph`.
-    /// This function converts a `GrowableGraph` into a graph by removing the padding
-    fn from_growable_graph(growable_graph: &GrowableGraph) -> Self {
-        let ids_mapping = if let Some(mapping) = &growable_graph.ids_mapping {
-            Some(mapping.clone().into_boxed_slice())
-        } else {
-            None
-        };
-
-        GraphFixedDegree {
-            neighbors: growable_graph.neighbors.clone().into_boxed_slice(),
-            ids_mapping: ids_mapping,
-            max_degree: growable_graph.max_degree,
-            n_edges: growable_graph.n_edges,
-            n_nodes: growable_graph.n_nodes,
-        }
-    }
-
     fn get_space_usage_bytes(&self) -> usize {
         let neighbors_size = self.neighbors.len() * std::mem::size_of::<Optioned<u32>>();
         let ids_mapping_size = self
@@ -463,6 +439,23 @@ impl GraphTrait for GraphFixedDegree {
 
         let total_size = neighbors_size + ids_mapping_size;
         total_size
+    }
+}
+
+impl From<GrowableGraph> for GraphFixedDegree {
+    /// Converts a `GrowableGraph` into a fixed-degree `GraphFixedDegree` (preserves padding).
+    fn from(growable_graph: GrowableGraph) -> Self {
+        let ids_mapping = growable_graph
+            .ids_mapping
+            .map(|mapping| mapping.into_boxed_slice());
+
+        GraphFixedDegree {
+            neighbors: growable_graph.neighbors.into_boxed_slice(),
+            ids_mapping,
+            max_degree: growable_graph.max_degree,
+            n_edges: growable_graph.n_edges,
+            n_nodes: growable_graph.n_nodes,
+        }
     }
 }
 
@@ -513,17 +506,6 @@ impl GraphTrait for GrowableGraph {
         self.n_edges
     }
 
-    fn from_growable_graph(growable_graph: &GrowableGraph) -> Self {
-        GrowableGraph {
-            neighbors: growable_graph.neighbors.clone(),
-            ids_mapping: growable_graph.ids_mapping.clone(),
-            max_degree: growable_graph.max_degree,
-            n_edges: growable_graph.n_edges,
-            n_nodes: growable_graph.n_nodes,
-            inserted_nodes: growable_graph.inserted_nodes,
-        }
-    }
-
     #[inline]
     fn get_external_id(&self, id: usize) -> usize {
         if let Some(mapping) = &self.ids_mapping {
@@ -551,6 +533,51 @@ impl GraphTrait for GrowableGraph {
 
         let total_size = neighbors_size + ids_mapping_size;
         total_size
+    }
+}
+
+impl From<Graph> for GrowableGraph {
+    fn from(graph: Graph) -> Self {
+        let max_degree = graph.max_degree;
+        let n_nodes = graph.n_nodes;
+        let mut neighbors = Vec::with_capacity(n_nodes * max_degree);
+
+        for v in 0..n_nodes {
+            let start = graph.offsets[v];
+            let end = graph.offsets[v + 1];
+            let slice = &graph.neighbors[start..end];
+            for &nbr in slice {
+                neighbors.push(Optioned::some(nbr));
+            }
+            let pad = max_degree.saturating_sub(slice.len());
+            neighbors.extend((0..pad).map(|_| Optioned::none()));
+        }
+
+        let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
+
+        GrowableGraph {
+            neighbors,
+            ids_mapping,
+            max_degree,
+            n_edges: graph.neighbors.len(),
+            n_nodes,
+            inserted_nodes: n_nodes,
+        }
+    }
+}
+
+impl From<GraphFixedDegree> for GrowableGraph {
+    fn from(graph: GraphFixedDegree) -> Self {
+        let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
+
+        GrowableGraph {
+            neighbors: graph.neighbors.into_vec(),
+            ids_mapping,
+            max_degree: graph.max_degree,
+            n_edges: graph.n_edges,
+            n_nodes: graph.n_nodes,
+            inserted_nodes: graph.n_nodes,
+        }
     }
 }
 
@@ -669,13 +696,15 @@ impl GrowableGraph {
         for &neighbor_local_id in forward_neighbors {
             // The "query" for the heuristic is the neighbor itself, whose neighbor list we are updating.
             let neighbor_external_id = self.get_external_id(neighbor_local_id) as VectorId;
-            let neighbor_query_eval =
-                dataset.encoder().vector_evaluator(dataset.get(neighbor_external_id));
+            let neighbor_query_eval = dataset
+                .encoder()
+                .vector_evaluator(dataset.get(neighbor_external_id));
 
             // 1. Build a max-heap containing the neighbor's current neighbors and the new node.
             //    The distances are all relative to the neighbor.
-            let mut closest_vectors =
-                BinaryHeap::<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>::new();
+            let mut closest_vectors = BinaryHeap::<
+                ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+            >::new();
 
             // Add its current neighbors
             let neighbors_of_neighbor: Vec<usize> = self.neighbors(neighbor_local_id).collect();
@@ -683,14 +712,21 @@ impl GrowableGraph {
             for &local_id in &neighbors_of_neighbor {
                 let external_id = self.get_external_id(local_id) as VectorId;
                 let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
-                closest_vectors.push(ScoredItemGeneric { distance: dist, vector: local_id });
+                closest_vectors.push(ScoredItemGeneric {
+                    distance: dist,
+                    vector: local_id,
+                });
             }
 
             // Add the new reverse link (the node we are inserting)
-            let node_to_insert_external_id = self.get_external_id(node_to_insert_local_id) as VectorId;
+            let node_to_insert_external_id =
+                self.get_external_id(node_to_insert_local_id) as VectorId;
             let dist_to_inserted_node =
                 neighbor_query_eval.compute_distance(dataset.get(node_to_insert_external_id));
-            closest_vectors.push(ScoredItemGeneric { distance: dist_to_inserted_node, vector: node_to_insert_local_id });
+            closest_vectors.push(ScoredItemGeneric {
+                distance: dist_to_inserted_node,
+                vector: node_to_insert_local_id,
+            });
 
             // 2. Use the robust `shrink_neighbor_list` heuristic to prune the list.
             let new_neighbor_list =
@@ -704,7 +740,9 @@ impl GrowableGraph {
     pub fn shrink_neighbor_list<'e, D>(
         &self,
         dataset: &'e D,
-        closest_vectors: &mut BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
+        closest_vectors: &mut BinaryHeap<
+            ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        >,
         max_size: usize,
     ) -> Vec<usize>
     where
@@ -733,10 +771,10 @@ impl GrowableGraph {
             for node2 in new_closest_vectors.iter() {
                 let node1_external = self.get_external_id(node1.vector) as VectorId;
                 let node2_external = self.get_external_id(node2.vector) as VectorId;
-                let node1_eval =
-                    dataset.encoder().vector_evaluator(dataset.get(node1_external));
-                let dist_node_1_node2 =
-                    node1_eval.compute_distance(dataset.get(node2_external));
+                let node1_eval = dataset
+                    .encoder()
+                    .vector_evaluator(dataset.get(node1_external));
+                let dist_node_1_node2 = node1_eval.compute_distance(dataset.get(node2_external));
                 if dist_node_1_node2 < node1.distance {
                     keep_node_1 = false;
                     break;

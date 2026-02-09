@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 use half::f16;
 use std::fs::File;
 
-use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait};
+use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
 use kannolo::hnsw::{HNSWSearchParams, HNSW};
 use kannolo::index::Index;
 use kannolo::IndexSerializer;
@@ -46,8 +46,8 @@ enum MetricKind {
     DotProduct,
 }
 
-trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> {}
-impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> {}
+trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph> {}
+impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph> {}
 
 fn parse_metric(metric: &str) -> MetricKind {
     match metric {

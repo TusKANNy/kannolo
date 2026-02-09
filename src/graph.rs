@@ -13,10 +13,8 @@ use crate::visited_set::{create_visited_set, VisitedSet};
 /// A trait that defines the common interface for different graph implementations.
 ///
 /// This allows graph indexes to be generic over the specific graph storage strategy.
+/// Graph construction is handled through concrete type constructors and `Default`.
 pub trait GraphTrait {
-    /// Creates a new, empty graph.
-    fn new() -> Self;
-
     /// Returns an iterator over the local IDs of the neighbors of node `u`.
     fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a;
 
@@ -252,8 +250,8 @@ pub struct Graph {
     n_nodes: usize,
 }
 
-impl GraphTrait for Graph {
-    fn new() -> Self {
+impl Default for Graph {
+    fn default() -> Self {
         Graph {
             neighbors: Box::new([]),
             offsets: Box::new([]),
@@ -262,7 +260,9 @@ impl GraphTrait for Graph {
             n_nodes: 0,
         }
     }
+}
 
+impl GraphTrait for Graph {
     #[inline]
     fn neighbors<'a>(&'a self, id: usize) -> impl Iterator<Item = usize> + 'a {
         let start = self.offsets[id];
@@ -373,8 +373,8 @@ pub struct GraphFixedDegree {
     n_nodes: usize,
 }
 
-impl GraphTrait for GraphFixedDegree {
-    fn new() -> Self {
+impl Default for GraphFixedDegree {
+    fn default() -> Self {
         GraphFixedDegree {
             neighbors: Box::new([]),
             ids_mapping: None, // No mapping by default
@@ -383,7 +383,9 @@ impl GraphTrait for GraphFixedDegree {
             n_nodes: 0,
         }
     }
+}
 
+impl GraphTrait for GraphFixedDegree {
     #[inline]
     fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
         let start = u * self.max_degree;
@@ -465,8 +467,8 @@ pub struct GrowableGraph {
     inserted_nodes: usize, // Number of nodes that have been actually inserted
 }
 
-impl GraphTrait for GrowableGraph {
-    fn new() -> Self {
+impl Default for GrowableGraph {
+    fn default() -> Self {
         GrowableGraph {
             neighbors: Vec::new(),
             max_degree: 0,
@@ -476,7 +478,9 @@ impl GraphTrait for GrowableGraph {
             inserted_nodes: 0, // No nodes inserted yet
         }
     }
+}
 
+impl GraphTrait for GrowableGraph {
     #[inline]
     fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
         let start = u * self.max_degree;

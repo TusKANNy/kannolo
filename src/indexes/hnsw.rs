@@ -458,7 +458,7 @@ fn random_level(probabs_levels: &[f32], rng: &mut StdRng) -> u8 {
 #[must_use]
 #[inline]
 fn compute_levels(
-    default_probabs: &Vec<f32>,
+    default_probabs: &[f32],
     num_vectors: usize,
 ) -> (Vec<Vec<usize>>, Vec<usize>, Vec<usize>, u8) {
     let mut rng = StdRng::seed_from_u64(523);

@@ -300,8 +300,7 @@ impl GraphTrait for Graph {
             .as_ref()
             .map_or(0, |mapping| mapping.len() * std::mem::size_of::<usize>());
 
-        let total_size = neighbors_size + offsets_size + ids_mapping_size;
-        total_size
+        neighbors_size + offsets_size + ids_mapping_size
     }
 }
 
@@ -420,8 +419,7 @@ impl GraphTrait for GraphFixedDegree {
             .as_ref()
             .map_or(0, |mapping| mapping.len() * std::mem::size_of::<usize>());
 
-        let total_size = neighbors_size + ids_mapping_size;
-        total_size
+        neighbors_size + ids_mapping_size
     }
 }
 
@@ -510,8 +508,7 @@ impl GraphTrait for GrowableGraph {
             .as_ref()
             .map_or(0, |mapping| mapping.len() * std::mem::size_of::<usize>());
 
-        let total_size = neighbors_size + ids_mapping_size;
-        total_size
+        neighbors_size + ids_mapping_size
     }
 }
 

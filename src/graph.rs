@@ -190,10 +190,6 @@ pub trait GraphTrait {
         top_candidates
     }
 
-    /// Sets the ID mapping for the graph.
-    /// This mapping is used to convert local IDs to external/original IDs.
-    fn set_mapping(&mut self, mapping: Vec<usize>);
-
     /// Processes the neighbors of a node.
     ///
     /// This function iterates through the neighbors of a given node, computes their distances
@@ -283,11 +279,6 @@ impl GraphTrait for Graph {
     #[inline]
     fn n_edges(&self) -> usize {
         self.neighbors.len()
-    }
-
-    #[inline]
-    fn set_mapping(&mut self, mapping: Vec<usize>) {
-        self.ids_mapping = Some(mapping.into_boxed_slice());
     }
 
     #[inline]
@@ -412,11 +403,6 @@ impl GraphTrait for GraphFixedDegree {
     }
 
     #[inline]
-    fn set_mapping(&mut self, mapping: Vec<usize>) {
-        self.ids_mapping = Some(mapping.into_boxed_slice());
-    }
-
-    #[inline]
     fn get_external_id(&self, id: usize) -> usize {
         if let Some(mapping) = &self.ids_mapping {
             if id >= mapping.len() {
@@ -518,12 +504,6 @@ impl GraphTrait for GrowableGraph {
         }
     }
 
-    /// Sets the ID mapping for this graph.
-    /// The mapping converts local IDs (indices) to external/original IDs.
-    fn set_mapping(&mut self, mapping: Vec<usize>) {
-        self.ids_mapping = Some(mapping);
-    }
-
     fn get_space_usage_bytes(&self) -> usize {
         let neighbors_size = self.neighbors.len() * std::mem::size_of::<Optioned<u32>>();
         let ids_mapping_size = self
@@ -615,12 +595,21 @@ impl GrowableGraph {
         self.ids_mapping = None; // No mapping by default
     }
 
-    pub fn set_mapping(&mut self, mapping: Vec<usize>) {
-        // Check that the mapping length matches the number of nodes
+    /// Sets the ID mapping for the graph, converting local IDs to external/original IDs.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the mapping length does not match the number of nodes in the graph.
+    pub fn set_mapping(&mut self, mapping: Vec<usize>) -> Result<(), String> {
         if mapping.len() != self.n_nodes {
-            panic!("Mapping length does not match the number of nodes in the graph.");
+            return Err(format!(
+                "Mapping length mismatch: got {}, expected {}",
+                mapping.len(),
+                self.n_nodes
+            ));
         }
         self.ids_mapping = Some(mapping);
+        Ok(())
     }
 
     /// A version of push for the parallel builder that accepts pre-computed reverse links.

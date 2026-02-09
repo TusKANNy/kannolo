@@ -262,7 +262,9 @@ where
             let mut graph = GrowableGraph::with_max_degree(m);
             let num_nodes_in_level = levels_mapping[i as usize - 1].len();
             graph.reserve(num_nodes_in_level);
-            graph.set_mapping(levels_mapping[i as usize - 1].clone());
+            graph
+                .set_mapping(levels_mapping[i as usize - 1].clone())
+                .expect("Graph mapping size validation should have passed");
             growable_levels.push(graph);
         }
 

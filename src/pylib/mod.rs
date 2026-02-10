@@ -1,7 +1,7 @@
 use std::f32;
 
 use crate::graph::Graph;
-use crate::hnsw::{HNSWBuildParams, HNSWSearchParams, HNSW};
+use crate::hnsw::{HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration};
 use crate::index::Index;
 use vectorium::IndexSerializer;
 
@@ -43,9 +43,7 @@ where
     D: ScalarDenseSupportedDistance,
 {
     read_npy_f32::<D>(path).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-            "Error reading .npy file: {e:?}"
-        ))
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading .npy file: {e:?}"))
     })
 }
 
@@ -148,7 +146,9 @@ impl DensePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -175,7 +175,9 @@ impl DensePlainHNSW {
     ) -> PyResult<Self> {
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -197,22 +199,12 @@ impl DensePlainHNSW {
 
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
-            DensePlainHNSWEnum::Euclidean(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
-            DensePlainHNSWEnum::DotProduct(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
+            DensePlainHNSWEnum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePlainHNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
         }
     }
 
@@ -242,7 +234,7 @@ impl DensePlainHNSW {
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);
@@ -270,7 +262,7 @@ impl DensePlainHNSW {
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
         let mut ids = Vec::new();
         let mut distances = Vec::new();
 
@@ -327,14 +319,20 @@ impl DensePlainHNSWf16 {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
                 let data_f32 = read_npy_dataset::<SquaredEuclideanDistance>(data_path)?;
                 let dim = data_f32.input_dim();
                 let n_vecs = data_f32.len();
-                let data_f16: Vec<f16> = data_f32.values().iter().map(|v| f16::from_f32(*v)).collect();
+                let data_f16: Vec<f16> = data_f32
+                    .values()
+                    .iter()
+                    .map(|v| f16::from_f32(*v))
+                    .collect();
                 let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
                 let dataset: DenseDataset<_> =
                     DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
@@ -344,7 +342,11 @@ impl DensePlainHNSWf16 {
                 let data_f32 = read_npy_dataset::<DotProduct>(data_path)?;
                 let dim = data_f32.input_dim();
                 let n_vecs = data_f32.len();
-                let data_f16: Vec<f16> = data_f32.values().iter().map(|v| f16::from_f32(*v)).collect();
+                let data_f16: Vec<f16> = data_f32
+                    .values()
+                    .iter()
+                    .map(|v| f16::from_f32(*v))
+                    .collect();
                 let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
                 let dataset: DenseDataset<_> =
                     DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
@@ -367,7 +369,9 @@ impl DensePlainHNSWf16 {
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
         let data_f16: Vec<f16> = data_vec.into_iter().map(f16::from_f32).collect();
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -389,22 +393,12 @@ impl DensePlainHNSWf16 {
 
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
-            DensePlainHNSWf16Enum::Euclidean(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
-            DensePlainHNSWf16Enum::DotProduct(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
+            DensePlainHNSWf16Enum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            DensePlainHNSWf16Enum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
         }
     }
 
@@ -434,7 +428,7 @@ impl DensePlainHNSWf16 {
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);
@@ -462,7 +456,7 @@ impl DensePlainHNSWf16 {
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
         let mut ids = Vec::new();
         let mut distances = Vec::new();
 
@@ -520,7 +514,9 @@ impl SparsePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -539,8 +535,8 @@ impl SparsePlainHNSW {
                 SparsePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let dataset: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(data_file)
-                    .map_err(|e| {
+                let dataset: PlainSparseDataset<u16, f32, DotProduct> =
+                    read_seismic_format(data_file).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                             "Error reading dataset: {:?}",
                             e
@@ -577,7 +573,9 @@ impl SparsePlainHNSW {
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
 
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -605,22 +603,12 @@ impl SparsePlainHNSW {
 
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
-            SparsePlainHNSWEnum::Euclidean(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
-            SparsePlainHNSWEnum::DotProduct(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
+            SparsePlainHNSWEnum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            SparsePlainHNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
         }
     }
 
@@ -653,7 +641,7 @@ impl SparsePlainHNSW {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
         let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);
@@ -682,7 +670,7 @@ impl SparsePlainHNSW {
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut ids = Vec::new();
         let mut distances = Vec::new();
@@ -761,7 +749,9 @@ impl SparsePlainHNSWf16 {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -780,8 +770,8 @@ impl SparsePlainHNSWf16 {
                 SparsePlainHNSWf16Enum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let dataset: PlainSparseDataset<u16, f16, DotProduct> = read_seismic_format(data_file)
-                    .map_err(|e| {
+                let dataset: PlainSparseDataset<u16, f16, DotProduct> =
+                    read_seismic_format(data_file).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                             "Error reading dataset: {:?}",
                             e
@@ -811,14 +801,20 @@ impl SparsePlainHNSWf16 {
         metric: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
-        let values_vec: Vec<f16> = values.as_slice()?.iter().map(|&x| f16::from_f32(x)).collect();
+        let values_vec: Vec<f16> = values
+            .as_slice()?
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect();
         let offsets_vec = offsets
             .as_slice()?
             .iter()
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
 
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -846,22 +842,12 @@ impl SparsePlainHNSWf16 {
 
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
-            SparsePlainHNSWf16Enum::Euclidean(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
-            SparsePlainHNSWf16Enum::DotProduct(index) => {
-                index.save_index(path).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error saving index: {:?}",
-                        e
-                    ))
-                })
-            }
+            SparsePlainHNSWf16Enum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            SparsePlainHNSWf16Enum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
         }
     }
 
@@ -894,7 +880,7 @@ impl SparsePlainHNSWf16 {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
         let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);
@@ -923,7 +909,7 @@ impl SparsePlainHNSWf16 {
         k: usize,
         ef_search: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut ids = Vec::new();
         let mut distances = Vec::new();
@@ -1000,49 +986,79 @@ where
 impl DensePQHNSWGeneric<DotProduct> {
     fn build_from_dataset(
         dataset: PlainDenseDataset<f32, DotProduct>,
-        config: &HNSWBuildParams,
+        config: &HNSWBuildConfiguration,
         m_pq: usize,
     ) -> PyResult<Self> {
         match m_pq {
             8 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<8, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<8, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             16 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<16, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<16, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             32 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<32, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<32, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             48 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<48, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<48, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             64 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<64, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<64, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             96 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<96, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<96, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             128 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<128, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<128, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             192 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<192, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<192, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             256 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<256, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<256, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             384 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<384, DotProduct>> = dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(pq_dataset, config)))
+                let pq_dataset: DenseDataset<ProductQuantizer<384, DotProduct>> =
+                    dataset.convert_into();
+                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
@@ -1054,59 +1070,79 @@ impl DensePQHNSWGeneric<DotProduct> {
 impl DensePQHNSWGeneric<SquaredEuclideanDistance> {
     fn build_from_dataset(
         dataset: PlainDenseDataset<f32, SquaredEuclideanDistance>,
-        config: &HNSWBuildParams,
+        config: &HNSWBuildConfiguration,
         m_pq: usize,
     ) -> PyResult<Self> {
         match m_pq {
             8 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             16 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             32 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             48 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             64 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             96 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             128 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             192 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             256 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             384 => {
                 let pq_dataset: DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>> =
                     dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(pq_dataset, config)))
+                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(
+                    pq_dataset, config,
+                )))
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
@@ -1122,59 +1158,159 @@ where
     fn load(path: &str, m_pq: usize) -> PyResult<Self> {
         let inner = match m_pq {
             8 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<8, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ8(index)
             }
             16 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<16, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ16(index)
             }
             32 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<32, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ32(index)
             }
             48 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<48, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ48(index)
             }
             64 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<64, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ64(index)
             }
             96 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<96, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ96(index)
             }
             128 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<128, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ128(index)
             }
             192 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<192, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ192(index)
             }
             256 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<256, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ256(index)
             }
             384 => {
-                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<
+                    DenseDataset<ProductQuantizer<384, D>>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error loading index: {:?}",
+                        e
+                    ))
+                })?;
                 DensePQHNSWGeneric::PQ384(index)
             }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "Unsupported m_pq value for load. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
-                ))
+                ));
             }
         };
         Ok(inner)
@@ -1203,7 +1339,7 @@ where
         &self,
         query: DenseVectorView<'_, f32>,
         k: usize,
-        search_config: &HNSWSearchParams,
+        search_config: &HNSWSearchConfiguration,
     ) -> Vec<vectorium::dataset::ScoredVector<D>> {
         match self {
             DensePQHNSWGeneric::PQ8(index) => index.search(query, k, search_config),
@@ -1250,15 +1386,19 @@ impl DensePQHNSW {
             eprintln!("Warning: vectorium PQ ignores sample_size and uses automatic sampling.");
         }
 
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
                 let dataset: PlainDenseDataset<f32, SquaredEuclideanDistance> =
                     read_npy_dataset::<SquaredEuclideanDistance>(data_path)?;
-                DensePQHNSWEnum::Euclidean(DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
-                    dataset, &config, m_pq,
-                )?)
+                DensePQHNSWEnum::Euclidean(
+                    DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
+                        dataset, &config, m_pq,
+                    )?,
+                )
             }
             MetricKind::DotProduct => {
                 let dataset: PlainDenseDataset<f32, DotProduct> =
@@ -1293,16 +1433,20 @@ impl DensePQHNSW {
 
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
-        let config = HNSWBuildParams::new(m, ef_construction, 4, 320);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
                 let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
                 let dataset: PlainDenseDataset<f32, SquaredEuclideanDistance> =
                     DenseDataset::from_raw(data_vec.into_boxed_slice(), n_vecs, encoder);
-                DensePQHNSWEnum::Euclidean(DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
-                    dataset, &config, m_pq,
-                )?)
+                DensePQHNSWEnum::Euclidean(
+                    DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
+                        dataset, &config, m_pq,
+                    )?,
+                )
             }
             MetricKind::DotProduct => {
                 let encoder = PlainDenseQuantizer::<f32, DotProduct>::new(dim);
@@ -1346,7 +1490,7 @@ impl DensePQHNSW {
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchParams::new(ef_search);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);

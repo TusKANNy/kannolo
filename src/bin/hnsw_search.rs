@@ -6,7 +6,7 @@ use half::f16;
 use std::fs::File;
 
 use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
-use kannolo::hnsw::{HNSWSearchParams, HNSW};
+use kannolo::hnsw::{HNSWSearchConfiguration, HNSW};
 use kannolo::index::Index;
 use vectorium::IndexSerializer;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
@@ -205,7 +205,7 @@ where
 
     let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
 
-    let config = HNSWSearchParams::new(args.ef_search);
+    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -249,7 +249,7 @@ where
 
     let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
 
-    let config = HNSWSearchParams::new(args.ef_search);
+    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -291,7 +291,7 @@ where
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
 
-    let config = HNSWSearchParams::new(args.ef_search);
+    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -446,7 +446,7 @@ where
     D: ScalarSparseSupportedDistance + Distance,
     G: GraphBound,
 {
-    let config = HNSWSearchParams::new(args.ef_search);
+    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {
@@ -495,7 +495,7 @@ where
     D: ScalarSparseSupportedDistance + Distance,
     G: GraphBound,
 {
-    let config = HNSWSearchParams::new(args.ef_search);
+    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {

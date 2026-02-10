@@ -44,8 +44,9 @@ pub struct HNSW<D, G> {
     entry_point: usize,
 }
 
-/// Parameters for building the HNSW index.
-pub struct HNSWBuildParams {
+/// Configuration for building the HNSW index.
+/// Use the builder pattern: `HNSWBuildConfiguration::default().with_num_neighbors(32).with_ef_construction(200)`
+pub struct HNSWBuildConfiguration {
     /// The number of neighbors for each node on each layer of the graph.
     /// Also known as `M` in the HNSW paper.
     pub num_neighbors_per_vec: usize,
@@ -58,25 +59,37 @@ pub struct HNSWBuildParams {
     pub max_build_batch_size: usize,
 }
 
-impl HNSWBuildParams {
-    /// Creates a new set of build parameters.
+impl HNSWBuildConfiguration {
+    /// Sets the number of neighbors per vector (M parameter). Returns self for chaining.
     #[must_use]
-    pub fn new(
-        num_neighbors_per_vec: usize,
-        ef_construction: usize,
-        initial_build_batch_size: usize,
-        max_build_batch_size: usize,
-    ) -> Self {
-        Self {
-            num_neighbors_per_vec,
-            ef_construction,
-            initial_build_batch_size,
-            max_build_batch_size,
-        }
+    pub fn with_num_neighbors(mut self, num_neighbors_per_vec: usize) -> Self {
+        self.num_neighbors_per_vec = num_neighbors_per_vec;
+        self
+    }
+
+    /// Sets the ef_construction parameter. Returns self for chaining.
+    #[must_use]
+    pub fn with_ef_construction(mut self, ef_construction: usize) -> Self {
+        self.ef_construction = ef_construction;
+        self
+    }
+
+    /// Sets the initial build batch size (internal tuning). Returns self for chaining.
+    #[must_use]
+    pub fn with_initial_batch_size(mut self, initial_build_batch_size: usize) -> Self {
+        self.initial_build_batch_size = initial_build_batch_size;
+        self
+    }
+
+    /// Sets the maximum build batch size (internal tuning). Returns self for chaining.
+    #[must_use]
+    pub fn with_max_batch_size(mut self, max_build_batch_size: usize) -> Self {
+        self.max_build_batch_size = max_build_batch_size;
+        self
     }
 }
 
-impl Default for HNSWBuildParams {
+impl Default for HNSWBuildConfiguration {
     /// Provides a default set of build parameters.
     /// These are generally reasonable starting points, but they should be
     /// tuned for specific datasets and use cases.
@@ -90,23 +103,25 @@ impl Default for HNSWBuildParams {
     }
 }
 
-/// Parameters for searching the HNSW index.
-pub struct HNSWSearchParams {
+/// Configuration for searching the HNSW index.
+/// Use the builder pattern: `HNSWSearchConfiguration::default().with_ef_search(200)`
+pub struct HNSWSearchConfiguration {
     /// The size of the dynamic candidate list for searching the graph.
     /// Also known as `ef` or `efSearch` in the HNSW paper. A larger
     /// value leads to more accurate results at the cost of speed.
     pub ef_search: usize,
 }
 
-impl HNSWSearchParams {
-    /// Creates a new set of search parameters.
+impl HNSWSearchConfiguration {
+    /// Sets the ef_search parameter. Returns self for chaining.
     #[must_use]
-    pub fn new(ef_search: usize) -> Self {
-        Self { ef_search }
+    pub fn with_ef_search(mut self, ef_search: usize) -> Self {
+        self.ef_search = ef_search;
+        self
     }
 }
 
-impl Default for HNSWSearchParams {
+impl Default for HNSWSearchConfiguration {
     /// Provides a default `ef_search` value.
     fn default() -> Self {
         Self { ef_search: 100 }
@@ -142,8 +157,8 @@ where
     <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
     G: GraphTrait + From<GrowableGraph>,
 {
-    type BuildParams = HNSWBuildParams;
-    type SearchParams = HNSWSearchParams;
+    type BuildParams = HNSWBuildConfiguration;
+    type SearchParams = HNSWSearchConfiguration;
 
     #[inline]
     fn n_vectors(&self) -> usize {
@@ -558,7 +573,7 @@ where
         m: usize,
         growable_levels: &mut [GrowableGraph],
         source_dataset: &D,
-        build_params: &HNSWBuildParams,
+        build_params: &HNSWBuildConfiguration,
         entry_point_local_id: usize,
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],
@@ -651,7 +666,7 @@ where
         m: usize,
         growable_levels: &mut [GrowableGraph],
         source_dataset: &D,
-        build_params: &HNSWBuildParams,
+        build_params: &HNSWBuildConfiguration,
         entry_point_local_id: usize,
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],

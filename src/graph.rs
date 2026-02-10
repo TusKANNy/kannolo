@@ -307,6 +307,7 @@ impl GraphTrait for Graph {
 impl From<GrowableGraph> for Graph {
     /// Converts a `GrowableGraph` into a compact `Graph` by removing padding.
     fn from(growable_graph: GrowableGraph) -> Self {
+        println!("Converting GrowableGraph to Graph. This may take some time for large graphs...");
         let n_nodes = growable_graph.n_nodes();
         let max_degree = growable_graph.max_degree();
 
@@ -317,17 +318,19 @@ impl From<GrowableGraph> for Graph {
         for v in 0..n_nodes {
             let start = v * max_degree;
             let end = start + max_degree;
-            let cur_neighbors: Vec<u32> = growable_graph.neighbors[start..end]
-                .iter()
-                .filter_map(|&opt| opt.is_some().then_some(opt.unwrap()))
-                .collect();
-            neighbors.extend(cur_neighbors);
+            neighbors.extend(
+                growable_graph.neighbors[start..end]
+                    .iter()
+                    .filter_map(|&opt| opt.into_option()),
+            );
             offsets.push(neighbors.len());
         }
 
         let final_mapping = growable_graph
             .ids_mapping
             .map(|mapping| mapping.into_boxed_slice());
+
+        println!("DONE!");
 
         Graph {
             neighbors: neighbors.into_boxed_slice(),
@@ -691,9 +694,7 @@ impl GrowableGraph {
             >::new();
 
             // Add its current neighbors
-            let neighbors_of_neighbor: Vec<usize> = self.neighbors(neighbor_local_id).collect();
-
-            for &local_id in &neighbors_of_neighbor {
+            for local_id in self.neighbors(neighbor_local_id) {
                 let external_id = self.get_external_id(local_id) as VectorId;
                 let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
                 closest_vectors.push(ScoredItemGeneric {

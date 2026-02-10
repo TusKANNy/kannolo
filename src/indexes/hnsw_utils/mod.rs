@@ -189,14 +189,17 @@ pub fn compute_closest_from_neighbors<'e, D>(
 /// assert_eq!(&*topk_locked, &expected);
 /// ```
 #[inline]
-pub fn insert_into_topk(
-    topk: &Mutex<Vec<(f32, usize)>>,
-    mut query_topk: Vec<(f32, usize)>,
+pub fn insert_into_topk<D: Ord + Copy + Default>(
+    topk: &Mutex<Vec<ScoredItemGeneric<D, usize>>>,
+    mut query_topk: Vec<ScoredItemGeneric<D, usize>>,
     index: usize,
     k: usize,
 ) {
     if query_topk.len() != k {
-        query_topk.resize_with(k, || (f32::MAX, usize::MAX));
+        query_topk.resize_with(k, || ScoredItemGeneric {
+            distance: D::default(),
+            vector: usize::MAX,
+        });
     }
     assert_eq!(
         query_topk.len(),
@@ -541,6 +544,7 @@ mod tests_insert_into_topk {
     };
 
     use crate::hnsw_utils::insert_into_topk;
+    use vectorium::core::dataset::ScoredItemGeneric;
 
     /// Tests the `insert_into_topk` function when the `topk_query` has exactly `k` elements and
     /// starts inserting at index 0.
@@ -551,15 +555,54 @@ mod tests_insert_into_topk {
     /// `topk` vector.
     #[test]
     fn test_exact_size_query_start_index() {
-        let topk = Arc::new(Mutex::new(vec![(1.0, 1), (2.0, 2), (3.0, 3)]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: 1.0,
+                vector: 1,
+            },
+            ScoredItemGeneric {
+                distance: 2.0,
+                vector: 2,
+            },
+            ScoredItemGeneric {
+                distance: 3.0,
+                vector: 3,
+            },
+        ]));
+        let topk_query = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 1.5,
+                vector: 6,
+            },
+            ScoredItemGeneric {
+                distance: 2.5,
+                vector: 7,
+            },
+        ];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![(0.5, 5), (1.5, 6), (2.5, 7)];
+        let expected = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 1.5,
+                vector: 6,
+            },
+            ScoredItemGeneric {
+                distance: 2.5,
+                vector: 7,
+            },
+        ];
         assert_eq!(&*topk_locked, &expected);
     }
 
@@ -570,15 +613,44 @@ mod tests_insert_into_topk {
     /// with default values.
     #[test]
     fn test_smaller_query_start_index() {
-        let topk = Arc::new(Mutex::new(vec![(1.0, 1), (2.0, 2), (3.0, 3)]));
-        let topk_query = vec![(0.5, 5)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: 1.0,
+                vector: 1,
+            },
+            ScoredItemGeneric {
+                distance: 2.0,
+                vector: 2,
+            },
+            ScoredItemGeneric {
+                distance: 3.0,
+                vector: 3,
+            },
+        ]));
+        let topk_query = vec![ScoredItemGeneric {
+            distance: 0.5,
+            vector: 5,
+        }];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![(0.5, 5), (f32::MAX, usize::MAX), (f32::MAX, usize::MAX)];
+        let expected = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: f32::MAX,
+                vector: usize::MAX,
+            },
+            ScoredItemGeneric {
+                distance: f32::MAX,
+                vector: usize::MAX,
+            },
+        ];
         assert_eq!(&*topk_locked, &expected);
     }
 
@@ -590,21 +662,81 @@ mod tests_insert_into_topk {
     #[test]
     fn test_larger_query_start_index() {
         let topk = Arc::new(Mutex::new(vec![
-            (1.0, 1),
-            (2.0, 2),
-            (3.0, 3),
-            (6.0, 4),
-            (8.0, 5),
-            (9.0, 6),
+            ScoredItemGeneric {
+                distance: 1.0,
+                vector: 1,
+            },
+            ScoredItemGeneric {
+                distance: 2.0,
+                vector: 2,
+            },
+            ScoredItemGeneric {
+                distance: 3.0,
+                vector: 3,
+            },
+            ScoredItemGeneric {
+                distance: 6.0,
+                vector: 4,
+            },
+            ScoredItemGeneric {
+                distance: 8.0,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 9.0,
+                vector: 6,
+            },
         ]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (3.5, 8)];
+        let topk_query = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 1.5,
+                vector: 6,
+            },
+            ScoredItemGeneric {
+                distance: 2.5,
+                vector: 7,
+            },
+            ScoredItemGeneric {
+                distance: 3.5,
+                vector: 8,
+            },
+        ];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![(0.5, 5), (1.5, 6), (2.5, 7), (6.0, 4), (8.0, 5), (9.0, 6)];
+        let expected = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 1.5,
+                vector: 6,
+            },
+            ScoredItemGeneric {
+                distance: 2.5,
+                vector: 7,
+            },
+            ScoredItemGeneric {
+                distance: 6.0,
+                vector: 4,
+            },
+            ScoredItemGeneric {
+                distance: 8.0,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 9.0,
+                vector: 6,
+            },
+        ];
         assert_eq!(&*topk_locked, &expected);
     }
 
@@ -640,8 +772,35 @@ mod tests_insert_into_topk {
     /// index will be replaced with the `topk_query` elements, while the other elements remain unchanged.
     #[test]
     fn test_exact_size_query_middle_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 100]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (2.7, 1), (3.1, 3)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: f32::MAX,
+                vector: usize::MAX
+            };
+            100
+        ]));
+        let topk_query = vec![
+            ScoredItemGeneric {
+                distance: 0.5,
+                vector: 5,
+            },
+            ScoredItemGeneric {
+                distance: 1.5,
+                vector: 6,
+            },
+            ScoredItemGeneric {
+                distance: 2.5,
+                vector: 7,
+            },
+            ScoredItemGeneric {
+                distance: 2.7,
+                vector: 1,
+            },
+            ScoredItemGeneric {
+                distance: 3.1,
+                vector: 3,
+            },
+        ];
         let index = 10;
         let k = 5;
 

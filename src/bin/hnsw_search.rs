@@ -6,7 +6,7 @@ use half::f16;
 use std::fs::File;
 
 use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
-use kannolo::hnsw::{HNSWSearchConfiguration, HNSW};
+use kannolo::hnsw::{HNSW, HNSWSearchConfiguration};
 use kannolo::index::Index;
 use vectorium::IndexSerializer;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
@@ -47,7 +47,8 @@ enum MetricKind {
 }
 
 trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph> {}
-impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph> {}
+impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph>
+{}
 
 fn parse_metric(metric: &str) -> MetricKind {
     match metric {
@@ -190,7 +191,9 @@ where
     G: GraphBound,
 {
     match metric {
-        MetricKind::Euclidean => search_dense_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::Euclidean => {
+            search_dense_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
         MetricKind::DotProduct => search_dense_plain_f32_with_distance::<DotProduct, G>(args),
     }
 }
@@ -202,12 +205,14 @@ where
 {
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
-
-    let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
-
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> =
+        <HNSW<DenseDataset<PlainDenseQuantizer<f32, D>>, G> as IndexSerializer>::load_index(
+            &args.index_file,
+        )
+        .unwrap();
     let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
-    let mut total_time_search = 0;
+    let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
@@ -234,7 +239,9 @@ where
     G: GraphBound,
 {
     match metric {
-        MetricKind::Euclidean => search_dense_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::Euclidean => {
+            search_dense_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
         MetricKind::DotProduct => search_dense_plain_f16_with_distance::<DotProduct, G>(args),
     }
 }
@@ -246,12 +253,14 @@ where
 {
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
-
-    let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
-
+    let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> =
+        <HNSW<DenseDataset<PlainDenseQuantizer<f16, D>>, G> as IndexSerializer>::load_index(
+            &args.index_file,
+        )
+        .unwrap();
     let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
 
-    let mut total_time_search = 0;
+    let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
@@ -298,127 +307,199 @@ where
 
     match args.m_pq {
         8 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<8, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<8, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         16 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<16, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<16, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         32 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<32, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<32, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         48 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<48, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<48, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         64 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<64, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<64, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         96 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<96, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<96, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         128 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<128, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<128, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         192 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<192, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<192, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         256 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<256, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<256, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         384 => {
-            let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, G> = <HNSW<DenseDataset<ProductQuantizer<384, D>>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
+            let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, G> =
+                <HNSW<DenseDataset<ProductQuantizer<384, D>>, G> as IndexSerializer>::load_index(
+                    &args.index_file,
+                )
+                .unwrap();
             for _ in 0..args.n_run {
                 for query in queries.iter() {
                     let start_time = Instant::now();
                     let res = index.search(query, args.k, &config);
-                    results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+                    results.extend(
+                        res.into_iter()
+                            .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+                    );
                     total_time_search += start_time.elapsed().as_micros();
                 }
             }
             index.print_space_usage_bytes();
         }
         _ => {
-            eprintln!("Error: Invalid m_pq value. Choose between 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.");
+            eprintln!(
+                "Error: Invalid m_pq value. Choose between 8, 16, 32, 48, 64, 96, 128, 192, 256, 384."
+            );
             std::process::exit(1);
         }
     }
@@ -436,7 +517,9 @@ where
     G: GraphBound,
 {
     match metric {
-        MetricKind::Euclidean => search_sparse_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::Euclidean => {
+            search_sparse_plain_f16_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
         MetricKind::DotProduct => search_sparse_plain_f16_with_distance::<DotProduct, G>(args),
     }
 }
@@ -447,18 +530,17 @@ where
     G: GraphBound,
 {
     let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
-
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {
             eprintln!("Error reading query file: {e:?}");
             std::process::exit(1);
         });
-
     let num_queries = queries.len();
+    let index: HNSW<PlainSparseDataset<u16, f16, D>, G> =
+        <HNSW<PlainSparseDataset<u16, f16, D>, G> as IndexSerializer>::load_index(&args.index_file)
+            .unwrap();
 
-    let index: HNSW<PlainSparseDataset<u16, f16, D>, G> = <HNSW<PlainSparseDataset<u16, f16, D>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
-
-    let mut total_time_search = 0;
+    let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {
@@ -485,7 +567,9 @@ where
     G: GraphBound,
 {
     match metric {
-        MetricKind::Euclidean => search_sparse_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args),
+        MetricKind::Euclidean => {
+            search_sparse_plain_f32_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
         MetricKind::DotProduct => search_sparse_plain_f32_with_distance::<DotProduct, G>(args),
     }
 }
@@ -496,18 +580,17 @@ where
     G: GraphBound,
 {
     let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
-
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {
             eprintln!("Error reading query file: {e:?}");
             std::process::exit(1);
         });
-
     let num_queries = queries.len();
+    let index: HNSW<PlainSparseDataset<u16, f32, D>, G> =
+        <HNSW<PlainSparseDataset<u16, f32, D>, G> as IndexSerializer>::load_index(&args.index_file)
+            .unwrap();
 
-    let index: HNSW<PlainSparseDataset<u16, f32, D>, G> = <HNSW<PlainSparseDataset<u16, f32, D>, G> as IndexSerializer>::load_index(&args.index_file).unwrap();
-
-    let mut total_time_search = 0;
+    let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
 
     for _ in 0..args.n_run {

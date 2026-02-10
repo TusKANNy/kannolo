@@ -1,4 +1,4 @@
-name =          "dragon_hnsw"
+name =          "dense_ms_marco_dragon"
 title =         "Search dense HNSWM on MSMARCO (Dragon)"
 description =   "Search dense HNSWM on MSMARCO (Dragon)"
 dataset =       "Dragon on MS-MARCO"
@@ -14,20 +14,20 @@ graph-type = "standard"  # Graph type: "standard" or "fixed-degree"
 k =             10
 n-runs =        1       # Number of runs. PLEASE think carefully how increasing 
                         # this may influence your query time
-NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
+NUMA =          "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         false   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
-data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon_centered" # data base path
-index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/dragon_centered" # index input path
+data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # data base path
+index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/dragon" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
 [filename]
-dataset =       "embeddings_dragon_centered.npy" # dataset input file name
+dataset =       "dataset.npy" # dataset input file name
 queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth_ip_k_10.npy" # ground truth input file
+groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
 index =         "ecir_2025_dragon_vectorium" # index file name

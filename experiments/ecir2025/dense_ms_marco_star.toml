@@ -1,4 +1,4 @@
-name =          "star_hnsw_search"
+name =          "dense_ms_marco_star"
 title =         "Search dense HNSWM on MSMARCO (Star)"
 description =   "Search dense HNSWM on MSMARCO (Star)"
 dataset =       "Star on MS-MARCO"

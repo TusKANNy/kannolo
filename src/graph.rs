@@ -202,7 +202,7 @@ pub trait GraphTrait {
             self.process_neighbors(
                 dataset,
                 self.neighbors(id_candidate),
-                &mut *visited_table,
+                &mut visited_table,
                 query_evaluator,
                 |dis_neigh, neighbor| {
                     add_neighbor_to_heaps(
@@ -348,11 +348,11 @@ impl From<GrowableGraph> for Graph {
         for v in 0..n_nodes {
             let start = v * max_degree;
             let end = start + max_degree;
-            let cur_neighbors: Vec<u32> = growable_graph.neighbors[start..end]
-                .iter()
-                .filter_map(|&opt| opt.is_some().then_some(opt.unwrap()))
-                .collect();
-            neighbors.extend(cur_neighbors);
+            neighbors.extend(
+                growable_graph.neighbors[start..end]
+                    .iter()
+                    .filter_map(|&opt| opt.into_option()),
+            );
             offsets.push(neighbors.len());
         }
 
@@ -722,9 +722,7 @@ impl GrowableGraph {
             >::new();
 
             // Add its current neighbors
-            let neighbors_of_neighbor: Vec<usize> = self.neighbors(neighbor_local_id).collect();
-
-            for &local_id in &neighbors_of_neighbor {
+            for local_id in self.neighbors(neighbor_local_id) {
                 let external_id = self.get_external_id(local_id) as VectorId;
                 let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
                 closest_vectors.push(ScoredItemGeneric {

@@ -219,7 +219,10 @@ where
         for query in queries.iter() {
             let start_time = Instant::now();
             let res = index.search(query, args.k, &config);
-            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
             total_time_search += start_time.elapsed().as_micros();
         }
     }
@@ -267,7 +270,10 @@ where
         for query in queries.iter() {
             let start_time = Instant::now();
             let res = index.search(query, args.k, &config);
-            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
             total_time_search += start_time.elapsed().as_micros();
         }
     }
@@ -547,7 +553,10 @@ where
         for query in queries.iter() {
             let start_time = Instant::now();
             let res = index.search(query, args.k, &config);
-            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
             total_time_search += start_time.elapsed().as_micros();
         }
     }
@@ -597,7 +606,10 @@ where
         for query in queries.iter() {
             let start_time = Instant::now();
             let res = index.search(query, args.k, &config);
-            results.extend(res.into_iter().map(|scored| (scored.distance.distance(), scored.vector as usize)));
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
             total_time_search += start_time.elapsed().as_micros();
         }
     }

@@ -171,7 +171,7 @@ pub trait GraphTrait {
             self.process_neighbors(
                 dataset,
                 self.neighbors(id_candidate),
-                &mut *visited_table,
+                &mut visited_table,
                 query_evaluator,
                 |dis_neigh, neighbor| {
                     add_neighbor_to_heaps(
@@ -307,7 +307,6 @@ impl GraphTrait for Graph {
 impl From<GrowableGraph> for Graph {
     /// Converts a `GrowableGraph` into a compact `Graph` by removing padding.
     fn from(growable_graph: GrowableGraph) -> Self {
-        println!("Converting GrowableGraph to Graph. This may take some time for large graphs...");
         let n_nodes = growable_graph.n_nodes();
         let max_degree = growable_graph.max_degree();
 
@@ -329,8 +328,6 @@ impl From<GrowableGraph> for Graph {
         let final_mapping = growable_graph
             .ids_mapping
             .map(|mapping| mapping.into_boxed_slice());
-
-        println!("DONE!");
 
         Graph {
             neighbors: neighbors.into_boxed_slice(),

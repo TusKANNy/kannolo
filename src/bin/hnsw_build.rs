@@ -211,7 +211,10 @@ where
     D: ScalarDenseSupportedDistance,
     G: GraphBound,
 {
-    let dataset_f32 = read_npy_dataset::<D>(&args.data_file);
+    let dataset_f32 = read_npy_f32::<D>(&args.data_file).unwrap_or_else(|e| {
+        eprintln!("Error reading .npy file: {e:?}");
+        process::exit(1);
+    });
     let d = dataset_f32.input_dim();
     let n_vecs = dataset_f32.len();
     let data: Vec<V> = dataset_f32
@@ -296,7 +299,10 @@ fn read_dense_plain_dataset<D>(args: &Args) -> PlainDenseDataset<f32, D>
 where
     D: ScalarDenseSupportedDistance,
 {
-    read_npy_dataset::<D>(&args.data_file)
+    read_npy_f32::<D>(&args.data_file).unwrap_or_else(|e| {
+        eprintln!("Error reading .npy file: {e:?}");
+        process::exit(1);
+    })
 }
 
 fn build_sparse_plain<V, G>(args: &Args, metric: Metric, config: &HNSWBuildParams)
@@ -326,16 +332,6 @@ fn build_dense_pq_with_m<const M: usize, D, G>(
     println!("Time to build: {} s (before serializing)", duration.as_secs());
 
     let _ = index.save_index(&args.output_file);
-}
-
-fn read_npy_dataset<D>(path: &str) -> PlainDenseDataset<f32, D>
-where
-    D: ScalarDenseSupportedDistance,
-{
-    read_npy_f32::<D>(path).unwrap_or_else(|e| {
-        eprintln!("Error reading .npy file: {e:?}");
-        process::exit(1);
-    })
 }
 
 fn build_sparse_plain_with_distance<V, D, G>(args: &Args, config: &HNSWBuildParams)

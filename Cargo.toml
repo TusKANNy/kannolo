@@ -10,9 +10,6 @@ build = "build.rs"
 
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
-ndarray = "0.15.6"
-ndarray-npy = "0.8.1"
-npyz = "0.8.3"
 rand = "0.8.5"
 itertools = "0.14.0"
 matrixmultiply = "0.3.8"

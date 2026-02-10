@@ -119,15 +119,47 @@ pub trait GraphTrait {
         D: Dataset + Sync,
     {
         let top_candidates =
-            self.search_candidates(dataset, starting_node, query_evaluator, ef, Some(k));
+            self.search_candidates_for_query(dataset, starting_node, query_evaluator, ef, k);
 
         let mut top_k = top_candidates.into_sorted_vec();
         top_k.truncate(k);
         top_k
     }
 
+    /// Search candidates for a query (uses efSearch and top-k pruning).
     #[must_use]
-    fn search_candidates<'e, D>(
+    fn search_candidates_for_query<'e, D>(
+        &self,
+        dataset: &'e D,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        ef_search: usize,
+        k: usize,
+    ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
+    where
+        D: Dataset + Sync,
+    {
+        self.search_candidates_impl(dataset, entry_node, query_evaluator, ef_search, Some(k))
+    }
+
+    /// Search candidates for insertion (uses efConstruction, no top-k pruning).
+    #[must_use]
+    fn search_candidates_for_insert<'e, D>(
+        &self,
+        dataset: &'e D,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        ef_construction: usize,
+    ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
+    where
+        D: Dataset + Sync,
+    {
+        self.search_candidates_impl(dataset, entry_node, query_evaluator, ef_construction, None)
+    }
+
+    /// Shared implementation for candidate search.
+    #[must_use]
+    fn search_candidates_impl<'e, D>(
         &self,
         dataset: &'e D,
         entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
@@ -138,8 +170,6 @@ pub trait GraphTrait {
     where
         D: Dataset + Sync,
     {
-        let k = k.unwrap_or(0); // Default to 0 if k is not provided. Used by insertions when we don't need to keep track of the top k candidates, but just want to explore the neighborhood.
-
         // max-heap: We want to substitute worst result with a better one
         let mut top_candidates: BinaryHeap<
             ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
@@ -161,11 +191,12 @@ pub trait GraphTrait {
             let id_candidate = node.vector;
             let distance_candidate = node.distance;
 
-            if top_candidates.len() >= k // Ensure we have enough candidates
-                && distance_candidate > top_candidates.peek().unwrap().distance
-            // Is the best candidate is worse than the worst in top_candidates?
-            {
-                break;
+            if let Some(k_limit) = k {
+                if top_candidates.len() >= k_limit
+                    && distance_candidate > top_candidates.peek().unwrap().distance
+                {
+                    break;
+                }
             }
 
             self.process_neighbors(
@@ -805,7 +836,7 @@ impl GrowableGraph {
     {
         // 1. Get candidate neighbors
         let mut neighbors_nodes =
-            self.search_candidates(dataset, entry_node, query_evaluator, ef_construction, None);
+            self.search_candidates_for_insert(dataset, entry_node, query_evaluator, ef_construction);
 
         // The new entry point for the next level is the best candidate we found.
         let new_entry_node = *neighbors_nodes.peek().unwrap();

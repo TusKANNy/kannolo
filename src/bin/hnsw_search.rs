@@ -6,7 +6,7 @@ use half::f16;
 use std::fs::File;
 
 use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
-use kannolo::hnsw::{HNSW, HNSWSearchConfiguration};
+use kannolo::hnsw::{EarlyTerminationStrategy, HNSW, HNSWSearchConfiguration};
 use kannolo::index::Index;
 use vectorium::IndexSerializer;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
@@ -38,6 +38,12 @@ enum QuantizerType {
 enum GraphType {
     Standard,
     FixedDegree,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum EarlyTerminationMethod {
+    None,
+    DistanceAdaptive,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +130,16 @@ struct Args {
     #[arg(default_value_t = 40)]
     ef_search: usize,
 
+    /// Early termination strategy for search.
+    #[clap(long, value_enum)]
+    #[arg(default_value_t = EarlyTerminationMethod::None)]
+    early_termination: EarlyTerminationMethod,
+
+    /// Lambda parameter for DistanceAdaptive strategy.
+    #[clap(long, value_parser)]
+    #[arg(default_value_t = 1.0)]
+    lambda: f32,
+
     /// Number of runs for timing.
     #[clap(long, value_parser)]
     #[arg(default_value_t = 1)]
@@ -186,6 +202,19 @@ fn main() {
     }
 }
 
+fn create_search_config(args: &Args) -> HNSWSearchConfiguration {
+    let early_termination = match args.early_termination {
+        EarlyTerminationMethod::None => EarlyTerminationStrategy::None,
+        EarlyTerminationMethod::DistanceAdaptive => {
+            EarlyTerminationStrategy::DistanceAdaptive { lambda: args.lambda }
+        }
+    };
+
+    HNSWSearchConfiguration::default()
+        .with_ef_search(args.ef_search)
+        .with_early_termination(early_termination)
+}
+
 fn search_dense_plain_f32<G>(args: &Args, metric: MetricKind)
 where
     G: GraphBound,
@@ -210,7 +239,7 @@ where
             &args.index_file,
         )
         .unwrap();
-    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
+    let config = create_search_config(args);
 
     let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -261,7 +290,7 @@ where
             &args.index_file,
         )
         .unwrap();
-    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
+    let config = create_search_config(args);
 
     let mut total_time_search = 0u128;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -306,7 +335,7 @@ where
     let queries = read_npy_queries::<D>(&args.query_file);
     let num_queries = queries.len();
 
-    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
+    let config = create_search_config(args);
 
     let mut total_time_search = 0;
     let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
@@ -535,7 +564,7 @@ where
     D: ScalarSparseSupportedDistance + Distance,
     G: GraphBound,
 {
-    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
+    let config = create_search_config(args);
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {
             eprintln!("Error reading query file: {e:?}");
@@ -588,7 +617,7 @@ where
     D: ScalarSparseSupportedDistance + Distance,
     G: GraphBound,
 {
-    let config = HNSWSearchConfiguration::default().with_ef_search(args.ef_search);
+    let config = create_search_config(args);
     let queries: PlainSparseDataset<u16, f32, D> = read_seismic_format(&args.query_file)
         .unwrap_or_else(|e| {
             eprintln!("Error reading query file: {e:?}");

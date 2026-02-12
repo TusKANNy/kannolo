@@ -103,6 +103,35 @@ impl Default for HNSWBuildConfiguration {
     }
 }
 
+/// Strategy for early termination during HNSW search.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum EarlyTerminationStrategy {
+    /// Standard HNSW: stop when the best frontier candidate is worse
+    /// than the worst candidate in the top-k result set.
+    #[default]
+    None,
+    /// Distance-adaptive: allow exploration within a relaxed threshold
+    /// controlled by `lambda` on the worst top candidate.
+    ///
+    /// Reference: "Distance Adaptive Beam Search for Provably Accurate
+    /// Graph-Based Nearest Neighbor Search" (Al-Jazzazi et al.)
+    DistanceAdaptive {
+        /// Relaxation parameter. `lambda = 0` is equivalent to `None`.
+        lambda: f32,
+    },
+}
+
+impl EarlyTerminationStrategy {
+    /// Returns the relaxation parameter (`0.0` for `None`).
+    #[inline]
+    pub fn lambda(&self) -> f32 {
+        match self {
+            EarlyTerminationStrategy::None => 0.0,
+            EarlyTerminationStrategy::DistanceAdaptive { lambda } => *lambda,
+        }
+    }
+}
+
 /// Configuration for searching the HNSW index.
 /// Use the builder pattern: `HNSWSearchConfiguration::default().with_ef_search(200)`
 pub struct HNSWSearchConfiguration {
@@ -110,6 +139,8 @@ pub struct HNSWSearchConfiguration {
     /// Also known as `ef` or `efSearch` in the HNSW paper. A larger
     /// value leads to more accurate results at the cost of speed.
     pub ef_search: usize,
+    /// Early termination strategy for search.
+    pub early_termination: EarlyTerminationStrategy,
 }
 
 impl HNSWSearchConfiguration {
@@ -119,12 +150,22 @@ impl HNSWSearchConfiguration {
         self.ef_search = ef_search;
         self
     }
+
+    /// Sets the early termination strategy. Returns self for chaining.
+    #[must_use]
+    pub fn with_early_termination(mut self, strategy: EarlyTerminationStrategy) -> Self {
+        self.early_termination = strategy;
+        self
+    }
 }
 
 impl Default for HNSWSearchConfiguration {
     /// Provides a default `ef_search` value.
     fn default() -> Self {
-        Self { ef_search: 100 }
+        Self {
+            ef_search: 100,
+            early_termination: EarlyTerminationStrategy::None,
+        }
     }
 }
 
@@ -154,7 +195,7 @@ where
 impl<D, G> Index<D> for HNSW<D, G>
 where
     D: Dataset + Sync + SpaceUsage,
-    <D::Encoder as VectorEncoder>::Distance: Ord + Copy,
+    <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
     G: GraphTrait + From<GrowableGraph>,
 {
     type BuildParams = HNSWBuildConfiguration;
@@ -233,12 +274,14 @@ where
         };
 
         // Perform the final, most extensive search on the ground level.
+        let lambda = search_params.early_termination.lambda();
         let mut topk = ground_graph.greedy_search_topk(
             &self.dataset,
             ground_entry_node,
             &query_eval,
             k,
             search_params.ef_search,
+            lambda,
         );
 
         // Map local IDs to global vector IDs and return scored vectors
@@ -578,7 +621,9 @@ where
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],
         pb: &ProgressBar,
-    ) {
+    ) where
+        <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
+    {
         let entry_point_global_id = ids_sorted_by_level[0];
         for &global_id in nodes_to_insert_slice {
             let query_eval = source_dataset
@@ -671,7 +716,9 @@ where
         level1_to_level0_mapping: &[usize],
         ids_sorted_by_level: &[usize],
         pb: &ProgressBar,
-    ) {
+    ) where
+        <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
+    {
         let mut current_batch_size = build_params.initial_build_batch_size;
         let max_batch_size = build_params.max_build_batch_size;
         let level_start_local_ids: Vec<usize> =

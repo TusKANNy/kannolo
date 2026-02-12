@@ -155,7 +155,7 @@ pub fn compute_closest_from_neighbors<'e, D>(
 ///
 /// # Description
 /// - If `query_top_k` does not have a length of `k`, it is resized to `k`, with any additional elements
-///   filled with `(f32::MAX, usize::MAX)`.
+///   filled with default values.
 /// - The function ensures that `topk_query` is resized correctly to the specified length `k`. It will panic
 ///   if the length is not as expected.
 /// - The function locks the `topk` vector and replaces the segment from `index * k` to `(index + 1) * k` with
@@ -164,28 +164,29 @@ pub fn compute_closest_from_neighbors<'e, D>(
 /// # Example
 /// ```rust
 /// use kannolo::hnsw_utils::insert_into_topk;
+/// use vectorium::core::dataset::ScoredItemGeneric;
 /// use std::sync::Mutex;
+///
+/// fn si(distance: i32, vector: usize) -> ScoredItemGeneric<i32, usize> {
+///     ScoredItemGeneric { distance, vector }
+/// }
 ///
 /// // The vector holds results for two queries, each with 3 closest vectors (k=3).
 /// let topk = Mutex::new(vec![
-///     (1.0, 1),
-///     (2.0, 2),
-///     (3.0, 3),
-///     (f32::MAX, usize::MAX),
-///     (f32::MAX, usize::MAX),
-///     (f32::MAX, usize::MAX),
+///     si(10, 1), si(20, 2), si(30, 3),
+///     si(i32::MAX, usize::MAX), si(i32::MAX, usize::MAX), si(i32::MAX, usize::MAX),
 /// ]);
 ///
 /// let index = 1;
 /// let k = 3;
 ///
 /// //top-k closest vectors for query with index 1.
-/// let query_topk = vec![(0.5, 5), (1.5, 6), (2.5, 7)];
+/// let query_topk = vec![si(5, 5), si(15, 6), si(25, 7)];
 ///
 /// insert_into_topk(&topk, query_topk, index, k);
 ///
 /// let topk_locked = topk.lock().unwrap();
-/// let expected = vec![(1.0, 1), (2.0, 2), (3.0, 3), (0.5, 5), (1.5, 6), (2.5, 7)];
+/// let expected = vec![si(10, 1), si(20, 2), si(30, 3), si(5, 5), si(15, 6), si(25, 7)];
 /// assert_eq!(&*topk_locked, &expected);
 /// ```
 #[inline]
@@ -546,261 +547,87 @@ mod tests_insert_into_topk {
     use crate::hnsw_utils::insert_into_topk;
     use vectorium::core::dataset::ScoredItemGeneric;
 
-    /// Tests the `insert_into_topk` function when the `topk_query` has exactly `k` elements and
-    /// starts inserting at index 0.
-    ///
-    /// This test initializes the `topk` vector with 3 elements and a `topk_query` with exactly
-    /// 3 elements. It inserts the `topk_query` results into the `topk` vector starting at index 0.
-    /// The expected result should be the `topk_query` elements replacing the initial values in the
-    /// `topk` vector.
+    fn si(distance: i32, vector: usize) -> ScoredItemGeneric<i32, usize> {
+        ScoredItemGeneric { distance, vector }
+    }
+
+    const DEFAULT: ScoredItemGeneric<i32, usize> = ScoredItemGeneric {
+        distance: 0,
+        vector: usize::MAX,
+    };
+
     #[test]
     fn test_exact_size_query_start_index() {
-        let topk = Arc::new(Mutex::new(vec![
-            ScoredItemGeneric {
-                distance: 1.0,
-                vector: 1,
-            },
-            ScoredItemGeneric {
-                distance: 2.0,
-                vector: 2,
-            },
-            ScoredItemGeneric {
-                distance: 3.0,
-                vector: 3,
-            },
-        ]));
-        let topk_query = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 1.5,
-                vector: 6,
-            },
-            ScoredItemGeneric {
-                distance: 2.5,
-                vector: 7,
-            },
-        ];
+        let topk = Arc::new(Mutex::new(vec![si(10, 1), si(20, 2), si(30, 3)]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7)];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 1.5,
-                vector: 6,
-            },
-            ScoredItemGeneric {
-                distance: 2.5,
-                vector: 7,
-            },
-        ];
-        assert_eq!(&*topk_locked, &expected);
+        assert_eq!(&*topk_locked, &[si(5, 5), si(15, 6), si(25, 7)]);
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` is smaller than `k`, starting insertion at index 0.
-    ///
-    /// This test initializes the `topk` vector with 3 elements and a `topk_query` with only 1 element. It inserts the
-    /// `topk_query` results into the `topk` vector starting at index 0. The remaining slots in the segment are filled
-    /// with default values.
     #[test]
     fn test_smaller_query_start_index() {
-        let topk = Arc::new(Mutex::new(vec![
-            ScoredItemGeneric {
-                distance: 1.0,
-                vector: 1,
-            },
-            ScoredItemGeneric {
-                distance: 2.0,
-                vector: 2,
-            },
-            ScoredItemGeneric {
-                distance: 3.0,
-                vector: 3,
-            },
-        ]));
-        let topk_query = vec![ScoredItemGeneric {
-            distance: 0.5,
-            vector: 5,
-        }];
+        let topk = Arc::new(Mutex::new(vec![si(10, 1), si(20, 2), si(30, 3)]));
+        let topk_query = vec![si(5, 5)];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: f32::MAX,
-                vector: usize::MAX,
-            },
-            ScoredItemGeneric {
-                distance: f32::MAX,
-                vector: usize::MAX,
-            },
-        ];
-        assert_eq!(&*topk_locked, &expected);
+        assert_eq!(&*topk_locked, &[si(5, 5), DEFAULT, DEFAULT]);
     }
 
-    /// Tests the `insert_into_topk` function with a `topk_query` that is larger than `k`, starting insertion at index 0.
-    ///
-    /// Initializes a `topk` vector with some values and a `topk_query` that contains more elements than `k`. The function
-    /// inserts the first `k` elements of `topk_query` starting at index 0 of `topk`. Since `topk_query` has more
-    /// elements than `k`, only the first `k` elements of `topk_query` are inserted, replacing the default values in `topk`.
     #[test]
     fn test_larger_query_start_index() {
         let topk = Arc::new(Mutex::new(vec![
-            ScoredItemGeneric {
-                distance: 1.0,
-                vector: 1,
-            },
-            ScoredItemGeneric {
-                distance: 2.0,
-                vector: 2,
-            },
-            ScoredItemGeneric {
-                distance: 3.0,
-                vector: 3,
-            },
-            ScoredItemGeneric {
-                distance: 6.0,
-                vector: 4,
-            },
-            ScoredItemGeneric {
-                distance: 8.0,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 9.0,
-                vector: 6,
-            },
+            si(10, 1),
+            si(20, 2),
+            si(30, 3),
+            si(60, 4),
+            si(80, 5),
+            si(90, 6),
         ]));
-        let topk_query = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 1.5,
-                vector: 6,
-            },
-            ScoredItemGeneric {
-                distance: 2.5,
-                vector: 7,
-            },
-            ScoredItemGeneric {
-                distance: 3.5,
-                vector: 8,
-            },
-        ];
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(35, 8)];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 1.5,
-                vector: 6,
-            },
-            ScoredItemGeneric {
-                distance: 2.5,
-                vector: 7,
-            },
-            ScoredItemGeneric {
-                distance: 6.0,
-                vector: 4,
-            },
-            ScoredItemGeneric {
-                distance: 8.0,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 9.0,
-                vector: 6,
-            },
-        ];
-        assert_eq!(&*topk_locked, &expected);
+        assert_eq!(
+            &*topk_locked,
+            &[si(5, 5), si(15, 6), si(25, 7), si(60, 4), si(80, 5), si(90, 6)]
+        );
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` is empty, starting insertion at index 0.
-    ///
-    /// This test initializes the `topk` vector with 3 elements and an empty `topk_query`. It inserts
-    /// the `topk_query` results into the `topk` vector starting at index 0. Since the `topk_query`
-    /// is empty, all elements in the `topk` vector should be replaced with default values.
     #[test]
     fn test_empty_query_start_index() {
-        let topk = Arc::new(Mutex::new(vec![(1.0, 1), (2.0, 2), (3.0, 3)]));
-        let topk_query = vec![];
+        let topk = Arc::new(Mutex::new(vec![si(10, 1), si(20, 2), si(30, 3)]));
+        let topk_query: Vec<ScoredItemGeneric<i32, usize>> = vec![];
         let index = 0;
         let k = 3;
 
         insert_into_topk(&topk, topk_query, index, k);
 
         let topk_locked = topk.lock().unwrap();
-        let expected = vec![
-            (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-        ];
-        assert_eq!(&*topk_locked, &expected);
+        assert_eq!(&*topk_locked, &[DEFAULT, DEFAULT, DEFAULT]);
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` has exactly `k` elements and starts
-    /// inserting at a middle index.
-    ///
-    /// This test initializes the `topk` vector with 100 elements, all set to default values. It then
-    /// creates a `topk_query` with 5 elements and inserts it into the `topk` vector starting at index 10.
-    /// The expected result is that the elements in the `topk` vector at positions  corresponding to the middle
-    /// index will be replaced with the `topk_query` elements, while the other elements remain unchanged.
     #[test]
     fn test_exact_size_query_middle_index() {
         let topk = Arc::new(Mutex::new(vec![
             ScoredItemGeneric {
-                distance: f32::MAX,
+                distance: i32::MAX,
                 vector: usize::MAX
             };
             100
         ]));
-        let topk_query = vec![
-            ScoredItemGeneric {
-                distance: 0.5,
-                vector: 5,
-            },
-            ScoredItemGeneric {
-                distance: 1.5,
-                vector: 6,
-            },
-            ScoredItemGeneric {
-                distance: 2.5,
-                vector: 7,
-            },
-            ScoredItemGeneric {
-                distance: 2.7,
-                vector: 1,
-            },
-            ScoredItemGeneric {
-                distance: 3.1,
-                vector: 3,
-            },
-        ];
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(27, 1), si(31, 3)];
         let index = 10;
         let k = 5;
 
@@ -812,30 +639,23 @@ mod tests_insert_into_topk {
             assert_eq!(topk.lock().unwrap()[i + start_index], topk_query[i]);
         }
     }
-    /// Tests the `insert_into_topk` function when the `topk_query` is smaller than `k` and starts
-    /// inserting at a middle index.
-    ///
-    /// This test initializes the `topk` vector with 1000 elements, all set to default values.
-    /// It then creates a `topk_query` with only 3 elements and inserts it into the `topk` vector
-    /// starting at index 20. The expected result is that the `topk_query` elements will replace
-    /// the initial values in the `topk` vector at the corresponding positions,
-    /// while the remaining slots in the segment are filled with default values.
+
     #[test]
     fn test_smaller_query_middle_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 1000]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            1000
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7)];
         let index = 20;
         let k = 5;
 
-        insert_into_topk(&topk, topk_query.clone(), index, k);
+        insert_into_topk(&topk, topk_query, index, k);
 
-        let expected = [
-            (0.5, 5),
-            (1.5, 6),
-            (2.5, 7),
-            (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-        ];
+        let expected = [si(5, 5), si(15, 6), si(25, 7), DEFAULT, DEFAULT];
 
         let start_index = index * k;
 
@@ -844,24 +664,22 @@ mod tests_insert_into_topk {
         }
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` is larger than `k` and
-    /// starts inserting at a middle index.
-    ///
-    /// This test initializes the `topk` vector with 200 elements, all set to default values.
-    /// It then creates a `topk_query` with 6 elements and inserts the first `k` elements into
-    /// the `topk` vector starting at index 20. The expected result is that only the first `k` elements
-    /// from the `topk_query` will replace the initial values in the `topk` vector at the corresponding
-    /// positions, leaving the other elements unchanged.
     #[test]
     fn test_bigger_query_middle_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 200]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1), (12.5, 72)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            200
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
         let index = 20;
         let k = 5;
 
-        insert_into_topk(&topk, topk_query.clone(), index, k);
+        insert_into_topk(&topk, topk_query, index, k);
 
-        let expected = [(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1)];
+        let expected = [si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1)];
 
         let start_index = index * k;
 
@@ -870,18 +688,16 @@ mod tests_insert_into_topk {
         }
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` has exactly `k` elements
-    /// and starts inserting at the last possible index.
-    ///
-    /// This test initializes the `topk` vector with 200 elements, all set to default values.
-    /// It then creates a `topk_query` with 5 elements and inserts it into the `topk` vector starting
-    /// at index 39 (the last valid index for inserting `k` elements). The expected result
-    /// is that the `topk_query` elements will replace the values in the `topk` vector at the
-    /// corresponding positions, while the rest of the vector remains unchanged.
     #[test]
     fn test_exact_size_query_last_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 200]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            200
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1)];
         let index = 39;
         let k = 5;
 
@@ -894,30 +710,22 @@ mod tests_insert_into_topk {
         }
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` is smaller than `k`
-    /// and starts inserting at the last possible index.
-    ///
-    /// This test initializes the `topk` vector with 200 elements, all set to default values.
-    /// It then creates a `topk_query` with 2 elements and inserts it into the `topk` vector starting
-    /// at index 39 (the last valid index for inserting `k` elements). The expected result
-    /// is that the `topk_query` elements will replace the values in the `topk` vector at the corresponding
-    /// positions, while the remaining slots in the segment are filled with default values.
     #[test]
     fn test_smaller_query_last_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 200]));
-        let topk_query = vec![(0.5, 5), (1.5, 6)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            200
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6)];
         let index = 39;
         let k = 5;
 
-        insert_into_topk(&topk, topk_query.clone(), index, k);
+        insert_into_topk(&topk, topk_query, index, k);
 
-        let expected = [
-            (0.5, 5),
-            (1.5, 6),
-            (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-            (f32::MAX, usize::MAX),
-        ];
+        let expected = [si(5, 5), si(15, 6), DEFAULT, DEFAULT, DEFAULT];
 
         let start_index = index * k;
 
@@ -926,18 +734,16 @@ mod tests_insert_into_topk {
         }
     }
 
-    /// Tests the `insert_into_topk` function when the `topk_query` is larger than `k` and
-    /// starts inserting at the last possible index.
-    ///
-    /// This test initializes the `topk` vector with 200 elements, all set to default values.
-    /// It then creates a `topk_query` with 6 elements and inserts the first `k` elements into the `topk`
-    /// vector starting at index 39 (the last valid index for inserting `k` elements).
-    /// The expected result is that only the first `k` elements from the `topk_query` will replace
-    /// the values in the `topk` vector at the corresponding positions, while the rest of the vector remains unchanged.
     #[test]
     fn test_bigger_query_last_index() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 200]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1), (12.5, 72)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            200
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
         let index = 39;
         let k = 5;
 
@@ -950,17 +756,16 @@ mod tests_insert_into_topk {
         }
     }
 
-    /// Tests the `insert_into_topk` function when the `index` provided for insertion is out of range.
-    ///
-    /// This test initializes the `topk` vector with 200 elements, all set to default values. It then
-    /// attempts to insert a `topk_query` with 6 elements into the `topk` vector starting at index 40,
-    /// which is out of range. The expected behavior is that the function should panic. After the panic,
-    /// the contents of the `topk` vector should remain unchanged, ensuring that no partial modifications
-    /// are made in the event of an out-of-bounds index.
     #[test]
     fn test_index_out_of_range() {
-        let topk = Arc::new(Mutex::new(vec![(f32::MAX, usize::MAX); 200]));
-        let topk_query = vec![(0.5, 5), (1.5, 6), (2.5, 7), (4.5, 3), (5.9, 1), (12.5, 72)];
+        let topk = Arc::new(Mutex::new(vec![
+            ScoredItemGeneric {
+                distance: i32::MAX,
+                vector: usize::MAX
+            };
+            200
+        ]));
+        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
         let index = 40; // This index is out of range
         let k = 5;
 

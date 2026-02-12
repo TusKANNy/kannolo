@@ -12,9 +12,10 @@ use vectorium::IndexSerializer;
 use vectorium::dataset::{ConvertFrom, ConvertInto};
 use vectorium::distances::{DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
-use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
+use vectorium::encoders::pq::ProductQuantizer;
 use vectorium::encoders::sparse_scalar::ScalarSparseSupportedDistance;
 use vectorium::readers::{read_npy_f32, read_seismic_format};
+use vectorium::vector_encoder::{DenseVectorEncoder, VectorEncoder};
 use vectorium::{
     Dataset, DenseDataset, Float, FromF32, PlainDenseDataset, PlainSparseDataset, SpaceUsage,
     ValueType,
@@ -303,17 +304,17 @@ where
     let dataset: PlainDenseDataset<f32, SquaredEuclideanDistance> =
         read_dense_plain_dataset::<SquaredEuclideanDistance>(args);
     match args.m_pq {
-        4 => build_dense_pq_with_m::<4, SquaredEuclideanDistance, G>(dataset, args, config),
-        8 => build_dense_pq_with_m::<8, SquaredEuclideanDistance, G>(dataset, args, config),
-        16 => build_dense_pq_with_m::<16, SquaredEuclideanDistance, G>(dataset, args, config),
-        32 => build_dense_pq_with_m::<32, SquaredEuclideanDistance, G>(dataset, args, config),
-        48 => build_dense_pq_with_m::<48, SquaredEuclideanDistance, G>(dataset, args, config),
-        64 => build_dense_pq_with_m::<64, SquaredEuclideanDistance, G>(dataset, args, config),
-        96 => build_dense_pq_with_m::<96, SquaredEuclideanDistance, G>(dataset, args, config),
-        128 => build_dense_pq_with_m::<128, SquaredEuclideanDistance, G>(dataset, args, config),
-        192 => build_dense_pq_with_m::<192, SquaredEuclideanDistance, G>(dataset, args, config),
-        256 => build_dense_pq_with_m::<256, SquaredEuclideanDistance, G>(dataset, args, config),
-        384 => build_dense_pq_with_m::<384, SquaredEuclideanDistance, G>(dataset, args, config),
+        4 => build_dense_pq_with_m_l2::<4, G>(dataset, args, config),
+        8 => build_dense_pq_with_m_l2::<8, G>(dataset, args, config),
+        16 => build_dense_pq_with_m_l2::<16, G>(dataset, args, config),
+        32 => build_dense_pq_with_m_l2::<32, G>(dataset, args, config),
+        48 => build_dense_pq_with_m_l2::<48, G>(dataset, args, config),
+        64 => build_dense_pq_with_m_l2::<64, G>(dataset, args, config),
+        96 => build_dense_pq_with_m_l2::<96, G>(dataset, args, config),
+        128 => build_dense_pq_with_m_l2::<128, G>(dataset, args, config),
+        192 => build_dense_pq_with_m_l2::<192, G>(dataset, args, config),
+        256 => build_dense_pq_with_m_l2::<256, G>(dataset, args, config),
+        384 => build_dense_pq_with_m_l2::<384, G>(dataset, args, config),
         _ => {
             eprintln!(
                 "Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384."
@@ -329,17 +330,17 @@ where
 {
     let dataset: PlainDenseDataset<f32, DotProduct> = read_dense_plain_dataset::<DotProduct>(args);
     match args.m_pq {
-        4 => build_dense_pq_with_m::<4, DotProduct, G>(dataset, args, config),
-        8 => build_dense_pq_with_m::<8, DotProduct, G>(dataset, args, config),
-        16 => build_dense_pq_with_m::<16, DotProduct, G>(dataset, args, config),
-        32 => build_dense_pq_with_m::<32, DotProduct, G>(dataset, args, config),
-        48 => build_dense_pq_with_m::<48, DotProduct, G>(dataset, args, config),
-        64 => build_dense_pq_with_m::<64, DotProduct, G>(dataset, args, config),
-        96 => build_dense_pq_with_m::<96, DotProduct, G>(dataset, args, config),
-        128 => build_dense_pq_with_m::<128, DotProduct, G>(dataset, args, config),
-        192 => build_dense_pq_with_m::<192, DotProduct, G>(dataset, args, config),
-        256 => build_dense_pq_with_m::<256, DotProduct, G>(dataset, args, config),
-        384 => build_dense_pq_with_m::<384, DotProduct, G>(dataset, args, config),
+        4 => build_dense_pq_with_m_ip::<4, G>(dataset, args, config),
+        8 => build_dense_pq_with_m_ip::<8, G>(dataset, args, config),
+        16 => build_dense_pq_with_m_ip::<16, G>(dataset, args, config),
+        32 => build_dense_pq_with_m_ip::<32, G>(dataset, args, config),
+        48 => build_dense_pq_with_m_ip::<48, G>(dataset, args, config),
+        64 => build_dense_pq_with_m_ip::<64, G>(dataset, args, config),
+        96 => build_dense_pq_with_m_ip::<96, G>(dataset, args, config),
+        128 => build_dense_pq_with_m_ip::<128, G>(dataset, args, config),
+        192 => build_dense_pq_with_m_ip::<192, G>(dataset, args, config),
+        256 => build_dense_pq_with_m_ip::<256, G>(dataset, args, config),
+        384 => build_dense_pq_with_m_ip::<384, G>(dataset, args, config),
         _ => {
             eprintln!(
                 "Error: Invalid m_pq value. Choose between 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384."
@@ -372,16 +373,50 @@ where
     }
 }
 
-fn build_dense_pq_with_m<const M: usize, D, G>(
-    dataset: PlainDenseDataset<f32, D>,
+fn build_dense_pq_with_m_l2<const M: usize, G>(
+    dataset: PlainDenseDataset<f32, SquaredEuclideanDistance>,
     args: &Args,
     config: &HNSWBuildConfiguration,
 ) where
-    D: ProductQuantizerDistance + ScalarDenseSupportedDistance + 'static,
     G: GraphBound,
-    DenseDataset<ProductQuantizer<M, D>>: ConvertFrom<PlainDenseDataset<f32, D>>,
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        VectorEncoder<Distance = SquaredEuclideanDistance>,
+    <ProductQuantizer<M, SquaredEuclideanDistance> as VectorEncoder>::Distance:
+        vectorium::distances::Distance,
 {
-    let pq_dataset: DenseDataset<ProductQuantizer<M, D>> = dataset.convert_into();
+    let pq_dataset: DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>> =
+        dataset.convert_into();
+    let start_time = Instant::now();
+    let index: HNSW<_, G> = HNSW::build_index(pq_dataset, config);
+    let duration = start_time.elapsed();
+    println!(
+        "Time to build: {} s (before serializing)",
+        duration.as_secs()
+    );
+
+    let _ = index.save_index(&args.output_file);
+}
+
+fn build_dense_pq_with_m_ip<const M: usize, G>(
+    dataset: PlainDenseDataset<f32, DotProduct>,
+    args: &Args,
+    config: &HNSWBuildConfiguration,
+) where
+    G: GraphBound,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
+    <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
+{
+    let pq_dataset: DenseDataset<ProductQuantizer<M, DotProduct>> = dataset.convert_into();
     let start_time = Instant::now();
     let index: HNSW<_, G> = HNSW::build_index(pq_dataset, config);
     let duration = start_time.elapsed();

@@ -346,6 +346,12 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
 
+    # Add early termination parameters if specified
+    early_termination = query_config.get("early-termination", "none")
+    command_and_params.append(f"--early-termination {early_termination}")
+    if "lambda" in query_config:
+        command_and_params.append(f"--lambda {query_config['lambda']}")
+
     # Add PQ-specific parameters if needed
     if "pq_parameters" in configs and "m-pq" in configs['pq_parameters']:
         command_and_params.append(f"--m-pq {configs['pq_parameters']['m-pq']}")

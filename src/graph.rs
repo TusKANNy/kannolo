@@ -4,10 +4,11 @@ use std::collections::BinaryHeap;
 use optional::Optioned;
 use serde::{Deserialize, Serialize};
 use vectorium::core::dataset::ScoredItemGeneric;
+use vectorium::distances::Distance;
 use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
-use crate::hnsw_utils::{add_neighbor_to_heaps, from_max_heap_to_min_heap};
+use crate::hnsw_utils::from_max_heap_to_min_heap;
 use crate::visited_set::{VisitedSet, create_visited_set};
 
 /// A trait that defines the common interface for different graph implementations.
@@ -103,6 +104,7 @@ pub trait GraphTrait {
     /// * `query_evaluator`: An evaluator that can compute distances to the query.
     /// * `k`: The number of nearest neighbors to return.
     /// * `ef`: The size of the dynamic candidate list during the search.
+    /// * `lambda`: Relaxation parameter used for adaptive early stopping/admission.
     ///
     /// # Returns
     /// A `Vec` containing tuples of `(distance, id)` for the `k` nearest neighbors.
@@ -114,12 +116,20 @@ pub trait GraphTrait {
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         k: usize,
         ef: usize,
+        lambda: f32,
     ) -> Vec<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
     {
-        let top_candidates =
-            self.search_candidates_for_query(dataset, starting_node, query_evaluator, ef, k);
+        let top_candidates = self.search_candidates_for_query(
+            dataset,
+            starting_node,
+            query_evaluator,
+            ef,
+            k,
+            lambda,
+        );
 
         let mut top_k = top_candidates.into_sorted_vec();
         top_k.truncate(k);
@@ -135,11 +145,20 @@ pub trait GraphTrait {
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         ef_search: usize,
         k: usize,
+        lambda: f32,
     ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
     {
-        self.search_candidates_impl(dataset, entry_node, query_evaluator, ef_search, Some(k))
+        self.search_candidates_impl(
+            dataset,
+            entry_node,
+            query_evaluator,
+            ef_search,
+            Some(k),
+            lambda,
+        )
     }
 
     /// Search candidates for insertion (uses efConstruction, no top-k pruning).
@@ -153,8 +172,16 @@ pub trait GraphTrait {
     ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
     {
-        self.search_candidates_impl(dataset, entry_node, query_evaluator, ef_construction, None)
+        self.search_candidates_impl(
+            dataset,
+            entry_node,
+            query_evaluator,
+            ef_construction,
+            None,
+            0.0,
+        )
     }
 
     /// Shared implementation for candidate search.
@@ -166,9 +193,11 @@ pub trait GraphTrait {
         query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
         ef: usize,
         k: Option<usize>,
+        lambda: f32,
     ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
     where
         D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
     {
         // max-heap: We want to substitute worst result with a better one
         let mut top_candidates: BinaryHeap<
@@ -192,10 +221,12 @@ pub trait GraphTrait {
             let distance_candidate = node.distance;
 
             if let Some(k_limit) = k {
-                if top_candidates.len() >= k_limit
-                    && distance_candidate > top_candidates.peek().unwrap().distance
-                {
-                    break;
+                if top_candidates.len() >= ef.max(k_limit) {
+                    // Ensure we have enough candidates
+                    let worst_top = &top_candidates.peek().unwrap().distance;
+                    if !distance_candidate.is_within_relaxation(worst_top, lambda) {
+                        break;
+                    }
                 }
             }
 
@@ -204,16 +235,25 @@ pub trait GraphTrait {
                 self.neighbors(id_candidate),
                 &mut visited_table,
                 query_evaluator,
-                |dis_neigh, neighbor| {
-                    add_neighbor_to_heaps(
-                        &mut candidates,
-                        &mut top_candidates,
-                        ScoredItemGeneric {
-                            distance: dis_neigh,
-                            vector: neighbor,
-                        },
-                        ef,
-                    );
+                |candidate| {
+                    let should_add = if top_candidates.len() < ef {
+                        true
+                    } else if let Some(top_node) = top_candidates.peek() {
+                        candidate
+                            .distance
+                            .is_within_relaxation(&top_node.distance, lambda)
+                    } else {
+                        false
+                    };
+
+                    if should_add {
+                        candidates.push(Reverse(candidate));
+                        top_candidates.push(candidate);
+                    }
+
+                    if top_candidates.len() > ef {
+                        top_candidates.pop();
+                    }
                 },
             )
         }
@@ -231,7 +271,7 @@ pub trait GraphTrait {
     /// * `neighbors`: An iterator over the local IDs of the neighbors to process.
     /// * `visited_table`: A `HashSet` to keep track of visited node IDs.
     /// * `query_evaluator`: An evaluator that can compute distances to the query.
-    /// * `add_distances_fn`: A callback function that takes `(distance, id)` and adds the neighbor to the candidate heaps.
+    /// * `add_distances_fn`: A callback function that takes a candidate `(distance, id)` and adds the neighbor to the candidate heaps.
     fn process_neighbors<'e, D, F>(
         &self,
         dataset: &D,
@@ -241,7 +281,7 @@ pub trait GraphTrait {
         mut add_distances_fn: F,
     ) where
         D: Dataset,
-        F: FnMut(<D::Encoder as VectorEncoder>::Distance, usize),
+        F: FnMut(ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>),
     {
         for neighbor_local_id in neighbors {
             if !visited_table.contains(neighbor_local_id) {
@@ -249,7 +289,10 @@ pub trait GraphTrait {
 
                 let external_id = self.get_external_id(neighbor_local_id) as VectorId;
                 let distance_neighbor = query_evaluator.compute_distance(dataset.get(external_id));
-                add_distances_fn(distance_neighbor, neighbor_local_id);
+                add_distances_fn(ScoredItemGeneric {
+                    distance: distance_neighbor,
+                    vector: neighbor_local_id,
+                });
             }
         }
     }
@@ -831,10 +874,15 @@ impl GrowableGraph {
     )
     where
         D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
     {
         // 1. Get candidate neighbors
-        let mut neighbors_nodes =
-            self.search_candidates_for_insert(dataset, entry_node, query_evaluator, ef_construction);
+        let mut neighbors_nodes = self.search_candidates_for_insert(
+            dataset,
+            entry_node,
+            query_evaluator,
+            ef_construction,
+        );
 
         // The new entry point for the next level is the best candidate we found.
         let new_entry_node = *neighbors_nodes.peek().unwrap();

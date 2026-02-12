@@ -230,12 +230,18 @@ pub trait GraphTrait {
                 }
             }
 
-            self.process_neighbors(
-                dataset,
-                self.neighbors(id_candidate),
-                &mut visited_table,
-                query_evaluator,
-                |candidate| {
+            for neighbor_local_id in self.neighbors(id_candidate) {
+                if !visited_table.contains(neighbor_local_id) {
+                    visited_table.insert(neighbor_local_id);
+
+                    let external_id = self.get_external_id(neighbor_local_id) as VectorId;
+                    let distance_neighbor =
+                        query_evaluator.compute_distance(dataset.get(external_id));
+                    let candidate = ScoredItemGeneric {
+                        distance: distance_neighbor,
+                        vector: neighbor_local_id,
+                    };
+
                     let should_add = if top_candidates.len() < ef {
                         true
                     } else if let Some(top_node) = top_candidates.peek() {
@@ -254,47 +260,10 @@ pub trait GraphTrait {
                     if top_candidates.len() > ef {
                         top_candidates.pop();
                     }
-                },
-            )
-        }
-        top_candidates
-    }
-
-    /// Processes the neighbors of a node.
-    ///
-    /// This function iterates through the neighbors of a given node, computes their distances
-    /// to the query, and uses a callback function to add them to the candidate heaps.
-    /// It uses a `visited_table` to avoid processing the same node multiple times.
-    ///
-    /// # Arguments
-    /// * `dataset`: The dataset containing the vectors.
-    /// * `neighbors`: An iterator over the local IDs of the neighbors to process.
-    /// * `visited_table`: A `HashSet` to keep track of visited node IDs.
-    /// * `query_evaluator`: An evaluator that can compute distances to the query.
-    /// * `add_distances_fn`: A callback function that takes a candidate `(distance, id)` and adds the neighbor to the candidate heaps.
-    fn process_neighbors<'e, D, F>(
-        &self,
-        dataset: &D,
-        neighbors: impl Iterator<Item = usize>,
-        visited_table: &mut dyn VisitedSet,
-        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
-        mut add_distances_fn: F,
-    ) where
-        D: Dataset,
-        F: FnMut(ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>),
-    {
-        for neighbor_local_id in neighbors {
-            if !visited_table.contains(neighbor_local_id) {
-                visited_table.insert(neighbor_local_id);
-
-                let external_id = self.get_external_id(neighbor_local_id) as VectorId;
-                let distance_neighbor = query_evaluator.compute_distance(dataset.get(external_id));
-                add_distances_fn(ScoredItemGeneric {
-                    distance: distance_neighbor,
-                    vector: neighbor_local_id,
-                });
+                }
             }
         }
+        top_candidates
     }
 }
 

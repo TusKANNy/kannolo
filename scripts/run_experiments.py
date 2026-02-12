@@ -300,7 +300,7 @@ def compute_accuracy(query_file, gt_file):
     return round((total_intersections/total_results) * 100, 3)
 
 
-def query_execution(configs, query_config, experiment_dir, subsection_name):
+def query_execution(configs, query_config, experiment_dir, subsection_name, subsection_index=None, total_subsections=None):
     """Execute a query based on the provided configuration."""
     if configs.get("vector-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
@@ -369,7 +369,10 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
 
     query_time = 0
     # Run the query and display output in real-time
-    print(f"Running query for subsection: {subsection_name}...")
+    if subsection_index is not None and total_subsections is not None:
+        print(f"Running query for subsection: {subsection_name} out of {total_subsections}...")
+    else:
+        print(f"Running query for subsection: {subsection_name}...")
     with open(log_output_file, "w") as log:
         query_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for line in iter(query_process.stdout.readline, b''):
@@ -538,8 +541,9 @@ def run_experiment(config_data):
             metric = f"\t{metric}"
         report_file.write(f"Subsection\tQuery Time (microsecs)\tAccuracy{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
         if 'query' in config_data:
-            for subsection, query_config in config_data['query'].items():
-                query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection)
+            total_subsections = len(config_data['query'])
+            for subsection_index, (subsection, query_config) in enumerate(config_data['query'].items(), start=1):
+                query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection, subsection_index, total_subsections)
                 if metric is not None:
                     report_file.write(f"{subsection}\t{query_time}\t{recall}\t{metric}\t{memory_usage}\t{building_time}\n")
                 else:

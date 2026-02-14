@@ -231,6 +231,17 @@ pub trait GraphTrait {
             }
 
             for neighbor_local_id in self.neighbors(id_candidate) {
+                let range =
+                    dataset.range_from_id(self.get_external_id(neighbor_local_id) as VectorId);
+                // let dim = dataset.encoder().output_dim();
+                // let range = std::ops::Range {
+                //     start: neighbor_local_id * dim,
+                //     end: (neighbor_local_id + 1) * dim,
+                // };
+                dataset.prefetch_with_range(range);
+            }
+
+            for neighbor_local_id in self.neighbors(id_candidate) {
                 if !visited_table.contains(neighbor_local_id) {
                     visited_table.insert(neighbor_local_id);
 

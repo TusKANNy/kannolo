@@ -230,6 +230,10 @@ pub trait GraphTrait {
                 }
             }
 
+            /// TODO: This is fine with dense vectors but sub optimal for sparse ones. This is because
+            /// dataset.range_from_id(id) needs to do a random access to the offsets vector to get the
+            /// start and end of the vector. It would be better to store the offsets of the neighbors in
+            /// the graph structure to allow for more efficient prefetching.
             for neighbor_local_id in self.neighbors(id_candidate) {
                 let range =
                     dataset.range_from_id(self.get_external_id(neighbor_local_id) as VectorId);

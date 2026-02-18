@@ -9,6 +9,9 @@ pub mod pylib;
 use crate::pylib::DensePQHNSW as DensePQIndexPy;
 use crate::pylib::DensePlainHNSW as DensePlainIndexPy;
 use crate::pylib::DensePlainHNSWf16 as DensePlainIndexPyf16;
+use crate::pylib::SparseDotVByteHNSW as SparseDotVByteIndexPy;
+use crate::pylib::SparseFixedU16HNSW as SparseFixedU16IndexPy;
+use crate::pylib::SparseFixedU8HNSW as SparseFixedU8IndexPy;
 use crate::pylib::SparsePlainHNSW as SparsePlainIndexPy;
 use crate::pylib::SparsePlainHNSWf16 as SparsePlainIndexPyf16;
 use pyo3::prelude::PyModule;
@@ -28,6 +31,9 @@ pub fn kannolo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DensePlainIndexPyf16>()?;
     m.add_class::<SparsePlainIndexPy>()?;
     m.add_class::<SparsePlainIndexPyf16>()?;
+    m.add_class::<SparseDotVByteIndexPy>()?;
+    m.add_class::<SparseFixedU8IndexPy>()?;
+    m.add_class::<SparseFixedU16IndexPy>()?;
     m.add_class::<DensePQIndexPy>()?;
     Ok(())
 }

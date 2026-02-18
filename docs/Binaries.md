@@ -1,111 +1,149 @@
-# Unified Build and Search Binaries
+# Unified Build, Search, and Convert Binaries
 
-This document explains the unified build and search binaries.
+This document describes the current CLI surface for:
+- `hnsw_build`
+- `hnsw_search`
+- `hnsw_convert`
 
-## Overview
+All examples and option names below are aligned with the current binaries.
 
-There are two binaries for HNSW:
-- `hnsw_build`: Index construction binary
-- `hnsw_search`: Search binary
-
-## Command-Line Options
-
-### hnsw_build
+## `hnsw_build`
 
 ```bash
-Usage: hnsw_build [OPTIONS] --data-file <DATA_FILE> --output-file <OUTPUT_FILE> --vector-representation <VECTOR_REPRESENTATION>
+Usage: hnsw_build [OPTIONS] --data-file <DATA_FILE> --output-file <OUTPUT_FILE> --dataset-type <DATASET_TYPE>
 
 Options:
-  -d, --data-file <DATA_FILE>      The path of the dataset file
-  -o, --output-file <OUTPUT_FILE>  The output file where to save the index
-      --vector-representation <VECTOR_REPRESENTATION>  The type of vectors (dense or sparse) [possible values: dense, sparse]
-      --precision <PRECISION>      The precision (f16 or f32). Note: PQ always uses f32 [default: f32] [possible values: f16, f32]
-      --quantizer <QUANTIZER>      The quantizer type (plain or pq). Note: PQ is only available for dense vectors [default: plain] [possible values: plain, pq]
-      --graph-type <GRAPH_TYPE>    The graph type (standard or fixed-degree) [default: standard] [possible values: standard, fixed-degree]
-      --m <M>                      The number of neighbors per node [default: 16]
-      --efc <EFC>                  The size of the candidate pool at construction time [default: 40]
-      --metric <METRIC>            The type of distance to use. Either 'euclidean' or 'dotproduct' (legacy: l2/ip) [default: dotproduct]
-      --m-pq <M_PQ>                The number of subspaces for Product Quantization (only for PQ). Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384 [default: 16]
-      --nbits <NBITS>              Ignored (vectorium PQ uses a fixed codebook size) [default: 8]
-      --sample-size <SAMPLE_SIZE>  Ignored (vectorium PQ samples automatically) [default: 100000]
+  -d, --data-file <DATA_FILE>
+  -o, --output-file <OUTPUT_FILE>
+      --dataset-type <DATASET_TYPE>      [possible values: dense, sparse]
+      --value-type <VALUE_TYPE>          [default: f32] [possible values: f16, f32, fixedu8, fixedu16]
+      --component-type <COMPONENT_TYPE>  [default: u16] [possible values: u16, u32]
+      --encoder <ENCODER>                [default: plain] [possible values: plain, pq, dotvbyte]
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, fixed-degree]
+      --m <M>                            [default: 16]
+      --ef-construction <EF_CONSTRUCTION> [default: 150]
+      --distance <DISTANCE>              [default: dotproduct]
+      --pq-subspaces <PQ_SUBSPACES>      [default: 16]
+      --nbits <NBITS>                    [default: 8] (ignored by vectorium PQ)
+      --sample-size <SAMPLE_SIZE>        [default: 100000] (ignored by vectorium PQ)
 ```
 
-### hnsw_search
+## `hnsw_search`
 
 ```bash
-Usage: hnsw_search [OPTIONS] --index-file <INDEX_FILE> --query-file <QUERY_FILE> --vector-type <VECTOR_TYPE>
+Usage: hnsw_search [OPTIONS] --index-file <INDEX_FILE> --query-file <QUERY_FILE> --dataset-type <DATASET_TYPE> --distance <DISTANCE>
 
 Options:
-  -i, --index-file <INDEX_FILE>    The path of the index
-  -q, --query-file <QUERY_FILE>    The query file
-  -o, --output-path <OUTPUT_PATH>  The output file to write the results
-      --vector-type <VECTOR_TYPE>  The type of vectors (dense or sparse) [possible values: dense, sparse]
-      --precision <PRECISION>      The precision (f16 or f32). Note: PQ always uses f32 [default: f32] [possible values: f16, f32]
-      --quantizer <QUANTIZER>      The quantizer type (plain or pq). Note: PQ is only available for dense vectors [default: plain] [possible values: plain, pq]
-      --graph-type <GRAPH_TYPE>    The graph type (standard or fixed-degree) [default: standard] [possible values: standard, fixed-degree]
-      --metric <METRIC>            The type of distance to use. Either 'euclidean' or 'dotproduct' (legacy: l2/ip)
-      --m-pq <M_PQ>                The number of subspaces for Product Quantization (only for PQ). Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384 [default: 16]
-  -k, --k <K>                      The number of top-k results to retrieve [default: 10]
-      --ef-search <EF_SEARCH>      The ef_search parameter [default: 40]
-      --n-run <N_RUN>              Number of runs for timing [default: 1]
+  -i, --index-file <INDEX_FILE>
+  -q, --query-file <QUERY_FILE>
+  -o, --output-path <OUTPUT_PATH>
+      --dataset-type <DATASET_TYPE>      [possible values: dense, sparse]
+      --value-type <VALUE_TYPE>          [default: f32] [possible values: f16, f32, fixedu8, fixedu16]
+      --component-type <COMPONENT_TYPE>  [default: u16] [possible values: u16, u32]
+      --encoder <ENCODER>                [default: plain] [possible values: plain, pq, dotvbyte]
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, fixed-degree]
+      --distance <DISTANCE>
+      --pq-subspaces <PQ_SUBSPACES>      [default: 16]
+  -k, --k <K>                            [default: 10]
+      --ef-search <EF_SEARCH>            [default: 40]
+      --early-termination <EARLY_TERMINATION> [default: none] [possible values: none, distance-adaptive]
+      --lambda <LAMBDA>                  [default: 1]
+      --num-runs <NUM_RUNS>              [default: 1]
+```
+
+## `hnsw_convert`
+
+```bash
+Usage: hnsw_convert [OPTIONS] --index-file <INDEX_FILE> --output-file <OUTPUT_FILE> --dataset-type <DATASET_TYPE>
+
+Options:
+  -i, --index-file <INDEX_FILE>
+  -o, --output-file <OUTPUT_FILE>
+      --dataset-type <DATASET_TYPE>      [possible values: dense, sparse]
+      --value-type <VALUE_TYPE>          [default: f32] [possible values: f16, f32, fixedu8, fixedu16]
+      --component-type <COMPONENT_TYPE>  [default: u16] [possible values: u16, u32]
+      --encoder <ENCODER>                [default: plain] [possible values: plain, pq, dotvbyte]
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, fixed-degree]
+      --m <M>                            [default: 16] (compatibility option, ignored)
+      --ef-construction <EF_CONSTRUCTION> [default: 150] (compatibility option, ignored)
+      --distance <DISTANCE>              [default: dotproduct]
+      --pq-subspaces <PQ_SUBSPACES>      [default: 16]
+      --nbits <NBITS>                    [default: 8] (compatibility option, ignored)
+      --sample-size <SAMPLE_SIZE>        [default: 100000] (compatibility option, ignored)
 ```
 
 ## Examples
 
-### Building Indexes
+Dense plain:
 
-#### Dense vectors with plain quantizer (f32)
 ```bash
-./hnsw_build --data-file data.npy --output-file index.bin --vector-representation dense --precision f32 --quantizer plain --m 16 --efc 40
+./hnsw_build --data-file data.npy --output-file index.bin \
+  --dataset-type dense --encoder plain --value-type f32 \
+  --m 16 --ef-construction 150 --distance dotproduct
 ```
 
-#### Dense vectors with plain quantizer (f16)
+Dense PQ:
+
 ```bash
-./hnsw_build --data-file data.npy --output-file index.bin --vector-representation dense --precision f16 --quantizer plain --m 16 --efc 40
+./hnsw_build --data-file data.npy --output-file index.bin \
+  --dataset-type dense --encoder pq --pq-subspaces 16 \
+  --m 16 --ef-construction 150 --distance dotproduct
 ```
 
-#### Dense vectors with PQ quantizer
+Sparse plain with explicit sparse component type:
+
 ```bash
-./hnsw_build --data-file data.npy --output-file index.bin --vector-representation dense --quantizer pq --m-pq 16 --m 16 --efc 40
+./hnsw_build --data-file data.bin --output-file index.bin \
+  --dataset-type sparse --encoder plain --value-type f16 --component-type u16 \
+  --m 16 --ef-construction 150 --distance dotproduct
 ```
 
-#### Sparse vectors with plain quantizer
+Sparse DotVByte:
+
 ```bash
-./hnsw_build --data-file data.bin --output-file index.bin --vector-representation sparse --precision f16 --quantizer plain --m 16 --efc 40
+./hnsw_build --data-file data.bin --output-file index.bin \
+  --dataset-type sparse --encoder dotvbyte --component-type u16 \
+  --m 16 --ef-construction 150 --distance dotproduct
 ```
 
-#### Using fixed-degree graph
+Sparse DotVByte search:
+
 ```bash
-./hnsw_build --data-file data.npy --output-file index.bin --vector-representation dense --graph-type fixed-degree --m 16 --efc 40
+./hnsw_search --index-file index.bin --query-file queries.bin \
+  --dataset-type sparse --encoder dotvbyte --component-type u16 \
+  --distance dotproduct --k 10 --ef-search 40 --output-path results.tsv
 ```
 
-### Searching
+Convert a dense plain-f32 index to PQ:
 
-#### Dense vectors with plain quantizer (f32)
 ```bash
-./hnsw_search --index-file index.bin --query-file queries.npy --vector-type dense --precision f32 --quantizer plain --k 10 --ef-search 40 --output-path results.txt
+./hnsw_convert --index-file plain_f32.bin --output-file pq.bin \
+  --dataset-type dense --encoder pq --distance dotproduct --pq-subspaces 16
 ```
 
-#### Dense vectors with PQ quantizer
+Convert a sparse plain-f32 index to fixedu8 scalar:
+
 ```bash
-./hnsw_search --index-file index.bin --query-file queries.npy --vector-type dense --quantizer pq --m-pq 16 --k 10 --ef-search 40 --output-path results.txt
+./hnsw_convert --index-file plain_sparse_f32.bin --output-file sparse_fixedu8.bin \
+  --dataset-type sparse --component-type u16 --encoder plain --value-type fixedu8 --distance dotproduct
 ```
 
-#### Sparse vectors with plain quantizer
+Convert a sparse plain-f32 index to DotVByte:
+
 ```bash
-./hnsw_search --index-file index.bin --query-file queries.bin --vector-type sparse --precision f16 --quantizer plain --k 10 --ef-search 40 --output-path results.txt
+./hnsw_convert --index-file plain_sparse_f32.bin --output-file sparse_dotvbyte.bin \
+  --dataset-type sparse --component-type u16 --encoder dotvbyte --distance dotproduct
 ```
 
 ## Validation Rules
 
-The binaries include validation to prevent invalid combinations:
+The binaries reject invalid combinations:
 
-1. **PQ quantizer is only available for dense vectors**: Attempting to use `--quantizer pq` with `--vector-type sparse` will result in an error.
-
-2. **PQ always uses f32 precision**: When using `--quantizer pq`, the precision is automatically set to f32, regardless of the `--precision` setting.
-
-3. **Sparse vectors currently only support f16 precision**: Attempting to use `--precision f32` with `--vector-type sparse` will result in an error.
-
-4. **Supported m_pq values**: The Product Quantization parameter `--m-pq` supports the following values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384. Using any other value will result in an error.
-
-5. **PQ ignores `--nbits` and `--sample-size`**: These flags are accepted for compatibility but have no effect with vectorium PQ.
+1. `pq` is dense-only.
+2. `dotvbyte` is sparse-only.
+3. `fixedu8` and `fixedu16` value types are sparse-only.
+4. `component-type` is sparse-only.
+5. `dotvbyte` requires `component-type = u16`.
+6. `pq-subspaces` must be one of `4, 8, 16, 32, 64, 96, 128` and must divide the vector dimensionality.
+7. For PQ, `--nbits` and `--sample-size` are accepted for compatibility but ignored by vectorium.
+8. `hnsw_convert` expects a plain source index matching `dataset-type`, `graph-type`, `distance`, and `component-type` (for sparse).

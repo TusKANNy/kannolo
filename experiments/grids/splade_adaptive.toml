@@ -2,17 +2,18 @@ name =          "grid_splade_hnsw_adaptive"
 title =         "Search sparse HNSWM on splade"
 description =   "Search sparse HNSWM on splade"
 dataset =       "splade"
-vector-type =   "sparse"    # Vector type: "dense" or "sparse"
-precision =     "f16"        # Precision: "f32" for full-precision, "f16" for half-precision (Note: PQ always uses f32)
+dataset-type =   "sparse"    # Dataset type: "dense" or "sparse"
+component-type = "u16"
+value-type =     "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
 # compile-command = "cargo build" # Compile in debug mode? default is release mode
 build-command = "./target/release/hnsw_build"  # Unified build binary
 query-command = "./target/release/hnsw_search" # Unified search binary
-quantizer =     "plain"      # Quantizer: "plain" for no compression, "pq" for Product Quantization (dense only)
+encoder       =     "plain"      # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
 graph-type =    "standard"  # Graph type: "standard" or "fixed-degree"
 
 [settings]
 k =             10
-n-runs =        1       # Number of runs. PLEASE think carefully how increasing 
+num-runs       =        1       # Number of runs. PLEASE think carefully how increasing 
                         # this may influence your query time
 #NUMA =          "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
 build =         false  # Need to build the index or the index is already built?
@@ -34,7 +35,7 @@ index =         "ecir_2025_splade_vectorium" # index file name
 
 [indexing_parameters]
 m =            [32] # 16?
-efc =          [2000]
+ef-construction =          [2000]
 metric =       ["dotproduct"]
 
 [querying_parameters]

@@ -10,7 +10,7 @@ graph-type = "fixed"
 
 [settings]
 k =             10
-n-runs =        1
+num-runs       =        1
 NUMA =        "numactl --physcpubind='0-15' --localalloc"
 build =         false
 metric =        "RR@10"
@@ -31,7 +31,7 @@ index =         "ms_marco_cocondenser_fixed" # Graph index filename (e.g., "inde
 
 [indexing_parameters]
 m =            32
-efc =          2000
+ef-construction =          2000
 metric =       "dotproduct"
 
 [reranking]

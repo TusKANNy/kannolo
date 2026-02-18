@@ -6,7 +6,7 @@ kANNolo Experiment Runner
 This script supports the unified `hnsw_build` and `hnsw_search` binaries.
 
 Reranking and multivector experiments are no longer supported. If a TOML file
-includes `vector-type = "multivector"` or a `[reranking]` section, the runner
+includes `dataset-type = "multivector"` or a `[reranking]` section, the runner
 will error out with a clear message.
 """
 
@@ -103,9 +103,9 @@ def get_index_filename(base_filename, configs):
     
     name.append(base_filename)
 
-    # Check if pq_parameters and m-pq exist
-    if "pq_parameters" in configs and "m-pq" in configs["pq_parameters"]:
-        name.append(f"m-pq_{configs['pq_parameters']['m-pq']}")
+    # Check if pq_parameters and pq-subspaces exist
+    if "pq_parameters" in configs and "pq-subspaces" in configs["pq_parameters"]:
+        name.append(f"pq-subspaces_{configs['pq_parameters']['pq-subspaces']}")
     
     # Append indexing parameters
     name += sorted(f"{k}_{v}" for k, v in configs["indexing_parameters"].items())
@@ -115,7 +115,7 @@ def get_index_filename(base_filename, configs):
 
 def build_index(configs, experiment_dir):
     """Build the index using the provided configuration."""
-    if configs.get("vector-type") == "multivector":
+    if configs.get("dataset-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
     input_file =  os.path.join(configs["folder"]["data"], configs["filename"]["dataset"])
     index_folder = configs["folder"]["index"]
@@ -139,27 +139,37 @@ def build_index(configs, experiment_dir):
         print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
         metric = "dotproduct"
 
+    ef_construction = configs["indexing_parameters"].get(
+        "ef-construction",
+        configs["indexing_parameters"].get("efc"),
+    )
+    if ef_construction is None:
+        raise ValueError("indexing_parameters must include 'ef-construction' (or legacy 'efc').")
+    if "efc" in configs["indexing_parameters"] and "ef-construction" not in configs["indexing_parameters"]:
+        print(colored("Warning: 'efc' is deprecated; use 'ef-construction'.", "yellow"))
+
     command_and_params = [
         build_command,
         f"--data-file {input_file}",
         f"--output-file {output_file}",
         f"--m {configs['indexing_parameters']['m']}",
-        f"--efc {configs['indexing_parameters']['efc']}",
-        f"--metric {metric}",
-    ] 
+        f"--ef-construction {ef_construction}",
+        f"--distance {metric}",
+    ]
 
     # Add new unified binary parameters
-    # hnsw_build expects --vector-representation (not --vector-type)
-    if "vector-type" in configs:
-        command_and_params.append(f"--vector-representation {configs['vector-type']}")
-    if "precision" in configs:
-        command_and_params.append(f"--precision {configs['precision']}")
-    if "quantizer" in configs:
-        command_and_params.append(f"--quantizer {configs['quantizer']}")
+    if "dataset-type" in configs:
+        command_and_params.append(f"--dataset-type {configs['dataset-type']}")
+    if "value-type" in configs:
+        command_and_params.append(f"--value-type {configs['value-type']}")
+    if configs.get("dataset-type") == "sparse" and "component-type" in configs:
+        command_and_params.append(f"--component-type {configs['component-type']}")
+    if "encoder" in configs:
+        command_and_params.append(f"--encoder {configs['encoder']}")
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
 
-    # If there is a section [pq_params] in the configuration file, add the parameters to the command
+    # If there is a section [pq_parameters] in the configuration file, add the parameters to the command
     if "pq_parameters" in configs:
         for k, v in configs["pq_parameters"].items():
             command_and_params.append(f"--{k} {v}")
@@ -302,7 +312,7 @@ def compute_accuracy(query_file, gt_file):
 
 def query_execution(configs, query_config, experiment_dir, subsection_name, subsection_index=None, total_subsections=None):
     """Execute a query based on the provided configuration."""
-    if configs.get("vector-type") == "multivector":
+    if configs.get("dataset-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
     if "reranking" in configs:
         raise ValueError("reranking support was removed; update the experiment config to use hnsw_search only.")
@@ -327,22 +337,24 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
 
     command_and_params = [
         configs['settings']['NUMA'] if "NUMA" in configs['settings'] else "",
-        query_command, 
+        query_command,
         f"--index-file {index_file}",
         f"--query-file {query_file}",
         f"--k {configs['settings']['k']}",
         f"--ef-search {query_config['ef-search']}",
-        f"--metric {metric}",
+        f"--distance {metric}",
         f"--output-path {output_file}",
     ]
 
     # Add new unified binary parameters
-    if "vector-type" in configs:
-        command_and_params.append(f"--vector-type {configs['vector-type']}")
-    if "precision" in configs:
-        command_and_params.append(f"--precision {configs['precision']}")
-    if "quantizer" in configs:
-        command_and_params.append(f"--quantizer {configs['quantizer']}")
+    if "dataset-type" in configs:
+        command_and_params.append(f"--dataset-type {configs['dataset-type']}")
+    if "value-type" in configs:
+        command_and_params.append(f"--value-type {configs['value-type']}")
+    if configs.get("dataset-type") == "sparse" and "component-type" in configs:
+        command_and_params.append(f"--component-type {configs['component-type']}")
+    if "encoder" in configs:
+        command_and_params.append(f"--encoder {configs['encoder']}")
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
 
@@ -353,8 +365,8 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
         command_and_params.append(f"--lambda {query_config['lambda']}")
 
     # Add PQ-specific parameters if needed
-    if "pq_parameters" in configs and "m-pq" in configs['pq_parameters']:
-        command_and_params.append(f"--m-pq {configs['pq_parameters']['m-pq']}")
+    if "pq_parameters" in configs and "pq-subspaces" in configs['pq_parameters']:
+        command_and_params.append(f"--pq-subspaces {configs['pq_parameters']['pq-subspaces']}")
 
     command = " ".join(command_and_params)
 

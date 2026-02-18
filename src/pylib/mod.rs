@@ -9,16 +9,17 @@ use half::f16;
 use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 
-use vectorium::dataset::ConvertInto;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
+use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
 use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
 use vectorium::encoders::sparse_scalar::{PlainSparseQuantizer, ScalarSparseSupportedDistance};
 use vectorium::readers::{read_npy_f32, read_seismic_format};
 use vectorium::vector::{DenseVectorView, SparseVectorView};
 use vectorium::{
-    Dataset, DatasetGrowable, DenseDataset, Float, FromF32, PlainDenseDataset, PlainSparseDataset,
-    PlainSparseDatasetGrowable, ValueType,
+    Dataset, DatasetGrowable, DenseDataset, FixedU8Q, FixedU16Q, Float, FromF32,
+    PackedSparseDataset, PlainDenseDataset, PlainSparseDataset, PlainSparseDatasetGrowable,
+    ScalarSparseDataset, ValueType,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -965,6 +966,659 @@ impl SparsePlainHNSWf16 {
     }
 }
 
+// Sparse DotVByte (dotproduct only)
+
+#[pyclass]
+pub struct SparseDotVByteHNSW {
+    inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph>,
+}
+
+#[pymethods]
+impl SparseDotVByteHNSW {
+    #[staticmethod]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200))]
+    pub fn build_from_file(
+        data_file: &str,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+    ) -> PyResult<Self> {
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let dataset: PlainSparseDataset<u16, f32, DotProduct> =
+            read_seismic_format(data_file).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error reading dataset: {:?}",
+                    e
+                ))
+            })?;
+        if d != dataset.input_dim() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Provided dimension does not match dataset",
+            ));
+        }
+
+        let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+            plain_hnsw.convert_dataset_into();
+
+        Ok(SparseDotVByteHNSW { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i32>,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+    ) -> PyResult<Self> {
+        let components_vec = convert_components_to_u16(components.as_slice()?)?;
+        let values_vec = values.as_slice()?.to_vec();
+        let offsets_vec = offsets
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect::<Vec<_>>();
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let dataset =
+            build_sparse_dataset_from_parts::<f32, DotProduct>(components_vec, values_vec, offsets_vec, d)?;
+        let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+            plain_hnsw.convert_dataset_into();
+
+        Ok(SparseDotVByteHNSW { inner })
+    }
+
+    pub fn save(&self, path: &str) -> PyResult<()> {
+        self.inner.save_index(path).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+        })
+    }
+
+    #[staticmethod]
+    pub fn load(path: &str) -> PyResult<Self> {
+        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> = <HNSW<
+            PackedSparseDataset<DotVByteFixedU8Encoder>,
+            Graph,
+        > as IndexSerializer>::load_index(path)
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e))
+        })?;
+
+        Ok(SparseDotVByteHNSW { inner })
+    }
+
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        _d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        let results = self.inner.search(query_view, k, &search_config);
+        push_results(results, &mut distances, &mut ids);
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    pub fn search_batch(
+        &self,
+        query_file: &str,
+        d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let queries: PlainSparseDataset<u16, f32, DotProduct> =
+            read_seismic_format(query_file).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error reading query file: {:?}",
+                    e
+                ))
+            })?;
+        if d != queries.input_dim() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Provided dimension does not match query dataset",
+            ));
+        }
+
+        let mut ids = Vec::with_capacity(queries.len() * k);
+        let mut distances = Vec::with_capacity(queries.len() * k);
+        for query in queries.iter() {
+            let results = self.inner.search(query, k, &search_config);
+            push_results(results, &mut distances, &mut ids);
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+// Sparse scalar fixedu8/fixedu16
+
+enum SparseFixedU8HNSWEnum {
+    Euclidean(HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph>),
+    DotProduct(HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph>),
+}
+
+#[pyclass]
+pub struct SparseFixedU8HNSW {
+    inner: SparseFixedU8HNSWEnum,
+}
+
+#[pymethods]
+impl SparseFixedU8HNSW {
+    #[staticmethod]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    pub fn build_from_file(
+        data_file: &str,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let dataset: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
+                    read_seismic_format(data_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading dataset: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != dataset.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match dataset",
+                    ));
+                }
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                    Graph,
+                > = plain_hnsw.convert_dataset_into();
+                SparseFixedU8HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let dataset: PlainSparseDataset<u16, f32, DotProduct> =
+                    read_seismic_format(data_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading dataset: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != dataset.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match dataset",
+                    ));
+                }
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
+                    plain_hnsw.convert_dataset_into();
+                SparseFixedU8HNSWEnum::DotProduct(index)
+            }
+        };
+
+        Ok(SparseFixedU8HNSW { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i32>,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        let components_vec = convert_components_to_u16(components.as_slice()?)?;
+        let values_vec = values.as_slice()?.to_vec();
+        let offsets_vec = offsets
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect::<Vec<_>>();
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let dataset = build_sparse_dataset_from_parts::<f32, SquaredEuclideanDistance>(
+                    components_vec,
+                    values_vec,
+                    offsets_vec,
+                    d,
+                )?;
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                    Graph,
+                > = plain_hnsw.convert_dataset_into();
+                SparseFixedU8HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
+                    components_vec,
+                    values_vec,
+                    offsets_vec,
+                    d,
+                )?;
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
+                    plain_hnsw.convert_dataset_into();
+                SparseFixedU8HNSWEnum::DotProduct(index)
+            }
+        };
+
+        Ok(SparseFixedU8HNSW { inner })
+    }
+
+    pub fn save(&self, path: &str) -> PyResult<()> {
+        match &self.inner {
+            SparseFixedU8HNSWEnum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            SparseFixedU8HNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
+    pub fn load(path: &str, metric: String) -> PyResult<Self> {
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                SparseFixedU8HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                SparseFixedU8HNSWEnum::DotProduct(index)
+            }
+        };
+        Ok(SparseFixedU8HNSW { inner })
+    }
+
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        _d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        match &self.inner {
+            SparseFixedU8HNSWEnum::Euclidean(index) => {
+                let results = index.search(query_view, k, &search_config);
+                push_results(results, &mut distances, &mut ids);
+            }
+            SparseFixedU8HNSWEnum::DotProduct(index) => {
+                let results = index.search(query_view, k, &search_config);
+                push_results(results, &mut distances, &mut ids);
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    pub fn search_batch(
+        &self,
+        query_file: &str,
+        d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let mut ids = Vec::new();
+        let mut distances = Vec::new();
+
+        match &self.inner {
+            SparseFixedU8HNSWEnum::Euclidean(index) => {
+                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
+                    read_seismic_format(query_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading query file: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != queries.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match query dataset",
+                    ));
+                }
+                ids.reserve(queries.len() * k);
+                distances.reserve(queries.len() * k);
+                for query in queries.iter() {
+                    let results = index.search(query, k, &search_config);
+                    push_results(results, &mut distances, &mut ids);
+                }
+            }
+            SparseFixedU8HNSWEnum::DotProduct(index) => {
+                let queries: PlainSparseDataset<u16, f32, DotProduct> =
+                    read_seismic_format(query_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading query file: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != queries.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match query dataset",
+                    ));
+                }
+                ids.reserve(queries.len() * k);
+                distances.reserve(queries.len() * k);
+                for query in queries.iter() {
+                    let results = index.search(query, k, &search_config);
+                    push_results(results, &mut distances, &mut ids);
+                }
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+enum SparseFixedU16HNSWEnum {
+    Euclidean(HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph>),
+    DotProduct(HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph>),
+}
+
+#[pyclass]
+pub struct SparseFixedU16HNSW {
+    inner: SparseFixedU16HNSWEnum,
+}
+
+#[pymethods]
+impl SparseFixedU16HNSW {
+    #[staticmethod]
+    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    pub fn build_from_file(
+        data_file: &str,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let dataset: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
+                    read_seismic_format(data_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading dataset: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != dataset.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match dataset",
+                    ));
+                }
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                    Graph,
+                > = plain_hnsw.convert_dataset_into();
+                SparseFixedU16HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let dataset: PlainSparseDataset<u16, f32, DotProduct> =
+                    read_seismic_format(data_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading dataset: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != dataset.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match dataset",
+                    ));
+                }
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
+                    plain_hnsw.convert_dataset_into();
+                SparseFixedU16HNSWEnum::DotProduct(index)
+            }
+        };
+
+        Ok(SparseFixedU16HNSW { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i32>,
+        d: usize,
+        m: usize,
+        ef_construction: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        let components_vec = convert_components_to_u16(components.as_slice()?)?;
+        let values_vec = values.as_slice()?.to_vec();
+        let offsets_vec = offsets
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect::<Vec<_>>();
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(m)
+            .with_ef_construction(ef_construction);
+
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let dataset = build_sparse_dataset_from_parts::<f32, SquaredEuclideanDistance>(
+                    components_vec,
+                    values_vec,
+                    offsets_vec,
+                    d,
+                )?;
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                    Graph,
+                > = plain_hnsw.convert_dataset_into();
+                SparseFixedU16HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
+                    components_vec,
+                    values_vec,
+                    offsets_vec,
+                    d,
+                )?;
+                let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
+                    plain_hnsw.convert_dataset_into();
+                SparseFixedU16HNSWEnum::DotProduct(index)
+            }
+        };
+
+        Ok(SparseFixedU16HNSW { inner })
+    }
+
+    pub fn save(&self, path: &str) -> PyResult<()> {
+        match &self.inner {
+            SparseFixedU16HNSWEnum::Euclidean(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            SparseFixedU16HNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
+    pub fn load(path: &str, metric: String) -> PyResult<Self> {
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                SparseFixedU16HNSWEnum::Euclidean(index)
+            }
+            MetricKind::DotProduct => {
+                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> as IndexSerializer>::load_index(path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                SparseFixedU16HNSWEnum::DotProduct(index)
+            }
+        };
+        Ok(SparseFixedU16HNSW { inner })
+    }
+
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        _d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        match &self.inner {
+            SparseFixedU16HNSWEnum::Euclidean(index) => {
+                let results = index.search(query_view, k, &search_config);
+                push_results(results, &mut distances, &mut ids);
+            }
+            SparseFixedU16HNSWEnum::DotProduct(index) => {
+                let results = index.search(query_view, k, &search_config);
+                push_results(results, &mut distances, &mut ids);
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    pub fn search_batch(
+        &self,
+        query_file: &str,
+        d: usize,
+        k: usize,
+        ef_search: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let mut ids = Vec::new();
+        let mut distances = Vec::new();
+
+        match &self.inner {
+            SparseFixedU16HNSWEnum::Euclidean(index) => {
+                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
+                    read_seismic_format(query_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading query file: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != queries.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match query dataset",
+                    ));
+                }
+                ids.reserve(queries.len() * k);
+                distances.reserve(queries.len() * k);
+                for query in queries.iter() {
+                    let results = index.search(query, k, &search_config);
+                    push_results(results, &mut distances, &mut ids);
+                }
+            }
+            SparseFixedU16HNSWEnum::DotProduct(index) => {
+                let queries: PlainSparseDataset<u16, f32, DotProduct> =
+                    read_seismic_format(query_file).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Error reading query file: {:?}",
+                            e
+                        ))
+                    })?;
+                if d != queries.input_dim() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Provided dimension does not match query dataset",
+                    ));
+                }
+                ids.reserve(queries.len() * k);
+                distances.reserve(queries.len() * k);
+                for query in queries.iter() {
+                    let results = index.search(query, k, &search_config);
+                    push_results(results, &mut distances, &mut ids);
+                }
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
 // PQ (dense only)
 
 enum DensePQHNSWGeneric<D>
@@ -991,74 +1645,64 @@ impl DensePQHNSWGeneric<DotProduct> {
     ) -> PyResult<Self> {
         match m_pq {
             8 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<8, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<8, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ8(index))
             }
             16 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<16, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<16, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ16(index))
             }
             32 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<32, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<32, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ32(index))
             }
             48 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<48, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<48, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ48(index))
             }
             64 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<64, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<64, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ64(index))
             }
             96 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<96, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<96, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ96(index))
             }
             128 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<128, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<128, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ128(index))
             }
             192 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<192, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<192, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ192(index))
             }
             256 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<256, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<256, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ256(index))
             }
             384 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<384, DotProduct>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<384, DotProduct>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ384(index))
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
@@ -1075,74 +1719,64 @@ impl DensePQHNSWGeneric<SquaredEuclideanDistance> {
     ) -> PyResult<Self> {
         match m_pq {
             8 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ8(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ8(index))
             }
             16 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ16(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ16(index))
             }
             32 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ32(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ32(index))
             }
             48 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ48(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ48(index))
             }
             64 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ64(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ64(index))
             }
             96 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ96(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ96(index))
             }
             128 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ128(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ128(index))
             }
             192 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ192(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ192(index))
             }
             256 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ256(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ256(index))
             }
             384 => {
-                let pq_dataset: DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>> =
-                    dataset.convert_into();
-                Ok(DensePQHNSWGeneric::PQ384(HNSW::build_index(
-                    pq_dataset, config,
-                )))
+                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+                let index: HNSW<DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>>, Graph> =
+                    plain_index.convert_dataset_into();
+                Ok(DensePQHNSWGeneric::PQ384(index))
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",

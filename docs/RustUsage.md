@@ -16,7 +16,7 @@ Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_sear
 To build an index over dense PQ vectors, load data into a `vectorium` dataset, create a `vectorium::encoders::pq::ProductQuantizer`, and call `HNSW::build_index`.
 
 Product Quantization needs two additional parameters:
-- `M`: Const parameter indicating the number of subspaces of Product Quantization. Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384. Higher values mean more accurate approximation but higher memory occupancy. M must divide the dimensionality of the original vectors.
+- `M`: Const parameter indicating the number of subspaces of Product Quantization. Supported values: 4, 8, 16, 32, 64, 96, 128. Higher values mean more accurate approximation but higher memory occupancy. M must divide the dimensionality of the original vectors.
 - The codebook size is fixed by vectorium (256 centroids per subspace); `nbits` is not configurable.
 
 Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_search.rs`.
@@ -25,6 +25,7 @@ Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_sear
 In kANNolo, sparse documents and queries should be in a binary format. For more details on this format see the [`docs/PythonUsage.md`](docs/PythonUsage.md)
 
 To build an index over sparse vectors, load data into a `vectorium::PlainSparseDataset` (or `SparseDataset` + a plain encoder) and call `HNSW::build_index`.
+For sparse vectors, `--component-type` controls sparse index component width (`u16` or `u32`), and `dotvbyte` encoding requires `--component-type u16`.
 
 Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_search.rs`.
 
@@ -34,7 +35,7 @@ Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_sear
 kANNolo's HNSW index structure is very simple, consisting in only two parameters to control the index quality during construction:
 
 - `--m`: Upper bound for the number of neighbors of each node in the graph in the upper levels of HNSW. The upper bound on ground level is doubled. Higher values result in a better connected graph. As a side effect, construction becomes slower, and above a certain threshold also search can become slower due to the high number of distances computed at each hop in the graph.
-- `--efc`: Size of the candidates pool during the construction process. Higher values translate into a more precise construction and thus a more accurate search. As a downside, higher values lead to a slower construction.
+- `--ef-construction`: Size of the candidates pool during the construction process. Higher values translate into a more precise construction and thus a more accurate search. As a downside, higher values lead to a slower construction.
 
 Two additional parameters, `initial_build_batch_size` and `max_build_batch_size`, regulate the parallelization of the construction process. We decided to not allow for the tuning of these parameters in our current binary files in which they are less prone to adjustments and they are not part of the original HNSW structure.
 
@@ -44,12 +45,27 @@ To create and serialize an HNSW index on sparse data `documents.bin` with `num_n
 ./target/release/hnsw_build \
 --data-file documents.bin \
 --output-file kannolo_sparse_index \
---vector-representation sparse \
---precision f16 \
---quantizer plain \
+--dataset-type sparse \
+--value-type f16 \
+--component-type u16 \
+--encoder plain \
 --m 32 \
---efc 2000 \
---metric dotproduct
+--ef-construction 2000 \
+--distance dotproduct
+```
+
+To create and serialize an HNSW index on sparse data using DotVByte encoding, run:
+
+```bash
+./target/release/hnsw_build \
+--data-file documents.bin \
+--output-file kannolo_sparse_dotvbyte_index \
+--dataset-type sparse \
+--component-type u16 \
+--encoder dotvbyte \
+--m 32 \
+--ef-construction 2000 \
+--distance dotproduct
 ```
 
 
@@ -59,12 +75,12 @@ To create and serialize an HNSW index on dense data `documents.npy` with `num_ne
 ./target/release/hnsw_build \
 --data-file documents.npy \
 --output-file kannolo_dense_index \
---vector-representation dense \
---precision f32 \
---quantizer plain \
+--dataset-type dense \
+--value-type f32 \
+--encoder plain \
 --m 16 \
---efc 200 \
---metric euclidean
+--ef-construction 200 \
+--distance euclidean
 ```
 
 To create and serialize an HNSW index on dense PQ-encoded data with 64 subspaces and 256 centroids per subspace, obtained from plain vectors `documents.npy`, with `num_neighbors_per_vec` (`m`) equal to 16 and `ef_construction` (efc) equal to 200 for Maximum Inner Product Search (MIPS), run:
@@ -73,12 +89,12 @@ To create and serialize an HNSW index on dense PQ-encoded data with 64 subspaces
 ./target/release/hnsw_build \
 --data-file documents.npy \
 --output-file kannolo_dense_pq_index \
---vector-representation dense \
---quantizer pq \
+--dataset-type dense \
+--encoder pq \
 --m 16 \
---efc 200 \
---metric dotproduct \
---m-pq 64
+--ef-construction 200 \
+--distance dotproduct \
+--pq-subspaces 64
 ```
 
 Vectorium PQ selects its training samples internally. The CLI flags `--nbits` and `--sample-size` are accepted for compatibility but ignored.
@@ -98,9 +114,10 @@ Example command:
 ./target/release/hnsw_search \
 --index-file kannolo_sparse_index \
 --query-file queries.bin \
---vector-type sparse \
---precision f16 \
---quantizer plain \
+--dataset-type sparse \
+--value-type f16 \
+--encoder plain \
+--distance dotproduct \
 --k 10 \
 --ef-search 40 \
 --output-path results_sparse 
@@ -114,9 +131,10 @@ Example command:
 ./target/release/hnsw_search \
 --index-file kannolo_dense_index \
 --query-file queries.npy \
---vector-type dense \
---precision f32 \
---quantizer plain \
+--dataset-type dense \
+--value-type f32 \
+--encoder plain \
+--distance euclidean \
 --k 10 \
 --ef-search 200 \
 --output-path results_dense 
@@ -131,12 +149,28 @@ Example command:
 ./target/release/hnsw_search \
 --index-file kannolo_dense_pq_index \
 --query-file queries.npy \
---vector-type dense \
---quantizer pq \
---m-pq 64 \
+--dataset-type dense \
+--encoder pq \
+--pq-subspaces 64 \
+--distance dotproduct \
 --k 10 \
 --ef-search 200 \
 --output-path results_pq 
+```
+
+To search with a sparse DotVByte index, run:
+
+```bash
+./target/release/hnsw_search \
+--index-file kannolo_sparse_dotvbyte_index \
+--query-file queries.bin \
+--dataset-type sparse \
+--component-type u16 \
+--encoder dotvbyte \
+--distance dotproduct \
+--k 10 \
+--ef-search 40 \
+--output-path results_dotvbyte
 ```
 
 Queries are executed in **single-thread mode** by default. To enable multithreading, modify the Rust code:

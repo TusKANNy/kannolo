@@ -61,7 +61,7 @@ Please install the required Python's libraries with the following command:
 pip install -r scripts/requirements.txt
 ```
 
-The script will build an index using the unified binary parameters specified at the top level of the TOML file (`build-command`, `vector-type`, `precision`, `quantizer`, `graph-type`) and the traditional indexing parameters in the `[indexing_parameters]` section (`m`, `efc`, `metric`).  
+The script will build an index using the unified binary parameters specified at the top level of the TOML file (`build-command`, `dataset-type`, `value-type`, optional sparse `component-type`, `encoder`, `graph-type`) and the traditional indexing parameters in the `[indexing_parameters]` section (`m`, `ef-construction`, `metric`).  
 The index is saved in the directory `~/knn_indexes/dense_datasets/sift1M`.  
 You can change directory names by modifying the `[folder]` section in the TOML file.
 
@@ -77,14 +77,15 @@ The TOML configuration files have been updated to work with the unified binaries
 ### Top-level Parameters
 - `build-command`: Path to the unified build binary (e.g., `"./target/release/hnsw_build"`)
 - `query-command`: Path to the unified search binary (e.g., `"./target/release/hnsw_search"`)
-- `vector-type`: Type of vectors - `"dense"` or `"sparse"` (multivector is no longer supported)
-- `precision`: Precision - `"f32"` or `"f16"` (Note: PQ always uses f32)
-- `quantizer`: Quantizer type - `"plain"` or `"pq"`
+- `dataset-type`: Type of vectors - `"dense"` or `"sparse"` (multivector is no longer supported)
+- `value-type`: Value type - `"f32"`, `"f16"`, `"fixedu8"`, or `"fixedu16"` (for `encoder = "pq"` and `encoder = "dotvbyte"`, this is ignored)
+- `component-type`: Sparse-only component type - `"u16"` or `"u32"` (DotVByte requires `"u16"`)
+- `encoder`: Encoder type - `"plain"`, `"pq"`, or `"dotvbyte"` (`pq` is dense-only, `dotvbyte` is sparse-only)
 - `graph-type`: Graph type - `"standard"` or `"fixed-degree"`
 
 ### Sections
-- `[indexing_parameters]`: Traditional HNSW parameters (`m`, `efc`, `metric`)
-- `[pq_parameters]`: PQ-specific parameters (`m-pq`, `nbits`, `sample-size`) when using PQ quantizer. `nbits` and `sample-size` are accepted for compatibility but ignored by the current vectorium PQ implementation.
+- `[indexing_parameters]`: Traditional HNSW parameters (`m`, `ef-construction`, `metric`)
+- `[pq_parameters]`: PQ-specific parameters (`pq-subspaces`, `nbits`, `sample-size`) when using PQ encoder. Supported `pq-subspaces` values are `4, 8, 16, 32, 64, 96, 128`. `nbits` and `sample-size` are accepted for compatibility but ignored by the current vectorium PQ implementation.
 - `[folder]`: Directory paths for data, indexes, and experiments
 - `[filename]`: Filenames for dataset, queries, groundtruth, etc.
 - `[settings]`: Runtime settings (k, NUMA, build flag, evaluation metric)
@@ -101,14 +102,14 @@ description = "Example experiment with Product Quantization"
 dataset = "Example Dataset"
 build-command = "./target/release/hnsw_build"
 query-command = "./target/release/hnsw_search"
-vector-type = "dense"
-precision = "f32"
-quantizer = "pq"
+dataset-type = "dense"
+value-type = "f32"
+encoder = "pq"
 graph-type = "standard"
 
 [settings]
 k = 10
-n-runs = 1
+num-runs = 1
 NUMA = "numactl --physcpubind='0-15' --localalloc"
 build = true
 metric = ""
@@ -126,11 +127,11 @@ index = "example_index"
 
 [indexing_parameters]
 m = 16
-efc = 150
+ef-construction = 150
 metric = "dotproduct"
 
-[pq_parameters]  # Only needed when quantizer = "pq"
-m-pq = 64
+[pq_parameters]  # Only needed when encoder = "pq"
+pq-subspaces = 64
 nbits = 8
 sample-size = 100000
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
 use vectorium::IndexSerializer;
-use vectorium::core::dataset::ScoredItemGeneric;
+use vectorium::core::dataset::{ConvertFrom, ConvertInto, ScoredItemGeneric};
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
 
@@ -189,6 +189,81 @@ where
     #[must_use]
     pub fn nodes_per_level(&self) -> Vec<usize> {
         self.levels.iter().map(|g| g.n_nodes()).collect()
+    }
+}
+
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset,
+    G: GraphTrait + From<GrowableGraph>,
+{
+    /// Converts an `HNSW` index from a different dataset type, preserving the graph structure.
+    ///
+    /// Only the dataset is replaced; levels, entry point, level mappings, and neighbor counts
+    /// are moved unchanged. The caller must ensure that the new dataset `D` has the same
+    /// number of vectors and the same logical vector order as `T`.
+    pub fn convert_dataset_from<T: Dataset>(hnsw: HNSW<T, G>) -> Self
+    where
+        D: Dataset + ConvertFrom<T>,
+    {
+        let HNSW {
+            levels,
+            level1_to_level0_mapping,
+            dataset,
+            num_neighbors_per_vec,
+            entry_point,
+        } = hnsw;
+
+        Self {
+            levels,
+            level1_to_level0_mapping,
+            dataset: ConvertInto::<D>::convert_into(dataset),
+            num_neighbors_per_vec,
+            entry_point,
+        }
+    }
+
+    /// Converts this `HNSW` into one backed by a different dataset type (consuming self).
+    ///
+    /// This is the mirror of [`convert_dataset_from`]. Prefer this when you own the index
+    /// and want to chain from a plain build:
+    ///
+    /// ```rust,ignore
+    /// let plain: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> =
+    ///     HNSW::build_index(dataset, &config);
+    /// let compressed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+    ///     plain.convert_dataset_into();
+    /// ```
+    pub fn convert_dataset_into<T>(self) -> HNSW<T, G>
+    where
+        T: Dataset + ConvertFrom<D>,
+    {
+        HNSW::<T, G>::convert_dataset_from(self)
+    }
+
+    /// Converts this `HNSW` into one backed by a different dataset type using a borrowed source dataset.
+    ///
+    /// Use this when the target dataset implements `ConvertFrom<&D>` instead of `ConvertFrom<D>`.
+    pub fn convert_dataset_into_ref<T>(self) -> HNSW<T, G>
+    where
+        T: Dataset,
+        for<'a> T: ConvertFrom<&'a D>,
+    {
+        let HNSW {
+            levels,
+            level1_to_level0_mapping,
+            dataset,
+            num_neighbors_per_vec,
+            entry_point,
+        } = self;
+
+        HNSW {
+            levels,
+            level1_to_level0_mapping,
+            dataset: T::convert_from(&dataset),
+            num_neighbors_per_vec,
+            entry_point,
+        }
     }
 }
 
@@ -842,5 +917,122 @@ where
                 current_batch_size = (current_batch_size * 2).min(max_batch_size);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod convert_dataset_tests {
+    use super::*;
+    use crate::graph::Graph;
+    use crate::index::Index;
+    use vectorium::{
+        DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, PackedSparseDataset,
+        PlainSparseDataset, PlainSparseDatasetGrowable, PlainSparseQuantizer, ScalarSparseDataset,
+        SparseVectorView,
+    };
+    use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
+
+    fn build_test_hnsw() -> HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> {
+        let encoder = PlainSparseQuantizer::<u16, f32, DotProduct>::new(20, 20);
+        let mut growable: PlainSparseDatasetGrowable<u16, f32, DotProduct> =
+            PlainSparseDatasetGrowable::new(encoder);
+
+        for i in 0u16..30 {
+            let components: Vec<u16> = (0..5).map(|j: u16| (i * 3 + j) % 20).collect();
+            let mut components = components;
+            components.sort();
+            components.dedup();
+            let values: Vec<f32> = components.iter().map(|&c| (c as f32 + 1.0) * 0.1).collect();
+            growable.push(SparseVectorView::new(&components, &values));
+        }
+
+        let dataset: PlainSparseDataset<u16, f32, DotProduct> = growable.into();
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(4)
+            .with_ef_construction(20);
+
+        HNSW::build_index(dataset, &config)
+    }
+
+    #[test]
+    fn test_convert_dataset_into_dotvbyte() {
+        let plain_hnsw = build_test_hnsw();
+        let n = plain_hnsw.n_vectors();
+
+        let hnsw: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+            plain_hnsw.convert_dataset_into();
+
+        assert_eq!(hnsw.n_vectors(), n);
+    }
+
+    #[test]
+    fn test_convert_dataset_into_fixedu8() {
+        let plain_hnsw = build_test_hnsw();
+        let n = plain_hnsw.n_vectors();
+
+        let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
+            plain_hnsw.convert_dataset_into();
+
+        assert_eq!(hnsw.n_vectors(), n);
+    }
+
+    #[test]
+    fn test_convert_dataset_into_fixedu16() {
+        let plain_hnsw = build_test_hnsw();
+        let n = plain_hnsw.n_vectors();
+
+        let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
+            plain_hnsw.convert_dataset_into();
+
+        assert_eq!(hnsw.n_vectors(), n);
+    }
+
+    #[test]
+    fn test_dotvbyte_search_returns_results() {
+        let hnsw: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+            build_test_hnsw().convert_dataset_into();
+
+        let query_components: Vec<u16> = vec![0, 1, 2];
+        let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
+        let query = SparseVectorView::new(&query_components, &query_values);
+
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(20);
+        let results = hnsw.search(query, 5, &search_config);
+
+        assert!(!results.is_empty());
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_fixedu8_search_returns_results() {
+        let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
+            build_test_hnsw().convert_dataset_into();
+
+        let query_components: Vec<u16> = vec![0, 1, 2];
+        let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
+        let query = SparseVectorView::new(&query_components, &query_values);
+
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(20);
+        let results = hnsw.search(query, 5, &search_config);
+
+        assert!(!results.is_empty());
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_fixedu16_search_returns_results() {
+        let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
+            build_test_hnsw().convert_dataset_into();
+
+        let query_components: Vec<u16> = vec![0, 1, 2];
+        let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
+        let query = SparseVectorView::new(&query_components, &query_values);
+
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(20);
+        let results = hnsw.search(query, 5, &search_config);
+
+        assert!(!results.is_empty());
+        assert!(results.len() <= 5);
     }
 }

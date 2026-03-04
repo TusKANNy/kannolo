@@ -230,17 +230,13 @@ where
         let ground_entry_node = Candidate(entry_node.distance(), entry_global_id);
 
         // Perform the final, most extensive search on the ground level.
-        let mut topk = ground_graph.greedy_search_topk(
-            &self.dataset,
-            ground_entry_node,
-            &query_eval,
-            k,
-            search_params.ef_search,
-        );
+        // ef_search must be at least k, otherwise we can't return k results.
+        let ef = search_params.ef_search.max(k);
+        let mut topk =
+            ground_graph.greedy_search_topk(&self.dataset, ground_entry_node, &query_eval, k, ef);
 
         // Adjust distance if using DotProduct distance type
         if self.dataset.quantizer().distance() == DistanceType::DotProduct {
-            // TODO: Trait distanze per gestire il -
             topk.iter_mut().for_each(|(dis, _)| *dis = -(*dis));
         }
         topk

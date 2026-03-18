@@ -57,7 +57,7 @@ def find_best_by_recall_range(df, space_limit=None, recall_min=0.90, recall_max=
             best_row = subset.loc[subset['Query Time (microsecs)'].idxmin()].copy()
             best_row['Target Recall'] = rmin
             selected_rows.append(best_row)
-            to_print.append(f"Recall={best_row['Recall']:.4f}, Query Time={best_row['Query Time (microsecs)']}μs, Memory={best_row['Memory Usage (Bytes)']}B, ef_search: {best_row["query.ef-search"]}, patience: {best_row.get("query.patience", "N/A")}, proximity-threshold: {best_row.get("query.proximity-threshold", "N/A")}")
+            to_print.append(f"Recall={best_row['Recall']:.4f}, Query Time={best_row['Query Time (microsecs)']}μs, Memory={best_row['Memory Usage (Bytes)']}B, ef_search: {best_row.get('query.ef-search', 'N/A')}, patience: {best_row.get('query.patience', 'N/A')}, proximity-threshold: {best_row.get('query.proximity-threshold', 'N/A')}")
         
 
     result_df = pd.DataFrame(selected_rows)

@@ -171,7 +171,7 @@ fn parse_metric(metric: &str) -> Distance {
     }
 }
 
-const PQ_SUPPORTED_SUBSPACES: [usize; 7] = [128, 96, 64, 32, 16, 8, 4];
+const PQ_SUPPORTED_SUBSPACES: [usize; 9] = [128, 192, 96, 64, 48, 32, 16, 8, 4];
 
 fn choose_pq_subspaces(dim: usize, requested: usize) -> usize {
     if requested == 0 {
@@ -181,20 +181,20 @@ fn choose_pq_subspaces(dim: usize, requested: usize) -> usize {
             }
         }
         eprintln!(
-            "Error: Could not auto-select pq-subspaces for dimension {dim}. Supported: 4, 8, 16, 32, 64, 96, 128."
+            "Error: Could not auto-select pq-subspaces for dimension {dim}. Supported: 4, 8, 16, 32, 48, 64, 96, 128, 192."
         );
         process::exit(1);
     }
 
     if !PQ_SUPPORTED_SUBSPACES.contains(&requested) {
-        eprintln!("Error: Unsupported pq-subspaces value {requested}. Supported: 4, 8, 16, 32, 64, 96, 128.");
+        eprintln!(
+            "Error: Unsupported pq-subspaces value {requested}. Supported: 4, 8, 16, 32, 48, 64, 96, 128, 192."
+        );
         process::exit(1);
     }
 
     if !dim.is_multiple_of(requested) {
-        eprintln!(
-            "Error: pq-subspaces ({requested}) must divide vector dimension ({dim})."
-        );
+        eprintln!("Error: pq-subspaces ({requested}) must divide vector dimension ({dim}).");
         process::exit(1);
     }
 
@@ -215,16 +215,15 @@ fn main() {
             process::exit(1);
         }
         (DatasetType::Dense, EncoderType::Plain)
-            if matches!(args.value_type, ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16) =>
+            if matches!(
+                args.value_type,
+                ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16
+            ) =>
         {
-            eprintln!(
-                "Error: fixedu8/fixedu16 value types are only available for sparse vectors."
-            );
+            eprintln!("Error: fixedu8/fixedu16 value types are only available for sparse vectors.");
             process::exit(1);
         }
-        (DatasetType::Dense, _)
-            if !matches!(args.component_type, ComponentTypeArg::U16) =>
-        {
+        (DatasetType::Dense, _) if !matches!(args.component_type, ComponentTypeArg::U16) => {
             eprintln!("Error: component-type is only applicable to sparse datasets.");
             process::exit(1);
         }
@@ -332,7 +331,12 @@ fn main() {
         // Unreachable: caught by earlier validation
         (DatasetType::Dense, EncoderType::Dotvbyte, _, _)
         | (DatasetType::Sparse, EncoderType::Pq, _, _)
-        | (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16, _) => {
+        | (
+            DatasetType::Dense,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16,
+            _,
+        ) => {
             unreachable!()
         }
     }
@@ -405,9 +409,11 @@ where
         8 => build_dense_pq_with_m_l2::<8, G>(dataset, config, &args.output_file),
         16 => build_dense_pq_with_m_l2::<16, G>(dataset, config, &args.output_file),
         32 => build_dense_pq_with_m_l2::<32, G>(dataset, config, &args.output_file),
+        48 => build_dense_pq_with_m_l2::<48, G>(dataset, config, &args.output_file),
         64 => build_dense_pq_with_m_l2::<64, G>(dataset, config, &args.output_file),
         96 => build_dense_pq_with_m_l2::<96, G>(dataset, config, &args.output_file),
         128 => build_dense_pq_with_m_l2::<128, G>(dataset, config, &args.output_file),
+        192 => build_dense_pq_with_m_l2::<192, G>(dataset, config, &args.output_file),
         _ => unreachable!(),
     }
 }
@@ -423,9 +429,11 @@ where
         8 => build_dense_pq_with_m_ip::<8, G>(dataset, config, &args.output_file),
         16 => build_dense_pq_with_m_ip::<16, G>(dataset, config, &args.output_file),
         32 => build_dense_pq_with_m_ip::<32, G>(dataset, config, &args.output_file),
+        48 => build_dense_pq_with_m_ip::<48, G>(dataset, config, &args.output_file),
         64 => build_dense_pq_with_m_ip::<64, G>(dataset, config, &args.output_file),
         96 => build_dense_pq_with_m_ip::<96, G>(dataset, config, &args.output_file),
         128 => build_dense_pq_with_m_ip::<128, G>(dataset, config, &args.output_file),
+        192 => build_dense_pq_with_m_ip::<192, G>(dataset, config, &args.output_file),
         _ => unreachable!(),
     }
 }
@@ -446,8 +454,12 @@ where
     G: GraphBound,
 {
     match args.component_type {
-        ComponentTypeArg::U16 => build_sparse_plain_with_component::<u16, V, G>(args, distance, config),
-        ComponentTypeArg::U32 => build_sparse_plain_with_component::<u32, V, G>(args, distance, config),
+        ComponentTypeArg::U16 => {
+            build_sparse_plain_with_component::<u16, V, G>(args, distance, config)
+        }
+        ComponentTypeArg::U32 => {
+            build_sparse_plain_with_component::<u32, V, G>(args, distance, config)
+        }
     }
 }
 
@@ -455,8 +467,7 @@ fn build_sparse_plain_with_component<C, V, G>(
     args: &Args,
     distance: Distance,
     config: &HNSWBuildConfiguration,
-)
-where
+) where
     C: vectorium::ComponentType + num_traits::FromPrimitive + SpaceUsage + Serialize,
     V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
     G: GraphBound,
@@ -536,8 +547,12 @@ where
     G: GraphBound,
 {
     match args.component_type {
-        ComponentTypeArg::U16 => build_sparse_scalar_with_component::<u16, V, G>(args, distance, config),
-        ComponentTypeArg::U32 => build_sparse_scalar_with_component::<u32, V, G>(args, distance, config),
+        ComponentTypeArg::U16 => {
+            build_sparse_scalar_with_component::<u16, V, G>(args, distance, config)
+        }
+        ComponentTypeArg::U32 => {
+            build_sparse_scalar_with_component::<u32, V, G>(args, distance, config)
+        }
     }
 }
 
@@ -545,8 +560,7 @@ fn build_sparse_scalar_with_component<C, V, G>(
     args: &Args,
     distance: Distance,
     config: &HNSWBuildConfiguration,
-)
-where
+) where
     C: vectorium::ComponentType + num_traits::FromPrimitive + SpaceUsage + Serialize,
     V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
     G: GraphBound,
@@ -569,16 +583,15 @@ where
     G: GraphBound,
     ScalarSparseDataset<C, f32, V, D>: ConvertFrom<PlainSparseDataset<C, f32, D>>,
 {
-    let dataset: PlainSparseDataset<C, f32, D> =
-        read_seismic_format::<C, f32, D>(&args.data_file).unwrap_or_else(|e| {
+    let dataset: PlainSparseDataset<C, f32, D> = read_seismic_format::<C, f32, D>(&args.data_file)
+        .unwrap_or_else(|e| {
             eprintln!("Error reading dataset: {e:?}");
             process::exit(1);
         });
 
     let start_time = Instant::now();
     let plain_index: HNSW<_, G> = HNSW::build_index(dataset, config);
-    let index: HNSW<ScalarSparseDataset<C, f32, V, D>, G> =
-        plain_index.convert_dataset_into();
+    let index: HNSW<ScalarSparseDataset<C, f32, V, D>, G> = plain_index.convert_dataset_into();
     let duration = start_time.elapsed();
     println!(
         "Time to build: {} s (before serializing)",

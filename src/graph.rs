@@ -220,13 +220,12 @@ pub trait GraphTrait {
             let id_candidate = node.vector;
             let distance_candidate = node.distance;
 
-            if let Some(k_limit) = k {
-                if top_candidates.len() >= ef.max(k_limit) {
-                    // Ensure we have enough candidates
-                    let worst_top = &top_candidates.peek().unwrap().distance;
-                    if !distance_candidate.is_within_relaxation(worst_top, lambda) {
-                        break;
-                    }
+            if top_candidates.len() >= ef.max(k.unwrap_or(0)) {
+                // Standard HNSW termination: stop when the best remaining candidate
+                // is worse than the worst result collected so far.
+                let worst_top = &top_candidates.peek().unwrap().distance;
+                if !distance_candidate.is_within_relaxation(worst_top, lambda) {
+                    break;
                 }
             }
 
@@ -240,40 +239,171 @@ pub trait GraphTrait {
                 dataset.prefetch_with_range(range);
             }
 
+            // Buffer up to 6 unvisited neighbours for batch distance computation.
+            let mut buf_local: [usize; 6] = [0; 6];
+            let mut buf_ext: [VectorId; 6] = [0; 6];
+            let mut count = 0usize;
+
+            // Admit a pre-scored candidate into both heaps.
+            let mut admit = |local_id: usize, distance: <D::Encoder as VectorEncoder>::Distance| {
+                let candidate = ScoredItemGeneric {
+                    distance,
+                    vector: local_id,
+                };
+                let should_add = if top_candidates.len() < ef {
+                    true
+                } else if let Some(top_node) = top_candidates.peek() {
+                    candidate
+                        .distance
+                        .is_within_relaxation(&top_node.distance, lambda)
+                } else {
+                    false
+                };
+                if should_add {
+                    candidates.push(Reverse(candidate));
+                    top_candidates.push(candidate);
+                }
+                if top_candidates.len() > ef {
+                    top_candidates.pop();
+                }
+            };
+
             for neighbor_local_id in self.neighbors(id_candidate) {
                 if !visited_table.contains(neighbor_local_id) {
                     visited_table.insert(neighbor_local_id);
-
-                    let external_id = self.get_external_id(neighbor_local_id) as VectorId;
-                    let distance_neighbor =
-                        query_evaluator.compute_distance(dataset.get(external_id));
-                    let candidate = ScoredItemGeneric {
-                        distance: distance_neighbor,
-                        vector: neighbor_local_id,
-                    };
-
-                    let should_add = if top_candidates.len() < ef {
-                        true
-                    } else if let Some(top_node) = top_candidates.peek() {
-                        candidate
-                            .distance
-                            .is_within_relaxation(&top_node.distance, lambda)
-                    } else {
-                        false
-                    };
-
-                    if should_add {
-                        candidates.push(Reverse(candidate));
-                        top_candidates.push(candidate);
-                    }
-
-                    if top_candidates.len() > ef {
-                        top_candidates.pop();
+                    buf_local[count] = neighbor_local_id;
+                    buf_ext[count] = self.get_external_id(neighbor_local_id) as VectorId;
+                    count += 1;
+                    if count == 6 {
+                        let dists = query_evaluator.compute_distances_batch6([
+                            dataset.get(buf_ext[0]),
+                            dataset.get(buf_ext[1]),
+                            dataset.get(buf_ext[2]),
+                            dataset.get(buf_ext[3]),
+                            dataset.get(buf_ext[4]),
+                            dataset.get(buf_ext[5]),
+                        ]);
+                        for i in 0..6 {
+                            admit(buf_local[i], dists[i]);
+                        }
+                        count = 0;
                     }
                 }
             }
+            // Flush remaining neighbours (fewer than 6).
+            for i in 0..count {
+                let d = query_evaluator.compute_distance(dataset.get(buf_ext[i]));
+                admit(buf_local[i], d);
+            }
         }
         top_candidates
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vectorium::DenseDataset;
+    use vectorium::core::dataset::ScoredItemGeneric;
+    use vectorium::core::vector::DenseVectorView;
+    use vectorium::distances::SquaredEuclideanDistance;
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+
+    /// Build a line graph of `n` nodes (each connected to i-1 and i+1).
+    fn build_line_graph(n: usize, max_degree: usize) -> GrowableGraph {
+        let mut g = GrowableGraph::with_max_degree(max_degree);
+        g.reserve(n);
+        g.advance_inserted_nodes(n);
+        for i in 0..n {
+            let mut nbrs: Vec<usize> = Vec::new();
+            if i > 0 {
+                nbrs.push(i - 1);
+            }
+            if i + 1 < n {
+                nbrs.push(i + 1);
+            }
+            g.push_with_precomputed_reverse_links(None, &nbrs, i, &[]);
+        }
+        g
+    }
+
+    /// Regression test for the 2026-03-06 early-termination bug.
+    ///
+    /// `search_candidates_for_insert` passes `k=None` to `search_candidates_impl`.
+    /// Before the fix, `if let Some(k_limit) = k && ...` never fired for k=None,
+    /// so the loop drained the entire candidate queue. The fix uses `k.unwrap_or(0)`,
+    /// making termination fire as soon as `top_candidates.len() >= ef`.
+    ///
+    /// This test verifies:
+    /// 1. The returned heap is bounded by ef.
+    /// 2. The true nearest neighbour is found (search is still correct after the fix).
+    #[test]
+    fn search_candidates_for_insert_bounded_by_ef_and_finds_nearest() {
+        let n = 20usize;
+        let ef = 5usize;
+
+        // 1-D dataset: vectors [0.0], [1.0], ..., [19.0].
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let graph = build_line_graph(n, 4);
+
+        // Query at 10.0 — true nearest neighbour is node 10 (distance 0).
+        let query_val = [10.0f32];
+        let query = DenseVectorView::new(&query_val);
+        let evaluator = dataset.encoder().query_evaluator(query);
+        let entry_dist = evaluator.compute_distance(dataset.get(0));
+        let entry = ScoredItemGeneric {
+            distance: entry_dist,
+            vector: 0usize,
+        };
+
+        let top = graph.search_candidates_for_insert(&dataset, entry, &evaluator, ef);
+
+        assert!(top.len() <= ef, "heap size {} exceeds ef={}", top.len(), ef);
+
+        let best = top.into_sorted_vec().into_iter().next().unwrap();
+        assert_eq!(
+            best.vector, 10,
+            "expected nearest node 10, got {}",
+            best.vector
+        );
+        assert_eq!(best.distance, SquaredEuclideanDistance::from(0.0));
+    }
+
+    /// Verify the `k=Some` path (`search_candidates_for_query`) is also bounded and correct.
+    #[test]
+    fn search_candidates_for_query_bounded_and_correct() {
+        let n = 20usize;
+        let ef = 6usize;
+        let k = 3usize;
+
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let graph = build_line_graph(n, 4);
+
+        let query_val = [5.0f32];
+        let query = DenseVectorView::new(&query_val);
+        let evaluator = dataset.encoder().query_evaluator(query);
+        let entry_dist = evaluator.compute_distance(dataset.get(0));
+        let entry = ScoredItemGeneric {
+            distance: entry_dist,
+            vector: 0usize,
+        };
+
+        let top_heap = graph.search_candidates_for_query(&dataset, entry, &evaluator, ef, k, 0.0);
+
+        assert!(top_heap.len() <= ef);
+        let mut results = top_heap.into_sorted_vec();
+        results.truncate(k);
+
+        assert_eq!(
+            results[0].vector, 5,
+            "expected nearest node 5, got {}",
+            results[0].vector
+        );
+        assert_eq!(results[0].distance, SquaredEuclideanDistance::from(0.0));
     }
 }
 
@@ -493,7 +623,7 @@ impl From<GrowableGraph> for GraphFixedDegree {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct GrowableGraph {
     neighbors: Vec<Optioned<u32>>, // Using Optioned<u32> to represent neighbors, where None is represented by u32::MAX
     ids_mapping: Option<Vec<usize>>, // This is used to map the internal IDs to external IDs
@@ -501,19 +631,6 @@ pub struct GrowableGraph {
     n_edges: usize,
     n_nodes: usize,
     inserted_nodes: usize, // Number of nodes that have been actually inserted
-}
-
-impl Default for GrowableGraph {
-    fn default() -> Self {
-        GrowableGraph {
-            neighbors: Vec::new(),
-            max_degree: 0,
-            ids_mapping: None, // No mapping by default
-            n_edges: 0,
-            n_nodes: 0,
-            inserted_nodes: 0, // No nodes inserted yet
-        }
-    }
 }
 
 impl GraphTrait for GrowableGraph {
@@ -718,9 +835,9 @@ impl GrowableGraph {
         }
     }
 
-    pub fn precompute_reverse_links<'e, D>(
+    pub fn precompute_reverse_links<D>(
         &self,
-        dataset: &'e D,
+        dataset: &D,
         node_to_insert_local_id: usize,
         forward_neighbors: &[usize],
     ) -> Vec<(usize, Vec<usize>)>
@@ -731,14 +848,10 @@ impl GrowableGraph {
         let mut reverse_links_data = Vec::with_capacity(forward_neighbors.len());
 
         for &neighbor_local_id in forward_neighbors {
-            // The "query" for the heuristic is the neighbor itself, whose neighbor list we are updating.
             let neighbor_external_id = self.get_external_id(neighbor_local_id) as VectorId;
-            let neighbor_query_eval = dataset
-                .encoder()
-                .vector_evaluator(dataset.get(neighbor_external_id));
 
             // 1. Build a max-heap containing the neighbor's current neighbors and the new node.
-            //    The distances are all relative to the neighbor.
+            //    The distances are all relative to `neighbor_external_id`.
             let mut closest_vectors = BinaryHeap::<
                 ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
             >::new();
@@ -746,7 +859,10 @@ impl GrowableGraph {
             // Add its current neighbors
             for local_id in self.neighbors(neighbor_local_id) {
                 let external_id = self.get_external_id(local_id) as VectorId;
-                let dist = neighbor_query_eval.compute_distance(dataset.get(external_id));
+                let dist = dataset.encoder().compute_distance_between(
+                    dataset.get(neighbor_external_id),
+                    dataset.get(external_id),
+                );
                 closest_vectors.push(ScoredItemGeneric {
                     distance: dist,
                     vector: local_id,
@@ -756,8 +872,10 @@ impl GrowableGraph {
             // Add the new reverse link (the node we are inserting)
             let node_to_insert_external_id =
                 self.get_external_id(node_to_insert_local_id) as VectorId;
-            let dist_to_inserted_node =
-                neighbor_query_eval.compute_distance(dataset.get(node_to_insert_external_id));
+            let dist_to_inserted_node = dataset.encoder().compute_distance_between(
+                dataset.get(neighbor_external_id),
+                dataset.get(node_to_insert_external_id),
+            );
             closest_vectors.push(ScoredItemGeneric {
                 distance: dist_to_inserted_node,
                 vector: node_to_insert_local_id,
@@ -772,9 +890,9 @@ impl GrowableGraph {
         reverse_links_data
     }
 
-    pub fn shrink_neighbor_list<'e, D>(
+    pub fn shrink_neighbor_list<D>(
         &self,
-        dataset: &'e D,
+        dataset: &D,
         closest_vectors: &mut BinaryHeap<
             ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
         >,
@@ -805,10 +923,10 @@ impl GrowableGraph {
             for node2 in new_closest_vectors.iter() {
                 let node1_external = self.get_external_id(node1.vector) as VectorId;
                 let node2_external = self.get_external_id(node2.vector) as VectorId;
-                let node1_eval = dataset
-                    .encoder()
-                    .vector_evaluator(dataset.get(node1_external));
-                let dist_node_1_node2 = node1_eval.compute_distance(dataset.get(node2_external));
+                let dist_node_1_node2 = dataset.encoder().compute_distance_between(
+                    dataset.get(node1_external),
+                    dataset.get(node2_external),
+                );
                 if dist_node_1_node2 < node1.distance {
                     keep_node_1 = false;
                     break;

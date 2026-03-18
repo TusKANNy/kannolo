@@ -349,13 +349,15 @@ where
         };
 
         // Perform the final, most extensive search on the ground level.
+        // Ensure that `ef_search` is at least `k` to guarantee we can return `k` results.
+        let ef = search_params.ef_search.max(k);
         let lambda = search_params.early_termination.lambda();
         let mut topk = ground_graph.greedy_search_topk(
             &self.dataset,
             ground_entry_node,
             &query_eval,
             k,
-            search_params.ef_search,
+            ef,
             lambda,
         );
 
@@ -925,12 +927,11 @@ mod convert_dataset_tests {
     use super::*;
     use crate::graph::Graph;
     use crate::index::Index;
-    use vectorium::{
-        DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, PackedSparseDataset,
-        PlainSparseDataset, PlainSparseDatasetGrowable, PlainSparseQuantizer, ScalarSparseDataset,
-        SparseVectorView,
-    };
     use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
+    use vectorium::{
+        DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, PackedSparseDataset, PlainSparseDataset,
+        PlainSparseDatasetGrowable, PlainSparseQuantizer, ScalarSparseDataset, SparseVectorView,
+    };
 
     fn build_test_hnsw() -> HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> {
         let encoder = PlainSparseQuantizer::<u16, f32, DotProduct>::new(20, 20);

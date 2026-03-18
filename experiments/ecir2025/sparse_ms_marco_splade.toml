@@ -39,21 +39,20 @@ ef-construction =          2000
 metric =       "dotproduct" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
 
 [query]
-    [query.efs_10]
-    ef-search =      10
+    [query.efs_18]
+    ef-search =      18
     [query.efs_20]
     ef-search =      20
+    [query.efs_30]
+    ef-search =      30
     [query.efs_40]
     ef-search =      40
+    [query.efs_50]
+    ef-search =      50
+    [query.efs_60]
+    ef-search =      60
     [query.efs_80]
     ef-search =      80
-    [query.efs_120]
-    ef-search =      120
-    [query.efs_200]
-    ef-search =      200
-    [query.efs_400]
-    ef-search =      400
-    [query.efs_600]
-    ef-search =      600
-    [query.efs_800]
-    ef-search =      800
+    [query.efs_150]
+    ef-search =      150
+

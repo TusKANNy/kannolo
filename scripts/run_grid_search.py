@@ -121,7 +121,7 @@ def main(experiment_config_filename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Run a grid search of seismic experiments on a dataset and find the best configurations to query it."
+        description="Run a grid search of kANNolo experiments on a dataset and find the best configurations to query it."
     )
     parser.add_argument(
         "--exp", required=True, help="Path to the grid configuration TOML file."

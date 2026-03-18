@@ -72,12 +72,12 @@ fn validate_offsets(offsets: &[usize], values_len: usize) -> PyResult<()> {
             "Offsets must start at 0",
         ));
     }
-    if let Some(&last) = offsets.last() {
-        if last != values_len {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Offsets last element must equal number of values",
-            ));
-        }
+    if let Some(&last) = offsets.last()
+        && last != values_len
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Offsets last element must equal number of values",
+        ));
     }
     for w in offsets.windows(2) {
         if w[0] > w[1] {
@@ -987,8 +987,8 @@ impl SparseDotVByteHNSW {
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
 
-        let dataset: PlainSparseDataset<u16, f32, DotProduct> =
-            read_seismic_format(data_file).map_err(|e| {
+        let dataset: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(data_file)
+            .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading dataset: {:?}",
                     e
@@ -1029,8 +1029,12 @@ impl SparseDotVByteHNSW {
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
 
-        let dataset =
-            build_sparse_dataset_from_parts::<f32, DotProduct>(components_vec, values_vec, offsets_vec, d)?;
+        let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
+            components_vec,
+            values_vec,
+            offsets_vec,
+            d,
+        )?;
         let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
         let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
             plain_hnsw.convert_dataset_into();
@@ -1049,7 +1053,9 @@ impl SparseDotVByteHNSW {
         let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> = <HNSW<
             PackedSparseDataset<DotVByteFixedU8Encoder>,
             Graph,
-        > as IndexSerializer>::load_index(path)
+        > as IndexSerializer>::load_index(
+            path
+        )
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e))
         })?;
@@ -1091,8 +1097,8 @@ impl SparseDotVByteHNSW {
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
-        let queries: PlainSparseDataset<u16, f32, DotProduct> =
-            read_seismic_format(query_file).map_err(|e| {
+        let queries: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(query_file)
+            .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Error reading query file: {:?}",
                     e
@@ -1720,62 +1726,82 @@ impl DensePQHNSWGeneric<SquaredEuclideanDistance> {
         match m_pq {
             8 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ8(index))
             }
             16 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ16(index))
             }
             32 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ32(index))
             }
             48 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ48(index))
             }
             64 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ64(index))
             }
             96 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ96(index))
             }
             128 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ128(index))
             }
             192 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ192(index))
             }
             256 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ256(index))
             }
             384 => {
                 let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>>, Graph> =
-                    plain_index.convert_dataset_into();
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>>,
+                    Graph,
+                > = plain_index.convert_dataset_into();
                 Ok(DensePQHNSWGeneric::PQ384(index))
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(

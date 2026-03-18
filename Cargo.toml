@@ -34,16 +34,10 @@ optional = { version = "0.5.0", features = ["serde"]}
 [features]
 default = []
 use-libxsmm = []
-hnsw-prefetching = []
 
 [lib]
 name = "kannolo"
 crate-type = ["cdylib", "lib"]
-
-[[bin]]
-name = "hnsw_convert_prefetch"
-path = "src/bin/hnsw_convert_prefetch.rs"
-required-features = ["hnsw-prefetching"]
 
 [profile.release]
 opt-level = 3

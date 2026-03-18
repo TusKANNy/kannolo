@@ -601,7 +601,14 @@ mod tests_insert_into_topk {
         let topk_locked = topk.lock().unwrap();
         assert_eq!(
             &*topk_locked,
-            &[si(5, 5), si(15, 6), si(25, 7), si(60, 4), si(80, 5), si(90, 6)]
+            &[
+                si(5, 5),
+                si(15, 6),
+                si(25, 7),
+                si(60, 4),
+                si(80, 5),
+                si(90, 6)
+            ]
         );
     }
 
@@ -673,7 +680,14 @@ mod tests_insert_into_topk {
             };
             200
         ]));
-        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
+        let topk_query = vec![
+            si(5, 5),
+            si(15, 6),
+            si(25, 7),
+            si(45, 3),
+            si(59, 1),
+            si(125, 72),
+        ];
         let index = 20;
         let k = 5;
 
@@ -743,7 +757,14 @@ mod tests_insert_into_topk {
             };
             200
         ]));
-        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
+        let topk_query = vec![
+            si(5, 5),
+            si(15, 6),
+            si(25, 7),
+            si(45, 3),
+            si(59, 1),
+            si(125, 72),
+        ];
         let index = 39;
         let k = 5;
 
@@ -765,7 +786,14 @@ mod tests_insert_into_topk {
             };
             200
         ]));
-        let topk_query = vec![si(5, 5), si(15, 6), si(25, 7), si(45, 3), si(59, 1), si(125, 72)];
+        let topk_query = vec![
+            si(5, 5),
+            si(15, 6),
+            si(25, 7),
+            si(45, 3),
+            si(59, 1),
+            si(125, 72),
+        ];
         let index = 40; // This index is out of range
         let k = 5;
 

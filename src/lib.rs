@@ -10,12 +10,12 @@ use crate::pylib::DensePQHNSW as DensePQIndexPy;
 use crate::pylib::DensePlainHNSW as DensePlainIndexPy;
 use crate::pylib::DensePlainHNSWf16 as DensePlainIndexPyf16;
 use crate::pylib::SparseDotVByteHNSW as SparseDotVByteIndexPy;
-use crate::pylib::SparseFixedU16HNSW as SparseFixedU16IndexPy;
 use crate::pylib::SparseFixedU8HNSW as SparseFixedU8IndexPy;
+use crate::pylib::SparseFixedU16HNSW as SparseFixedU16IndexPy;
 use crate::pylib::SparsePlainHNSW as SparsePlainIndexPy;
 use crate::pylib::SparsePlainHNSWf16 as SparsePlainIndexPyf16;
 use pyo3::prelude::PyModule;
-use pyo3::{pymodule, Bound, PyResult};
+use pyo3::{Bound, PyResult, pymodule};
 
 pub mod graph;
 pub mod visited_set;

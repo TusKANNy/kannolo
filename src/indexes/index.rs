@@ -1,6 +1,6 @@
+use vectorium::Dataset;
 use vectorium::dataset::ScoredVector;
 use vectorium::vector_encoder::VectorEncoder;
-use vectorium::Dataset;
 
 pub trait Index<D>
 where
@@ -28,5 +28,4 @@ where
         k: usize,
         search_params: &Self::SearchParams,
     ) -> Vec<ScoredVector<<D::Encoder as VectorEncoder>::Distance>>;
-
 }

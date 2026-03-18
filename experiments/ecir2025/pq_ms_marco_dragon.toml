@@ -6,7 +6,7 @@ dataset =       "Dragon on MS-MARCO"
 build-command = "./target/release/hnsw_build"  # Unified build binary
 query-command = "./target/release/hnsw_search" # Unified search binary
 dataset-type = "dense"    # Dataset type: "dense" or "sparse"
-value-type = "f32"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+value-type = "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
 encoder       = "pq"         # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
 graph-type = "standard"  # Graph type: "standard" or "fixed-degree"
 
@@ -19,18 +19,18 @@ build =         true   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
-data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # data base path
-index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/dragon" # index input path
+data =          "~/knn_datasets/dense_datasets/sift_1M/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # data base path
+index =         ""~/knn_indexes/dense_datasets/sift_1M/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
 [filename]
 dataset =       "dataset.npy" # dataset input file name
 queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth_ip_k_10.npy" # ground truth input file
+groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_pq_dragon" # index file name
+index =         "ecir_2025_pq_dragon_vectorium" # index file name
 
 [indexing_parameters]
 m =            32

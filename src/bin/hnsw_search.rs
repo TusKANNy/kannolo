@@ -211,16 +211,15 @@ fn main() {
             std::process::exit(1);
         }
         (DatasetType::Dense, EncoderType::Plain)
-            if matches!(args.value_type, ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16) =>
+            if matches!(
+                args.value_type,
+                ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16
+            ) =>
         {
-            eprintln!(
-                "Error: fixedu8/fixedu16 value types are only available for sparse vectors."
-            );
+            eprintln!("Error: fixedu8/fixedu16 value types are only available for sparse vectors.");
             std::process::exit(1);
         }
-        (DatasetType::Dense, _)
-            if !matches!(args.component_type, ComponentTypeArg::U16) =>
-        {
+        (DatasetType::Dense, _) if !matches!(args.component_type, ComponentTypeArg::U16) => {
             eprintln!("Error: component-type is only applicable to sparse datasets.");
             std::process::exit(1);
         }
@@ -310,7 +309,12 @@ fn main() {
         // Unreachable: caught by earlier validation
         (DatasetType::Dense, EncoderType::Dotvbyte, _, _)
         | (DatasetType::Sparse, EncoderType::Pq, _, _)
-        | (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16, _) => {
+        | (
+            DatasetType::Dense,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu8 | ValueTypeArg::Fixedu16,
+            _,
+        ) => {
             unreachable!()
         }
     }
@@ -319,9 +323,9 @@ fn main() {
 fn create_search_config(args: &Args) -> HNSWSearchConfiguration {
     let early_termination = match args.early_termination {
         EarlyTerminationMethod::None => EarlyTerminationStrategy::None,
-        EarlyTerminationMethod::DistanceAdaptive => {
-            EarlyTerminationStrategy::DistanceAdaptive { lambda: args.lambda }
-        }
+        EarlyTerminationMethod::DistanceAdaptive => EarlyTerminationStrategy::DistanceAdaptive {
+            lambda: args.lambda,
+        },
     };
 
     HNSWSearchConfiguration::default()
@@ -436,7 +440,9 @@ where
     G: GraphBound,
 {
     match metric {
-        DistanceKind::Euclidean => search_dense_pq_with_distance::<SquaredEuclideanDistance, G>(args),
+        DistanceKind::Euclidean => {
+            search_dense_pq_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
         DistanceKind::DotProduct => search_dense_pq_with_distance::<DotProduct, G>(args),
     }
 }
@@ -702,9 +708,7 @@ where
         DistanceKind::Euclidean => {
             search_sparse_plain_f16_with_distance::<C, SquaredEuclideanDistance, G>(args)
         }
-        DistanceKind::DotProduct => {
-            search_sparse_plain_f16_with_distance::<C, DotProduct, G>(args)
-        }
+        DistanceKind::DotProduct => search_sparse_plain_f16_with_distance::<C, DotProduct, G>(args),
     }
 }
 
@@ -775,9 +779,7 @@ where
         DistanceKind::Euclidean => {
             search_sparse_plain_f32_with_distance::<C, SquaredEuclideanDistance, G>(args)
         }
-        DistanceKind::DotProduct => {
-            search_sparse_plain_f32_with_distance::<C, DotProduct, G>(args)
-        }
+        DistanceKind::DotProduct => search_sparse_plain_f32_with_distance::<C, DotProduct, G>(args),
     }
 }
 
@@ -846,8 +848,8 @@ where
     G: GraphBound,
 {
     let config = create_search_config(args);
-    let queries: PlainSparseDataset<u16, f32, DotProduct> =
-        read_seismic_format(&args.query_file).unwrap_or_else(|e| {
+    let queries: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(&args.query_file)
+        .unwrap_or_else(|e| {
             eprintln!("Error reading query file: {e:?}");
             std::process::exit(1);
         });
@@ -915,9 +917,7 @@ where
         DistanceKind::Euclidean => {
             search_sparse_scalar_with_distance::<C, V, SquaredEuclideanDistance, G>(args)
         }
-        DistanceKind::DotProduct => {
-            search_sparse_scalar_with_distance::<C, V, DotProduct, G>(args)
-        }
+        DistanceKind::DotProduct => search_sparse_scalar_with_distance::<C, V, DotProduct, G>(args),
     }
 }
 

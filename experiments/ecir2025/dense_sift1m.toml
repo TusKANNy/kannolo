@@ -6,7 +6,7 @@ dataset =       "SIFT1M"
 build-command = "./target/release/hnsw_build"  # Unified build binary
 query-command = "./target/release/hnsw_search" # Unified search binary
 dataset-type = "dense"    # Dataset type: "dense" or "sparse"
-value-type = "f32"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+value-type = "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
 encoder       = "plain"      # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
 graph-type = "standard"  # Graph type: "standard" or "fixed-degree"
 
@@ -15,7 +15,7 @@ k =             10
 num-runs       =        1       # Number of runs. PLEASE think carefully how increasing 
                         # this may influence your query time
 NUMA =        "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
-build =         false   # Need to build the index or the index is already built?
+build =         true   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
@@ -30,7 +30,7 @@ queries =       "queries.npy" # queries input file name
 groundtruth =   "groundtruth.npy" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_sift_1M_vectorium" # index file name
+index =         "ecir_2025_sift_1M" # index file name
 
 [indexing_parameters]
 m =            16

@@ -1,0 +1,43 @@
+name =          "grid_sift_hnsw_adaptive"
+title =         "Search sparse HNSWM on splade"
+description =   "Search sparse HNSWM on splade"
+dataset =       "dragon"
+dataset-type =   "dense"    # Dataset type: "dense" or "sparse"
+value-type =     "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+encoder       =     "plain"      # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
+graph-type =    "standard"  # Graph type: "standard" or "fixed-degree"
+
+[settings]
+k =             10
+num-runs       =        1       # Number of runs. PLEASE think carefully how increasing 
+                        # this may influence your query time
+#NUMA =          "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
+build =         false  # Need to build the index or the index is already built?
+metric =        "" 
+
+[folder] 
+data =          "~/knn_datasets/dense_datasets/sift_1M" # data base path
+index =         "~/knn_indexes/dense_datasets" # index input path
+qrels_path =    ""
+experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
+
+[filename]
+dataset =       "dataset.npy" # dataset input file name
+queries =       "queries.npy" # queries input file name
+groundtruth =   "groundtruth.npy" # ground truth input file
+doc_ids =       ""
+query_ids =     ""
+index =         "kannolo_sift_1M" # index file name
+
+[indexing_parameters]
+m =            [16] 
+ef-construction =          [150]
+metric =       ["euclidean"]
+
+[querying_parameters]
+early-termination = ["distance-adaptive"]
+ef-search = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+lambda = [0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20]

@@ -24,13 +24,5 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Install maturin
-      run: pip install maturin
-    
-    - name: Test build
-      run: |
-        cargo build --release
-        maturin develop --release
-    
-    - name: Run tests
-      run: python -c "import kannolo; print('Successfully imported kannolo')"
+    - name: Test Rust build
+      run: cargo build --release

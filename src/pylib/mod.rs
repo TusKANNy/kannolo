@@ -1,7 +1,7 @@
 use std::f32;
 
 use crate::graph::Graph;
-use crate::hnsw::{HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration};
+use crate::hnsw::{AcornGammaNeighbors, HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration};
 use crate::index::Index;
 use vectorium::IndexSerializer;
 
@@ -135,6 +135,7 @@ enum DensePlainHNSWEnum {
 #[pyclass]
 pub struct DensePlainHNSW {
     inner: DensePlainHNSWEnum,
+    acorn_gamma: Option<AcornGammaNeighbors>,
 }
 
 #[pymethods]
@@ -162,7 +163,7 @@ impl DensePlainHNSW {
             }
         };
 
-        Ok(DensePlainHNSW { inner })
+        Ok(DensePlainHNSW { inner, acorn_gamma: None })
     }
 
     #[staticmethod]
@@ -195,7 +196,7 @@ impl DensePlainHNSW {
             }
         };
 
-        Ok(DensePlainHNSW { inner })
+        Ok(DensePlainHNSW { inner, acorn_gamma: None })
     }
 
     pub fn save(&self, path: &str) -> PyResult<()> {
@@ -224,7 +225,7 @@ impl DensePlainHNSW {
                 DensePlainHNSWEnum::DotProduct(index)
             }
         };
-        Ok(DensePlainHNSW { inner })
+        Ok(DensePlainHNSW { inner, acorn_gamma: None })
     }
 
     pub fn search(
@@ -340,6 +341,87 @@ impl DensePlainHNSW {
             }
             DensePlainHNSWEnum::DotProduct(index) => {
                 let results = index.search_filtered(query_view, k, &search_config, &pred_fn);
+                push_results(results, &mut distances, &mut ids);
+            }
+        }
+
+        let distances_array = PyArray1::from_vec(py, distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
+    }
+
+    /// Pre-compute expanded neighbor lists for ACORN-γ filtered search.
+    ///
+    /// Call this once after building the index. The expanded lists are stored on
+    /// the index object and used by [`search_filtered_gamma`].
+    ///
+    /// # Arguments
+    /// * `gamma` – Expansion factor (≥ 1). Each node stores up to `gamma × M`
+    ///   neighbors (two-hop union, pruned by distance). Larger values improve recall
+    ///   at the cost of memory and build time. A value of 2–4 is a good starting point.
+    pub fn build_acorn_gamma(&mut self, gamma: usize) {
+        let neighbors = match &self.inner {
+            DensePlainHNSWEnum::Euclidean(index) => index.build_acorn_gamma_neighbors(gamma),
+            DensePlainHNSWEnum::DotProduct(index) => index.build_acorn_gamma_neighbors(gamma),
+        };
+        self.acorn_gamma = Some(neighbors);
+    }
+
+    /// ACORN-γ filtered search: returns the `k` approximate nearest neighbors of
+    /// `query` for which `predicate(vector_id)` returns `True`.
+    ///
+    /// Requires [`build_acorn_gamma`] to have been called first.
+    ///
+    /// Unlike ACORN-1 ([`search_filtered`]), the two-hop connectivity is pre-baked
+    /// into the index at build time, so predicate-failing nodes are simply skipped
+    /// during traversal — no on-the-fly two-hop expansion is performed.
+    ///
+    /// # Arguments
+    /// * `query` – 1-D float32 numpy array of dimension `dim`.
+    /// * `k` – Number of nearest neighbors to return.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower).
+    /// * `predicate` – Python callable `(int) -> bool`. Receives a global vector
+    ///   ID (0-based) and must return `True` for eligible vectors.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    pub fn search_filtered_gamma(
+        &self,
+        py: Python<'_>,
+        query: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        predicate: PyObject,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let acorn_gamma = self.acorn_gamma.as_ref().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "ACORN-γ neighbor lists not built. Call `build_acorn_gamma(gamma)` first.",
+            )
+        })?;
+
+        let query_slice = query.as_slice()?;
+        let query_view = DenseVectorView::new(query_slice);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let pred_fn = |id: usize| -> bool {
+            predicate
+                .call1(py, (id as i64,))
+                .and_then(|r| r.extract::<bool>(py))
+                .unwrap_or(false)
+        };
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+
+        match &self.inner {
+            DensePlainHNSWEnum::Euclidean(index) => {
+                let results =
+                    index.search_filtered_gamma(query_view, k, &search_config, acorn_gamma, &pred_fn);
+                push_results(results, &mut distances, &mut ids);
+            }
+            DensePlainHNSWEnum::DotProduct(index) => {
+                let results =
+                    index.search_filtered_gamma(query_view, k, &search_config, acorn_gamma, &pred_fn);
                 push_results(results, &mut distances, &mut ids);
             }
         }

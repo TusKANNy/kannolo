@@ -244,6 +244,18 @@ def search_acorn1(
     return [int(i) for i in ids]
 
 
+def search_acorn_gamma(
+    index,
+    query: np.ndarray,
+    k: int,
+    ef_search: int,
+    predicate,
+) -> list[int]:
+    """ACORN-γ filtered search (pre-expanded neighbor lists, no two-hop at query time)."""
+    _distances, ids = index.search_filtered_gamma(query, k, ef_search, predicate)
+    return [int(i) for i in ids]
+
+
 def run_all_benchmarks(
     index,
     payloads: list[dict],
@@ -254,11 +266,12 @@ def run_all_benchmarks(
     selectivities: list[float],
 ) -> list[dict]:
     """
-    Run post-filter and ACORN-1 on the same queries and return per-method stats.
+    Run post-filter, ACORN-1, and ACORN-γ on the same queries and return per-method stats.
 
     Methods:
       - Post-filter  : HNSW search then discard non-matching results
       - ACORN-1      : two-hop predicate-aware graph traversal
+      - ACORN-γ      : pre-expanded neighbor lists, no two-hop at query time
 
     `selectivities` is pre-computed once by the caller so it is shared across
     multiple ef_search sweeps.
@@ -273,6 +286,10 @@ def run_all_benchmarks(
         (
             f"ACORN-1      (ef={ef_search})",
             lambda q, pred: search_acorn1(index, q, k, ef_search, pred),
+        ),
+        (
+            f"ACORN-gamma  (ef={ef_search})",
+            lambda q, pred: search_acorn_gamma(index, q, k, ef_search, pred),
         ),
     ]
 
@@ -342,6 +359,11 @@ def main() -> None:
     )
     parser.add_argument("--m", type=int, default=16, help="HNSW M parameter.")
     parser.add_argument("--ef-construction", type=int, default=200, help="ef_construction parameter.")
+    parser.add_argument(
+        "--gamma", type=int, nargs="+", default=[2],
+        metavar="G",
+        help="One or more ACORN-γ expansion factors to sweep (e.g. --gamma 2 4 8).",
+    )
     parser.add_argument("--n-queries", type=int, default=50, help="Number of test queries to run.")
     args = parser.parse_args()
 
@@ -398,7 +420,7 @@ def main() -> None:
     print(f"Index built in {build_time:.1f}s\n")
 
     # ------------------------------------------------------------------
-    # Pre-compute selectivities once (shared across all ef sweeps)
+    # Pre-compute selectivities once (shared across all sweeps)
     # ------------------------------------------------------------------
     n_queries = min(args.n_queries, len(tests))
     print(f"Pre-computing selectivities for {n_queries} queries ...")
@@ -409,46 +431,63 @@ def main() -> None:
     print(f"  Mean selectivity: {np.mean(selectivities):.2%}\n")
 
     # ------------------------------------------------------------------
-    # Sweep over ef_search values, reusing the same index each time
+    # Sweep over gamma × ef_search combinations
+    # Each gamma requires rebuilding the expanded neighbor lists once;
+    # all ef_search values for that gamma reuse the same expansion.
     # ------------------------------------------------------------------
+    gamma_values = sorted(set(args.gamma))
     ef_values = sorted(set(args.ef_search))
 
-    all_tables = {}
-    for ef in ef_values:
-        print(f"\n{'─'*60}")
-        print(f"  ef_search = {ef}")
-        print(f"{'─'*60}")
-        all_tables[ef] = run_all_benchmarks(
-            index, payloads, tests,
-            k=args.k,
-            ef_search=ef,
-            n_queries=n_queries,
-            selectivities=selectivities,
-        )
+    # all_tables[(gamma, ef)] = list of per-method stats dicts
+    all_tables: dict[tuple[int, int], list[dict]] = {}
+
+    for gamma in gamma_values:
+        print(f"\n{'═'*60}")
+        print(f"  Building ACORN-γ expanded neighbors (gamma={gamma}) ...")
+        t0 = time.perf_counter()
+        index.build_acorn_gamma(gamma)
+        print(f"  Done in {time.perf_counter() - t0:.1f}s")
+        print(f"{'═'*60}")
+
+        for ef in ef_values:
+            print(f"\n{'─'*60}")
+            print(f"  gamma={gamma}  ef_search={ef}")
+            print(f"{'─'*60}")
+            all_tables[(gamma, ef)] = run_all_benchmarks(
+                index, payloads, tests,
+                k=args.k,
+                ef_search=ef,
+                n_queries=n_queries,
+                selectivities=selectivities,
+            )
 
     # ------------------------------------------------------------------
     # Print consolidated summary table
     # ------------------------------------------------------------------
-    print(f"\n{'='*80}")
+    print(f"\n{'='*88}")
     print(f"Summary  —  k={args.k}  selectivity≈{np.mean(selectivities):.1%}  "
           f"({n_queries} queries)")
-    print(f"{'='*80}")
-    header = f"{'ef':>6}  {'Method':<26}  {'Recall@k':>9}  {'Mean lat':>9}  {'p95 lat':>8}"
+    print(f"{'='*88}")
+    header = f"{'γ':>4}  {'ef':>6}  {'Method':<26}  {'Recall@k':>9}  {'Mean lat':>9}  {'p95 lat':>8}"
     print(header)
-    print("-" * 80)
-    for ef in ef_values:
-        for i, s in enumerate(all_tables[ef]):
-            ef_label = str(ef) if i == 0 else ""
-            row = (
-                f"{ef_label:>6}  "
-                f"{s['label']:<26}  "
-                f"{s['mean_recall']:>9.4f}  "
-                f"{s['mean_latency_ms']:>8.1f}ms  "
-                f"{s['p95_latency_ms']:>7.1f}ms"
-            )
-            print(row)
-        print()
-    print(f"{'='*80}\n")
+    print("-" * 88)
+    for gamma in gamma_values:
+        for ef in ef_values:
+            stats = all_tables[(gamma, ef)]
+            for i, s in enumerate(stats):
+                gamma_label = str(gamma) if i == 0 and ef == ef_values[0] else ""
+                ef_label = str(ef) if i == 0 else ""
+                row = (
+                    f"{gamma_label:>4}  "
+                    f"{ef_label:>6}  "
+                    f"{s['label']:<26}  "
+                    f"{s['mean_recall']:>9.4f}  "
+                    f"{s['mean_latency_ms']:>8.1f}ms  "
+                    f"{s['p95_latency_ms']:>7.1f}ms"
+                )
+                print(row)
+            print()
+    print(f"{'='*88}\n")
 
 
 if __name__ == "__main__":

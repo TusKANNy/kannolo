@@ -442,6 +442,98 @@ pub trait GraphTrait {
 
         top_candidates
     }
+
+    /// ACORN-γ filtered search on a pre-expanded neighbor graph.
+    ///
+    /// Unlike [`acorn_search_candidates_filtered`], this method performs **no two-hop
+    /// expansion** at query time. It is designed for use with [`AcornGammaNeighbors`]
+    /// whose `neighbors()` already returns γ·M pre-expanded candidates (two-hop union,
+    /// pruned by distance). Predicate-failing nodes are simply skipped without further
+    /// expansion — connectivity is guaranteed by the pre-built lists.
+    ///
+    /// # Arguments
+    /// Same as [`acorn_search_candidates_filtered`].
+    #[must_use]
+    fn acorn_gamma_search_filtered<'e, D, F>(
+        &self,
+        dataset: &'e D,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        ef: usize,
+        k: usize,
+        lambda: f32,
+        predicate: &F,
+    ) -> BinaryHeap<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>
+    where
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
+        F: Fn(usize) -> bool,
+    {
+        let mut top_candidates: BinaryHeap<
+            ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        > = BinaryHeap::new();
+
+        let mut candidates: BinaryHeap<
+            Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
+        > = BinaryHeap::with_capacity(ef);
+
+        let mut visited = create_visited_set(dataset.len(), ef);
+
+        // Always add the entry to C (traversal); add to W (results) only if predicate passes.
+        visited.insert(entry_node.vector);
+        candidates.push(Reverse(entry_node));
+        if predicate(self.get_external_id(entry_node.vector)) {
+            top_candidates.push(entry_node);
+        }
+
+        while let Some(Reverse(node)) = candidates.pop() {
+            if top_candidates.len() >= ef.max(k) {
+                let worst_top = top_candidates.peek().unwrap().distance;
+                if !node.distance.is_within_relaxation(&worst_top, lambda) {
+                    break;
+                }
+            }
+
+            for neighbor_local in self.neighbors(node.vector) {
+                if visited.contains(neighbor_local) {
+                    continue;
+                }
+                visited.insert(neighbor_local);
+
+                let ext = self.get_external_id(neighbor_local);
+                let d = query_evaluator.compute_distance(dataset.get(ext as VectorId));
+                let cand = ScoredItemGeneric {
+                    distance: d,
+                    vector: neighbor_local,
+                };
+
+                // Gate on W's current frontier — same threshold as search_candidates_impl.
+                let should_add = if top_candidates.len() < ef {
+                    true
+                } else if let Some(top) = top_candidates.peek() {
+                    cand.distance.is_within_relaxation(&top.distance, lambda)
+                } else {
+                    false
+                };
+
+                if should_add {
+                    // Always add to C (traversal), even if the node fails the predicate —
+                    // non-predicate nodes act as stepping stones through the expanded graph.
+                    candidates.push(Reverse(cand));
+
+                    // Only add to W (results) if the predicate passes.
+                    if predicate(ext) {
+                        top_candidates.push(cand);
+                        if top_candidates.len() > ef {
+                            top_candidates.pop();
+                        }
+                    }
+                }
+            }
+        }
+
+        top_candidates
+    }
 }
 
 #[cfg(test)]
@@ -661,6 +753,111 @@ mod tests {
         results.truncate(k);
 
         // Node 7 is the exact nearest neighbor.
+        assert_eq!(results[0].vector, 7, "expected nearest node 7, got {}", results[0].vector);
+        assert_eq!(results[0].distance, SquaredEuclideanDistance::from(0.0));
+    }
+}
+
+#[cfg(test)]
+mod acorn_gamma_tests {
+    use super::*;
+    use vectorium::DenseDataset;
+    use vectorium::core::dataset::ScoredItemGeneric;
+    use vectorium::core::vector::DenseVectorView;
+    use vectorium::distances::SquaredEuclideanDistance;
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+
+    fn build_line_graph(n: usize, max_degree: usize) -> GrowableGraph {
+        let mut g = GrowableGraph::with_max_degree(max_degree);
+        g.reserve(n);
+        g.advance_inserted_nodes(n);
+        for i in 0..n {
+            let mut nbrs: Vec<usize> = Vec::new();
+            if i > 0 {
+                nbrs.push(i - 1);
+            }
+            if i + 1 < n {
+                nbrs.push(i + 1);
+            }
+            g.push_with_precomputed_reverse_links(None, &nbrs, i, &[]);
+        }
+        g
+    }
+
+    /// All results from `acorn_gamma_search_filtered` must satisfy the predicate.
+    ///
+    /// On a standard (non-pre-expanded) graph, the method behaves like a predicate-aware
+    /// beam search that simply skips non-matching nodes — no two-hop expansion.
+    /// With a line graph and even-IDs predicate, nearest even node to 10.0 is node 10.
+    #[test]
+    fn acorn_gamma_filtered_results_all_pass_predicate() {
+        let n = 20usize;
+        let k = 5usize;
+        let ef = 10usize;
+
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let graph = build_line_graph(n, 4);
+
+        let query_val = [10.0f32];
+        let query = DenseVectorView::new(&query_val);
+        let evaluator = dataset.encoder().query_evaluator(query);
+        let entry_dist = evaluator.compute_distance(dataset.get(10));
+        let entry = ScoredItemGeneric {
+            distance: entry_dist,
+            vector: 10usize,
+        };
+
+        let predicate = |id: usize| id % 2 == 0;
+        let top_heap = graph.acorn_gamma_search_filtered(
+            &dataset,
+            entry,
+            &evaluator,
+            ef,
+            k,
+            0.0,
+            &predicate,
+        );
+
+        assert!(!top_heap.is_empty(), "expected at least one result");
+        for result in &top_heap {
+            assert_eq!(result.vector % 2, 0, "node {} fails even predicate", result.vector);
+        }
+        let best = top_heap.into_sorted_vec().into_iter().next().unwrap();
+        assert_eq!(best.vector, 10, "expected nearest even node 10, got {}", best.vector);
+        assert_eq!(best.distance, SquaredEuclideanDistance::from(0.0));
+    }
+
+    /// With an all-pass predicate, `acorn_gamma_search_filtered` must return the same
+    /// nearest neighbor as the standard unfiltered search.
+    #[test]
+    fn acorn_gamma_filtered_all_pass_matches_unfiltered_nearest() {
+        let n = 20usize;
+        let ef = 8usize;
+        let k = 3usize;
+
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let graph = build_line_graph(n, 4);
+
+        let query_val = [7.0f32];
+        let query = DenseVectorView::new(&query_val);
+        let evaluator = dataset.encoder().query_evaluator(query);
+        let entry_dist = evaluator.compute_distance(dataset.get(7));
+        let entry = ScoredItemGeneric {
+            distance: entry_dist,
+            vector: 7usize,
+        };
+
+        let all_pass = |_: usize| true;
+        let top_heap =
+            graph.acorn_gamma_search_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &all_pass);
+
+        let mut results = top_heap.into_sorted_vec();
+        results.truncate(k);
+
         assert_eq!(results[0].vector, 7, "expected nearest node 7, got {}", results[0].vector);
         assert_eq!(results[0].distance, SquaredEuclideanDistance::from(0.0));
     }

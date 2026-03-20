@@ -96,7 +96,7 @@ RUSTFLAGS="-C target-cpu=native" maturin develop --release
 
 5. **Verify installation:**
 ```bash
-python -c "import kannolo; print(kannolo.__version__)"
+python -c "import kannolo; print('Successfully installed kannolo!')"
 ```
 
 ---

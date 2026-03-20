@@ -1,0 +1,34 @@
+name: Test Linux Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Test Rust build (baseline x86-64, no AVX)
+      run: RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-avx,-avx2" cargo build --release
+    
+    - name: Test Rust build (baseline x86-64)
+      run: cargo build --release
+    
+    - name: Test Rust build (native optimization)
+      run: RUSTFLAGS="-C target-cpu=native" cargo build --release

@@ -28,34 +28,79 @@
 kANNolo is a research-oriented library for Approximate Nearest Neighbors (ANN) search written in Rust 🦀. It is explicitly designed to combine usability with performance effectively. Designed with modularity and researchers in mind, kANNolo makes prototyping new ANN search algorithms and data structures easy. kANNolo supports both dense and sparse embeddings seamlessly. It implements the HNSW graph index and Product Quantization.
 
 
-### Python - Maximum performance
-If you want to compile the package optimized for your CPU, you need to install the package from the Source Distribution.
-In order to do that you need to have the Rust toolchain installed. Use the following commands:
-#### Prerequisites
-Install Rust (via `rustup`):
+## Python Installation
+
+### Quick start (prebuilt wheels)
+For most users, this is the easiest option:
+```bash
+pip install kannolo
+```
+If a compatible wheel exists for your platform, `pip` will download and install it directly without compilation.
+If no compatible wheel exists, `pip` will automatically compile from source.
+
+### Building from source (maximum performance)
+For maximum performance optimized to your CPU, build from source. Choose one of the two approaches below:
+
+#### Shared Prerequisites
+Both building approaches require Rust and nightly:
+
+1. **Install Rust** (via `rustup`):
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Activate nightly:
+2. **Activate nightly:**
 ```bash
 rustup install nightly
 rustup default nightly
 ```
 
-#### Installation
+#### Approach 1: Build from PyPI source
+Compile and install directly from PyPI with CPU optimization:
 ```bash
 RUSTFLAGS="-C target-cpu=native" pip install --no-binary :all: kannolo
 ```
-This will compile the Rust code tailored for your machine, providing maximum performance.
+This installs the package in your system/virtual environment site-packages.
 
-### Python - Easy installation
-If you are not interested in obtaining the maximum performance, you can install the package from a prebuilt Wheel.
-If a compatible wheel exists for your platform, `pip` will download and install it directly, avoiding the compilation phase.
-If no compatible wheel exists, pip will download the source distribution and attempt to compile it using the Rust compiler (rustc).
+#### Approach 2: Build from GitHub (development mode)
+Clone the repository and build for development/modification:
+
+1. **Clone and prepare:**
 ```bash
-pip install kannolo
+git clone https://github.com/TusKANNy/kannolo.git
+cd kannolo
 ```
+
+2. **Create a virtual environment** (recommended):
+```bash
+python3 -m venv ./venv
+source ./venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+Alternatively, use `conda`:
+```bash
+conda create -n kannolo python=3.11
+conda activate kannolo
+```
+
+3. **Install maturin:**
+```bash
+pip install maturin
+```
+
+4. **Build and install in editable mode:**
+```bash
+RUSTFLAGS="-C target-cpu=native" maturin develop --release
+```
+
+**Why use editable mode?** Changes to Python code take effect immediately without reinstalling. Perfect for development and prototyping.
+
+5. **Verify installation:**
+```bash
+python -c "import kannolo; print(kannolo.__version__)"
+```
+
+---
+
 
 ### Rust 
 

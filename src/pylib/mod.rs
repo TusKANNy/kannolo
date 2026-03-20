@@ -296,6 +296,58 @@ impl DensePlainHNSW {
             Ok((distances_array.into(), ids_array.into()))
         })
     }
+
+    /// ACORN-1 filtered search: returns the `k` approximate nearest neighbors
+    /// of `query` for which `predicate(vector_id)` returns `True`.
+    ///
+    /// The standard HNSW index is used as-is; no rebuilding is required.
+    ///
+    /// # Arguments
+    /// * `query` – 1-D float32 numpy array of dimension `dim`.
+    /// * `k` – Number of nearest neighbors to return.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower).
+    /// * `predicate` – Python callable `(int) -> bool`. Receives a global vector
+    ///   ID (0-based) and must return `True` for vectors eligible as results.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    pub fn search_filtered(
+        &self,
+        py: Python<'_>,
+        query: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        predicate: PyObject,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let query_slice = query.as_slice()?;
+        let query_view = DenseVectorView::new(query_slice);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+
+        let pred_fn = |id: usize| -> bool {
+            predicate
+                .call1(py, (id as i64,))
+                .and_then(|r| r.extract::<bool>(py))
+                .unwrap_or(false)
+        };
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+
+        match &self.inner {
+            DensePlainHNSWEnum::Euclidean(index) => {
+                let results = index.search_filtered(query_view, k, &search_config, &pred_fn);
+                push_results(results, &mut distances, &mut ids);
+            }
+            DensePlainHNSWEnum::DotProduct(index) => {
+                let results = index.search_filtered(query_view, k, &search_config, &pred_fn);
+                push_results(results, &mut distances, &mut ids);
+            }
+        }
+
+        let distances_array = PyArray1::from_vec(py, distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
+    }
 }
 
 // Dense plain f16

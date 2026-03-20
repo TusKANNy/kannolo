@@ -24,6 +24,9 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
     
+    - name: Install maturin
+      run: pip install maturin
+    
     - name: Test build
       run: |
         cargo build --release

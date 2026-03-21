@@ -4,13 +4,72 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::index::Index;
 use vectorium::IndexSerializer;
 use vectorium::core::dataset::{ConvertFrom, ConvertInto, ScoredItemGeneric};
+use vectorium::distances::Distance;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
+
+// ---------------------------------------------------------------------------
+// ACORN-γ pre-expanded neighbor structure
+// ---------------------------------------------------------------------------
+
+/// Pre-expanded ground-level neighbor lists for ACORN-γ filtered ANN search.
+///
+/// Built from a completed HNSW index by expanding each node's neighborhood to
+/// include two-hop candidates (neighbors of neighbors), scoring them by distance
+/// to that node, and retaining the top γ·M closest.
+///
+/// At search time, standard beam search is run over these larger lists; predicate-
+/// failing nodes are skipped without further expansion, because the two-hop
+/// connectivity is already embedded in the pre-built lists.
+///
+/// Use [`HNSW::build_acorn_gamma_neighbors`] to construct this.
+pub struct AcornGammaNeighbors {
+    /// `neighbors[v]` holds local node IDs of v's expanded neighborhood,
+    /// sorted by ascending distance to v.
+    neighbors: Box<[Box<[usize]>]>,
+    gamma_m: usize,
+}
+
+impl GraphTrait for AcornGammaNeighbors {
+    #[inline]
+    fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
+        self.neighbors[u].iter().copied()
+    }
+
+    #[inline]
+    fn n_nodes(&self) -> usize {
+        self.neighbors.len()
+    }
+
+    #[inline]
+    fn n_edges(&self) -> usize {
+        self.neighbors.iter().map(|n| n.len()).sum()
+    }
+
+    #[inline]
+    fn max_degree(&self) -> usize {
+        self.gamma_m
+    }
+
+    /// Ground-level nodes use identity mapping (local ID == global ID).
+    #[inline]
+    fn get_external_id(&self, id: usize) -> usize {
+        id
+    }
+
+    fn get_space_usage_bytes(&self) -> usize {
+        self.neighbors
+            .iter()
+            .map(|n| n.len() * std::mem::size_of::<usize>())
+            .sum()
+    }
+}
 
 /// A `HNSW` struct represents a Hierarchical Navigable Small World (HNSW) graph structure that is used
 /// for approximate nearest neighbor (ANN) search.
@@ -264,6 +323,253 @@ where
             num_neighbors_per_vec,
             entry_point,
         }
+    }
+}
+
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset + Sync,
+    <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
+    G: GraphTrait + From<GrowableGraph>,
+{
+    /// Performs ACORN-1 filtered approximate nearest-neighbor search.
+    ///
+    /// Returns the `k` approximate nearest neighbors of `query` that satisfy
+    /// `predicate(vector_id) == true`. Unlike a simple post-filter, the predicate
+    /// is applied *during* graph traversal: non-matching nodes are skipped and their
+    /// neighbors are inspected via a two-hop expansion to maintain connectivity in
+    /// the filtered sub-graph.
+    ///
+    /// The HNSW index does **not** need to be rebuilt; this method works on any
+    /// standard HNSW index (ACORN-1 variant).
+    ///
+    /// # Arguments
+    /// * `query` – The query vector.
+    /// * `k` – Number of nearest neighbors to return.
+    /// * `search_params` – Search configuration (`ef_search`, early termination).
+    /// * `predicate` – `Fn(vector_id: usize) -> bool`. Called with the global
+    ///   (dataset-level) vector ID; only vectors for which this returns `true`
+    ///   will appear in results.
+    pub fn search_filtered<'q, F>(
+        &'q self,
+        query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
+        k: usize,
+        search_params: &HNSWSearchConfiguration,
+        predicate: F,
+    ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>>
+    where
+        F: Fn(usize) -> bool,
+    {
+        let query_eval = self.dataset.encoder().query_evaluator(query);
+        let num_levels = self.levels.len();
+
+        // --- Stage 1: upper levels (unfiltered greedy search, same as standard HNSW) ---
+        let entry_graph = if num_levels > 1 {
+            &self.levels[0]
+        } else {
+            &self.levels[num_levels - 1]
+        };
+        let entry_external_id = entry_graph.get_external_id(self.entry_point) as VectorId;
+        let entry_distance = query_eval.compute_distance(self.dataset.get(entry_external_id));
+        let mut entry_node = ScoredItemGeneric {
+            distance: entry_distance,
+            vector: self.entry_point,
+        };
+        if num_levels > 1 {
+            for level_graph in &self.levels[..num_levels - 1] {
+                entry_node =
+                    level_graph.greedy_search_nearest(&self.dataset, &query_eval, entry_node);
+            }
+        }
+
+        // --- Stage 2: ground level (ACORN-1 filtered search) ---
+        let ground_graph = &self.levels[num_levels - 1];
+        let entry_global_id = if num_levels > 1 {
+            self.level1_to_level0_mapping[entry_node.vector]
+        } else {
+            self.entry_point
+        };
+        let ground_entry_node = ScoredItemGeneric {
+            distance: entry_node.distance,
+            vector: entry_global_id,
+        };
+
+        let ef = search_params.ef_search.max(k);
+        let lambda = search_params.early_termination.lambda();
+        let top_heap = ground_graph.acorn_search_candidates_filtered(
+            &self.dataset,
+            ground_entry_node,
+            &query_eval,
+            ef,
+            k,
+            lambda,
+            &predicate,
+        );
+
+        let mut topk = top_heap.into_sorted_vec();
+        topk.truncate(k);
+        topk.drain(..)
+            .map(|candidate| vectorium::dataset::ScoredVector {
+                distance: candidate.distance,
+                vector: candidate.vector as VectorId,
+            })
+            .collect()
+    }
+}
+
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset + Sync,
+    <D::Encoder as VectorEncoder>::Distance: Distance,
+    G: GraphTrait + From<GrowableGraph>,
+{
+    /// Build pre-expanded neighbor lists for ACORN-γ filtered search.
+    ///
+    /// For each ground-level node `v`, the two-hop neighborhood (direct neighbors
+    /// and their neighbors) is scored by distance to `v` and pruned to `gamma * M`
+    /// entries, sorted closest-first.
+    ///
+    /// Call this **once** after the standard HNSW build, then pass the result to
+    /// [`search_filtered_gamma`] for fast predicate-aware search.
+    ///
+    /// # Arguments
+    /// * `gamma` – Expansion factor (≥ 1). Each node stores up to `gamma * M`
+    ///   neighbors. Larger values improve recall at the cost of memory and build time.
+    pub fn build_acorn_gamma_neighbors(&self, gamma: usize) -> AcornGammaNeighbors {
+        let n = self.dataset.len();
+        let m = self.num_neighbors_per_vec;
+        let gamma_m = (gamma * m).max(1);
+        let ground_graph = &self.levels[self.levels.len() - 1];
+
+        let mut expanded: Vec<Box<[usize]>> = Vec::with_capacity(n);
+
+        for v in 0..n {
+            // Collect the two-hop neighborhood, excluding v itself.
+            let mut seen: HashSet<usize> = HashSet::new();
+            seen.insert(v);
+            let mut candidates: Vec<usize> = Vec::new();
+
+            for u in ground_graph.neighbors(v) {
+                if seen.insert(u) {
+                    candidates.push(u);
+                }
+                for w in ground_graph.neighbors(u) {
+                    if seen.insert(w) {
+                        candidates.push(w);
+                    }
+                }
+            }
+
+            // Score each candidate by distance to v.
+            let v_vec = self.dataset.get(v as VectorId);
+            let eval = self.dataset.encoder().vector_evaluator(v_vec);
+
+            let mut scored: Vec<(<D::Encoder as VectorEncoder>::Distance, usize)> = candidates
+                .into_iter()
+                .map(|u| {
+                    let d = eval.compute_distance(self.dataset.get(u as VectorId));
+                    (d, u)
+                })
+                .collect();
+
+            // Sort ascending (closest first), truncate to gamma * M.
+            scored.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            scored.truncate(gamma_m);
+
+            expanded.push(
+                scored
+                    .into_iter()
+                    .map(|(_, u)| u)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+        }
+
+        AcornGammaNeighbors {
+            neighbors: expanded.into_boxed_slice(),
+            gamma_m,
+        }
+    }
+
+    /// ACORN-γ filtered approximate nearest-neighbor search.
+    ///
+    /// Unlike ACORN-1 ([`search_filtered`]), the two-hop expansion is
+    /// **pre-computed** at index construction time (via
+    /// [`build_acorn_gamma_neighbors`]). At search time, standard beam search
+    /// runs over the pre-expanded neighbor lists; predicate-failing nodes are
+    /// simply skipped — no on-the-fly two-hop expansion is needed.
+    ///
+    /// # Arguments
+    /// * `query` – The query vector.
+    /// * `k` – Number of nearest neighbors to return.
+    /// * `search_params` – Search configuration (`ef_search`, early termination).
+    /// * `acorn_gamma` – Pre-built expanded neighbor lists (from `build_acorn_gamma_neighbors`).
+    /// * `predicate` – `Fn(vector_id: usize) -> bool`. Only vectors satisfying
+    ///   this will appear in the results.
+    pub fn search_filtered_gamma<'q, F>(
+        &'q self,
+        query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
+        k: usize,
+        search_params: &HNSWSearchConfiguration,
+        acorn_gamma: &AcornGammaNeighbors,
+        predicate: F,
+    ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>>
+    where
+        F: Fn(usize) -> bool,
+    {
+        let query_eval = self.dataset.encoder().query_evaluator(query);
+        let num_levels = self.levels.len();
+
+        // --- Stage 1: upper levels (unfiltered greedy search, same as ACORN-1) ---
+        let entry_graph = if num_levels > 1 {
+            &self.levels[0]
+        } else {
+            &self.levels[num_levels - 1]
+        };
+        let entry_external_id = entry_graph.get_external_id(self.entry_point) as VectorId;
+        let entry_distance = query_eval.compute_distance(self.dataset.get(entry_external_id));
+        let mut entry_node = ScoredItemGeneric {
+            distance: entry_distance,
+            vector: self.entry_point,
+        };
+        if num_levels > 1 {
+            for level_graph in &self.levels[..num_levels - 1] {
+                entry_node =
+                    level_graph.greedy_search_nearest(&self.dataset, &query_eval, entry_node);
+            }
+        }
+
+        // --- Stage 2: ground level (ACORN-γ search on pre-expanded neighbor lists) ---
+        let entry_global_id = if num_levels > 1 {
+            self.level1_to_level0_mapping[entry_node.vector]
+        } else {
+            self.entry_point
+        };
+        let ground_entry_node = ScoredItemGeneric {
+            distance: entry_node.distance,
+            vector: entry_global_id,
+        };
+
+        let ef = search_params.ef_search.max(k);
+        let lambda = search_params.early_termination.lambda();
+        let top_heap = acorn_gamma.acorn_gamma_search_filtered(
+            &self.dataset,
+            ground_entry_node,
+            &query_eval,
+            ef,
+            k,
+            lambda,
+            &predicate,
+        );
+
+        let mut topk = top_heap.into_sorted_vec();
+        topk.truncate(k);
+        topk.drain(..)
+            .map(|candidate| vectorium::dataset::ScoredVector {
+                distance: candidate.distance,
+                vector: candidate.vector as VectorId,
+            })
+            .collect()
     }
 }
 
@@ -1035,5 +1341,223 @@ mod convert_dataset_tests {
 
         assert!(!results.is_empty());
         assert!(results.len() <= 5);
+    }
+}
+
+#[cfg(test)]
+mod acorn_search_tests {
+    use super::*;
+    use crate::graph::Graph;
+    use crate::index::Index;
+    use vectorium::distances::SquaredEuclideanDistance;
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+    use vectorium::vector::DenseVectorView;
+    use vectorium::{DenseDataset, PlainDenseDataset};
+
+    /// Build a small 1-D HNSW for testing.
+    /// Vectors are [0.0], [1.0], ..., [(n-1).0].
+    fn build_1d_hnsw(n: usize) -> HNSW<PlainDenseDataset<f32, SquaredEuclideanDistance>, Graph> {
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(50);
+        HNSW::build_index(dataset, &config)
+    }
+
+    /// Every result of `search_filtered` must pass the predicate.
+    #[test]
+    fn search_filtered_all_results_pass_predicate() {
+        let hnsw = build_1d_hnsw(100);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+
+        let query_val = [50.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        // Only even IDs allowed.
+        let results = hnsw.search_filtered(query, 10, &search_config, |id| id % 2 == 0);
+
+        assert!(!results.is_empty());
+        for r in &results {
+            assert_eq!(r.vector % 2, 0, "result {} does not pass even predicate", r.vector);
+        }
+    }
+
+    /// The nearest filtered result should be the closest vector satisfying the predicate.
+    ///
+    /// Query = 50.5.  Predicate: id divisible by 3.
+    /// Nearest divisible-by-3 IDs to 50.5 are 51 (d=0.25), 48 (d=6.25), 54 (d=12.25) …
+    #[test]
+    fn search_filtered_finds_nearest_predicate_passing_neighbors() {
+        let hnsw = build_1d_hnsw(100);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(100);
+
+        let query_val = [50.5f32];
+        let query = DenseVectorView::new(&query_val);
+
+        let results = hnsw.search_filtered(query, 5, &search_config, |id| id % 3 == 0);
+
+        assert!(!results.is_empty());
+        for r in &results {
+            assert_eq!(r.vector % 3, 0, "result {} is not divisible by 3", r.vector);
+        }
+        // The closest divisible-by-3 vector to 50.5 is 51.
+        assert_eq!(
+            results[0].vector, 51,
+            "expected nearest filtered result 51, got {}",
+            results[0].vector
+        );
+    }
+
+    /// With a predicate that accepts every vector, filtered search must return at
+    /// most `k` results and the nearest neighbor must match the unfiltered search.
+    #[test]
+    fn search_filtered_full_predicate_matches_unfiltered_nearest() {
+        let hnsw = build_1d_hnsw(100);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+        let k = 5;
+
+        let query_val = [30.0f32];
+        let query_filtered = DenseVectorView::new(&query_val);
+        let query_plain = DenseVectorView::new(&query_val);
+
+        let filtered = hnsw.search_filtered(query_filtered, k, &search_config, |_| true);
+        let plain = hnsw.search(query_plain, k, &search_config);
+
+        assert_eq!(filtered.len(), plain.len());
+        // Both searches must agree on the nearest neighbor.
+        assert_eq!(
+            filtered[0].vector, plain[0].vector,
+            "nearest neighbor mismatch: filtered={}, plain={}",
+            filtered[0].vector, plain[0].vector
+        );
+    }
+
+    /// When the predicate is very selective (only 1 vector passes), filtered search
+    /// must still return exactly that vector — provided the query is placed near it
+    /// so the HNSW entry point lands in the same neighbourhood.
+    #[test]
+    fn search_filtered_single_eligible_vector() {
+        let hnsw = build_1d_hnsw(50);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+
+        // Query near 42 so the HNSW navigates to that neighbourhood.
+        // The two-hop expansion from nearby nodes will reach node 42.
+        let query_val = [42.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        // Only vector 42 passes the predicate.
+        let results = hnsw.search_filtered(query, 5, &search_config, |id| id == 42);
+
+        assert_eq!(results.len(), 1, "expected exactly 1 result, got {}", results.len());
+        assert_eq!(results[0].vector, 42);
+    }
+
+    /// When no vector satisfies the predicate, the result must be empty.
+    #[test]
+    fn search_filtered_no_eligible_vectors_returns_empty() {
+        let hnsw = build_1d_hnsw(50);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+
+        let query_val = [25.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        let results = hnsw.search_filtered(query, 5, &search_config, |_| false);
+        assert!(results.is_empty(), "expected empty results when predicate always returns false");
+    }
+}
+
+#[cfg(test)]
+mod acorn_gamma_search_tests {
+    use super::*;
+    use crate::graph::Graph;
+    use crate::index::Index;
+    use vectorium::distances::SquaredEuclideanDistance;
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+    use vectorium::vector::DenseVectorView;
+    use vectorium::{DenseDataset, PlainDenseDataset};
+
+    fn build_1d_hnsw(n: usize) -> HNSW<PlainDenseDataset<f32, SquaredEuclideanDistance>, Graph> {
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(50);
+        HNSW::build_index(dataset, &config)
+    }
+
+    /// `build_acorn_gamma_neighbors` with gamma=2 must produce at least as many
+    /// neighbors per node as the original ground graph (two-hop union is a superset).
+    #[test]
+    fn build_acorn_gamma_neighbors_expands_neighbor_lists() {
+        let hnsw = build_1d_hnsw(50);
+        let acorn_gamma = hnsw.build_acorn_gamma_neighbors(2);
+
+        let n = 50usize;
+        assert_eq!(acorn_gamma.n_nodes(), n);
+
+        let ground = &hnsw.levels[hnsw.levels.len() - 1];
+        for v in 0..n {
+            let orig_deg = ground.neighbors(v).count();
+            let expanded_deg = acorn_gamma.neighbors(v).count();
+            // Two-hop union is at least as large as one-hop.
+            assert!(
+                expanded_deg >= orig_deg,
+                "node {v}: expanded {expanded_deg} < original {orig_deg}"
+            );
+        }
+    }
+
+    /// Every result of `search_filtered_gamma` must pass the predicate.
+    #[test]
+    fn search_filtered_gamma_all_results_pass_predicate() {
+        let hnsw = build_1d_hnsw(100);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+        let acorn_gamma = hnsw.build_acorn_gamma_neighbors(4);
+
+        let query_val = [50.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        let results =
+            hnsw.search_filtered_gamma(query, 10, &search_config, &acorn_gamma, |id| id % 2 == 0);
+
+        assert!(!results.is_empty());
+        for r in &results {
+            assert_eq!(r.vector % 2, 0, "node {} fails even predicate", r.vector);
+        }
+    }
+
+    /// With an all-pass predicate, `search_filtered_gamma` must find the true nearest.
+    #[test]
+    fn search_filtered_gamma_full_predicate_finds_nearest() {
+        let hnsw = build_1d_hnsw(100);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+        let acorn_gamma = hnsw.build_acorn_gamma_neighbors(4);
+
+        let query_val = [37.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        let results =
+            hnsw.search_filtered_gamma(query, 1, &search_config, &acorn_gamma, |_| true);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].vector, 37, "nearest to 37.0 should be node 37");
+    }
+
+    /// When no vector satisfies the predicate, the result must be empty.
+    #[test]
+    fn search_filtered_gamma_no_eligible_vectors_returns_empty() {
+        let hnsw = build_1d_hnsw(50);
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+        let acorn_gamma = hnsw.build_acorn_gamma_neighbors(2);
+
+        let query_val = [25.0f32];
+        let query = DenseVectorView::new(&query_val);
+
+        let results =
+            hnsw.search_filtered_gamma(query, 5, &search_config, &acorn_gamma, |_| false);
+        assert!(results.is_empty());
     }
 }

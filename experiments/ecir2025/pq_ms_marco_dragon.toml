@@ -20,7 +20,7 @@ metric =        "" # ir_measures metric (e.g. RR)
 
 [folder] 
 data =          "~/knn_datasets/dense_datasets/sift_1M/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # data base path
-index =         ""~/knn_indexes/dense_datasets/sift_1M/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # index input path
+index =         "~/knn_indexes/dense_datasets/sift_1M/knn_datasets/dense_datasets/msmarco_v1_passage/dragon" # index input path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 

@@ -668,17 +668,26 @@ mod tests {
         };
 
         let predicate = |id: usize| id % 2 == 0;
-        let top_heap =
-            graph.acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
+        let top_heap = graph
+            .acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
 
         assert!(!top_heap.is_empty(), "expected at least one result");
         for result in &top_heap {
-            assert_eq!(result.vector % 2, 0, "node {} fails even predicate", result.vector);
+            assert_eq!(
+                result.vector % 2,
+                0,
+                "node {} fails even predicate",
+                result.vector
+            );
         }
 
         // The nearest even node to 10.0 is node 10 itself (distance 0).
         let best = top_heap.into_sorted_vec().into_iter().next().unwrap();
-        assert_eq!(best.vector, 10, "expected nearest even node 10, got {}", best.vector);
+        assert_eq!(
+            best.vector, 10,
+            "expected nearest even node 10, got {}",
+            best.vector
+        );
         assert_eq!(best.distance, SquaredEuclideanDistance::from(0.0));
     }
 
@@ -714,12 +723,19 @@ mod tests {
         };
 
         let predicate = |id: usize| id >= 2;
-        let top_heap =
-            graph.acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
+        let top_heap = graph
+            .acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
 
-        assert!(!top_heap.is_empty(), "expected results even when entry and its direct neighbors fail predicate");
+        assert!(
+            !top_heap.is_empty(),
+            "expected results even when entry and its direct neighbors fail predicate"
+        );
         for result in &top_heap {
-            assert!(result.vector >= 2, "node {} fails id>=2 predicate", result.vector);
+            assert!(
+                result.vector >= 2,
+                "node {} fails id>=2 predicate",
+                result.vector
+            );
         }
     }
 
@@ -746,14 +762,18 @@ mod tests {
         };
 
         let all_pass = |_: usize| true;
-        let top_heap =
-            graph.acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &all_pass);
+        let top_heap = graph
+            .acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &all_pass);
 
         let mut results = top_heap.into_sorted_vec();
         results.truncate(k);
 
         // Node 7 is the exact nearest neighbor.
-        assert_eq!(results[0].vector, 7, "expected nearest node 7, got {}", results[0].vector);
+        assert_eq!(
+            results[0].vector, 7,
+            "expected nearest node 7, got {}",
+            results[0].vector
+        );
         assert_eq!(results[0].distance, SquaredEuclideanDistance::from(0.0));
     }
 }
@@ -810,22 +830,24 @@ mod acorn_gamma_tests {
         };
 
         let predicate = |id: usize| id % 2 == 0;
-        let top_heap = graph.acorn_gamma_search_filtered(
-            &dataset,
-            entry,
-            &evaluator,
-            ef,
-            k,
-            0.0,
-            &predicate,
-        );
+        let top_heap =
+            graph.acorn_gamma_search_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
 
         assert!(!top_heap.is_empty(), "expected at least one result");
         for result in &top_heap {
-            assert_eq!(result.vector % 2, 0, "node {} fails even predicate", result.vector);
+            assert_eq!(
+                result.vector % 2,
+                0,
+                "node {} fails even predicate",
+                result.vector
+            );
         }
         let best = top_heap.into_sorted_vec().into_iter().next().unwrap();
-        assert_eq!(best.vector, 10, "expected nearest even node 10, got {}", best.vector);
+        assert_eq!(
+            best.vector, 10,
+            "expected nearest even node 10, got {}",
+            best.vector
+        );
         assert_eq!(best.distance, SquaredEuclideanDistance::from(0.0));
     }
 
@@ -858,7 +880,11 @@ mod acorn_gamma_tests {
         let mut results = top_heap.into_sorted_vec();
         results.truncate(k);
 
-        assert_eq!(results[0].vector, 7, "expected nearest node 7, got {}", results[0].vector);
+        assert_eq!(
+            results[0].vector, 7,
+            "expected nearest node 7, got {}",
+            results[0].vector
+        );
         assert_eq!(results[0].distance, SquaredEuclideanDistance::from(0.0));
     }
 }

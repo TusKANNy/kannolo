@@ -2,8 +2,8 @@ use std::f32;
 
 use crate::graph::Graph;
 use crate::hnsw::{AcornGammaNeighbors, HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration};
-use crate::index::Index;
 use vectorium::IndexSerializer;
+use vectorium::core::index::Index;
 
 use half::f16;
 use numpy::{PyArray1, PyReadonlyArray1};
@@ -163,7 +163,10 @@ impl DensePlainHNSW {
             }
         };
 
-        Ok(DensePlainHNSW { inner, acorn_gamma: None })
+        Ok(DensePlainHNSW {
+            inner,
+            acorn_gamma: None,
+        })
     }
 
     #[staticmethod]
@@ -196,7 +199,10 @@ impl DensePlainHNSW {
             }
         };
 
-        Ok(DensePlainHNSW { inner, acorn_gamma: None })
+        Ok(DensePlainHNSW {
+            inner,
+            acorn_gamma: None,
+        })
     }
 
     pub fn save(&self, path: &str) -> PyResult<()> {
@@ -225,7 +231,10 @@ impl DensePlainHNSW {
                 DensePlainHNSWEnum::DotProduct(index)
             }
         };
-        Ok(DensePlainHNSW { inner, acorn_gamma: None })
+        Ok(DensePlainHNSW {
+            inner,
+            acorn_gamma: None,
+        })
     }
 
     pub fn search(
@@ -415,13 +424,23 @@ impl DensePlainHNSW {
 
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
-                let results =
-                    index.search_filtered_gamma(query_view, k, &search_config, acorn_gamma, &pred_fn);
+                let results = index.search_filtered_gamma(
+                    query_view,
+                    k,
+                    &search_config,
+                    acorn_gamma,
+                    &pred_fn,
+                );
                 push_results(results, &mut distances, &mut ids);
             }
             DensePlainHNSWEnum::DotProduct(index) => {
-                let results =
-                    index.search_filtered_gamma(query_view, k, &search_config, acorn_gamma, &pred_fn);
+                let results = index.search_filtered_gamma(
+                    query_view,
+                    k,
+                    &search_config,
+                    acorn_gamma,
+                    &pred_fn,
+                );
                 push_results(results, &mut distances, &mut ids);
             }
         }

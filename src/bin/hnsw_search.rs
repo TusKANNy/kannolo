@@ -7,8 +7,8 @@ use std::fs::File;
 
 use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
 use kannolo::hnsw::{EarlyTerminationStrategy, HNSW, HNSWSearchConfiguration};
-use kannolo::index::Index;
 use vectorium::IndexSerializer;
+use vectorium::core::index::Index;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
 use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;

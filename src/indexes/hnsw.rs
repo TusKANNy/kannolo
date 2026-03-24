@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::graph::{GraphTrait, GrowableGraph};
-use crate::index::Index;
 use vectorium::IndexSerializer;
 use vectorium::core::dataset::{ConvertFrom, ConvertInto, ScoredItemGeneric};
+use vectorium::core::index::Index;
 use vectorium::distances::Distance;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
@@ -1232,7 +1232,6 @@ where
 mod convert_dataset_tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::index::Index;
     use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
     use vectorium::{
         DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, PackedSparseDataset, PlainSparseDataset,
@@ -1348,7 +1347,6 @@ mod convert_dataset_tests {
 mod acorn_search_tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::index::Index;
     use vectorium::distances::SquaredEuclideanDistance;
     use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
     use vectorium::vector::DenseVectorView;
@@ -1380,7 +1378,12 @@ mod acorn_search_tests {
 
         assert!(!results.is_empty());
         for r in &results {
-            assert_eq!(r.vector % 2, 0, "result {} does not pass even predicate", r.vector);
+            assert_eq!(
+                r.vector % 2,
+                0,
+                "result {} does not pass even predicate",
+                r.vector
+            );
         }
     }
 
@@ -1450,7 +1453,12 @@ mod acorn_search_tests {
         // Only vector 42 passes the predicate.
         let results = hnsw.search_filtered(query, 5, &search_config, |id| id == 42);
 
-        assert_eq!(results.len(), 1, "expected exactly 1 result, got {}", results.len());
+        assert_eq!(
+            results.len(),
+            1,
+            "expected exactly 1 result, got {}",
+            results.len()
+        );
         assert_eq!(results[0].vector, 42);
     }
 
@@ -1464,7 +1472,10 @@ mod acorn_search_tests {
         let query = DenseVectorView::new(&query_val);
 
         let results = hnsw.search_filtered(query, 5, &search_config, |_| false);
-        assert!(results.is_empty(), "expected empty results when predicate always returns false");
+        assert!(
+            results.is_empty(),
+            "expected empty results when predicate always returns false"
+        );
     }
 }
 
@@ -1472,7 +1483,6 @@ mod acorn_search_tests {
 mod acorn_gamma_search_tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::index::Index;
     use vectorium::distances::SquaredEuclideanDistance;
     use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
     use vectorium::vector::DenseVectorView;
@@ -1539,8 +1549,7 @@ mod acorn_gamma_search_tests {
         let query_val = [37.0f32];
         let query = DenseVectorView::new(&query_val);
 
-        let results =
-            hnsw.search_filtered_gamma(query, 1, &search_config, &acorn_gamma, |_| true);
+        let results = hnsw.search_filtered_gamma(query, 1, &search_config, &acorn_gamma, |_| true);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].vector, 37, "nearest to 37.0 should be node 37");
@@ -1556,8 +1565,7 @@ mod acorn_gamma_search_tests {
         let query_val = [25.0f32];
         let query = DenseVectorView::new(&query_val);
 
-        let results =
-            hnsw.search_filtered_gamma(query, 5, &search_config, &acorn_gamma, |_| false);
+        let results = hnsw.search_filtered_gamma(query, 5, &search_config, &acorn_gamma, |_| false);
         assert!(results.is_empty());
     }
 }

@@ -1,0 +1,96 @@
+# Two-stage retrieval: sparse SPLADE CoCondenser HNSW first-stage + two-level PQ multivector reranking on MS-MARCOv1
+# Configuration for sparse_multivec_rerank_search binary (unified binary supporting plain and two-levels)
+name =          "rerank_sparse_cocondenser_hnsw_two_levels_pq"
+title =         "Sparse HNSW + Two-Level PQ Multivector Reranking on MS-MARCO v1"
+description =   "Two-stage search: sparse HNSW candidates retrieval + two-level PQ multivector reranking on MS-MARCO v1 passage"
+dataset =       "MS-MARCO v1 Passage"
+dataset-type =   "sparse"    # Dataset type: "dense" or "sparse"
+component-type = "u16"
+value-type =     "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+build-command = "./target/release/hnsw_build"  # Sparse HNSW index building
+query-command = "./target/release/hnsw_rerank_search"  # Two-stage sparse + multivec search (unified binary)
+graph-type = "standard"
+
+[settings]
+k =             10
+num-runs       =        1
+NUMA =        "numactl --physcpubind='0-15' --localalloc"
+build =         false
+metric =        "RR@10"  # Evaluation metric
+
+[folder]
+data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data"  # Sparse dataset for first-stage index
+index =         "~/knn_indexes/sparse_datasets/msmarco_v1_passage/cocondenser/"  # Sparse HNSW index folder
+multivec_data =  ""  # MultiVec PQ data folder (contains centroids.npy, pq_centroids.npy, residuals.npy, index_assignment.npy, doclens.npy, queries.npy)
+qrels_path =    "~/knn_datasets/sparse_datasets/msmarco_v1_passage/qrels.dev.small.tsv"  # Qrels for evaluation
+experiment =    "."  # Experiment output folder
+
+[filename]
+dataset =       "documents.bin"  # Sparse dataset file
+queries =       "queries.bin"  # Sparse queries file
+groundtruth =   "groundtruth.tsv"  # Ground truth file for evaluation
+doc_ids =       "doc_ids.npy"  # Document IDs for metric computation
+query_ids =     "queries_ids.npy"  # Query IDs for metric computation
+index =         ""  # Sparse HNSW index filename (parameters will be added automatically)
+
+# First stage index parameters
+[indexing_parameters]
+m =            32
+ef-construction =          2000
+metric =       "dotproduct"  # Distance metric for sparse index
+
+# Multivector reranking parameters (for the unified binary)
+[multivector]
+quantizer =     "two-levels"  # Quantizer type: "plain" or "two-levels"
+pq-subspaces =  32           # Number of PQ subspaces (M) - required for two-levels
+
+
+# Query configurations with per-configuration reranking parameters
+[query]
+    # MRR@10 = 0.39
+    [query.config_1]
+    early-termination = "distance-adaptive"
+    ef-search =      10
+    lambda =         0.03
+    k_candidates =   30
+    alpha =          0.015
+
+    # MRR@10 = 0.392
+    [query.config_2]
+    early-termination = "distance-adaptive"
+    ef-search =      15
+    lambda =         0.05
+    k_candidates =   25
+    alpha =          0.025
+
+    # MRR@10 = 0.394
+    [query.config_3]
+    early-termination = "distance-adaptive"
+    ef-search =      12
+    lambda =         0.1
+    k_candidates =   15
+    alpha =          0.025
+
+    # MRR@10 = 0.396
+    [query.config_4]
+    early-termination = "distance-adaptive"
+    ef-search =     12
+    lambda =         0.1
+    k_candidates =   20
+    alpha =          0.015
+
+    # MRR@10 = 0.398
+    [query.config_5]
+    early-termination = "distance-adaptive"
+    ef-search =     15
+    lambda =         0.13
+    k_candidates =   25
+    alpha =          0.05
+
+    # MRR@10 = 0.399
+    [query.config_6]
+    early-termination = "distance-adaptive"
+    ef-search =     16
+    lambda =         0.2
+    k_candidates =   25
+    alpha =          0.05

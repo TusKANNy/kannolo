@@ -5,9 +5,12 @@ kANNolo Experiment Runner
 
 This script supports the unified `hnsw_build` and `hnsw_search` binaries.
 
-Reranking and multivector experiments are no longer supported. If a TOML file
-includes `dataset-type = "multivector"` or a `[reranking]` section, the runner
-will error out with a clear message.
+Reranking and multivector experiments are configured using:
+- query-command = "./target/release/hnsw_rerank_search" for two-stage reranking search  
+- [query] sections with per-configuration parameters (ef-search, k_candidates, alpha, beta)
+- Reranking parameters (k_candidates, alpha, beta) now live in [query] subsections, not in [reranking]
+
+If a TOML file includes `dataset-type = "multivector"`, the runner will error out with a clear message.
 """
 
 import re 
@@ -314,8 +317,6 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
     """Execute a query based on the provided configuration."""
     if configs.get("dataset-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
-    if "reranking" in configs:
-        raise ValueError("reranking support was removed; update the experiment config to use hnsw_search only.")
     
     query_command = configs.get("query-command", None)
     if not query_command:
@@ -346,27 +347,70 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
         f"--output-path {output_file}",
     ]
 
-    # Add new unified binary parameters
-    if "dataset-type" in configs:
-        command_and_params.append(f"--dataset-type {configs['dataset-type']}")
-    if "value-type" in configs:
-        command_and_params.append(f"--value-type {configs['value-type']}")
-    if configs.get("dataset-type") == "sparse" and "component-type" in configs:
-        command_and_params.append(f"--component-type {configs['component-type']}")
-    if "encoder" in configs:
-        command_and_params.append(f"--encoder {configs['encoder']}")
-    if "graph-type" in configs:
-        command_and_params.append(f"--graph-type {configs['graph-type']}")
+    # Detect reranking binary (hnsw_rerank_search) vs standard search binary (hnsw_search)
+    is_reranking_binary = "rerank" in query_command
+    
+    if not is_reranking_binary:
+        if "dataset-type" in configs:
+            command_and_params.append(f"--dataset-type {configs['dataset-type']}")
+        if "value-type" in configs:
+            command_and_params.append(f"--value-type {configs['value-type']}")
+        if configs.get("dataset-type") == "sparse" and "component-type" in configs:
+            command_and_params.append(f"--component-type {configs['component-type']}")
+        if "encoder" in configs:
+            command_and_params.append(f"--encoder {configs['encoder']}")
+        if "graph-type" in configs:
+            command_and_params.append(f"--graph-type {configs['graph-type']}")
 
-    # Add early termination parameters if specified
-    early_termination = query_config.get("early-termination", "none")
-    command_and_params.append(f"--early-termination {early_termination}")
-    if "lambda" in query_config:
-        command_and_params.append(f"--lambda {query_config['lambda']}")
+        # Add early termination parameters if specified
+        early_termination = query_config.get("early-termination", "none")
+        command_and_params.append(f"--early-termination {early_termination}")
+        if "lambda" in query_config:
+            command_and_params.append(f"--lambda {query_config['lambda']}")
 
-    # Add PQ-specific parameters if needed
-    if "pq_parameters" in configs and "pq-subspaces" in configs['pq_parameters']:
-        command_and_params.append(f"--pq-subspaces {configs['pq_parameters']['pq-subspaces']}")
+        # Add PQ-specific parameters if needed
+        if "pq_parameters" in configs and "pq-subspaces" in configs['pq_parameters']:
+            command_and_params.append(f"--pq-subspaces {configs['pq_parameters']['pq-subspaces']}")
+
+    # Add multivector reranking parameters if present (only for hnsw_rerank_search)
+    if is_reranking_binary:
+        multivec_data_dir = configs["folder"].get("multivec_data", "")
+        if not multivec_data_dir:
+            raise ValueError("multivec_data folder must be specified in [folder] section for reranking")
+        
+        # Pass the data folder directly (binary will look for documents.npy, doclens.npy, queries.npy inside)
+        command_and_params.append(f"--multivec-data-folder {multivec_data_dir}")
+        
+        # Get quantizer type and PQ subspaces from [multivector] section if present
+        quantizer_type = "plain"  # Default to plain
+        pq_subspaces = None
+        
+        if "multivector" in configs:
+            quantizer_type = configs["multivector"].get("quantizer", "plain")
+            pq_subspaces = configs["multivector"].get("pq-subspaces", None)
+        
+        command_and_params.append(f"--multivector-quantizer {quantizer_type}")
+        
+        if quantizer_type == "two-levels":
+            if pq_subspaces is None:
+                raise ValueError("pq-subspaces must be specified in [multivector] section for 'two-levels' quantizer")
+            command_and_params.append(f"--pq-subspaces {pq_subspaces}")
+        
+        # Extract reranking parameters from query_config subsection
+        k_candidates = query_config.get("k_candidates", 100)
+        command_and_params.append(f"--k-candidates {k_candidates}")
+        
+        if "alpha" in query_config and query_config["alpha"] is not None:
+            command_and_params.append(f"--alpha {query_config['alpha']}")
+        
+        if "beta" in query_config and query_config["beta"] is not None:
+            command_and_params.append(f"--beta {query_config['beta']}")
+        
+        # Add early termination parameters for first-stage search
+        early_termination = query_config.get("early-termination", "none")
+        command_and_params.append(f"--early-termination {early_termination}")
+        if "lambda" in query_config:
+            command_and_params.append(f"--lambda {query_config['lambda']}")
 
     command = " ".join(command_and_params)
 

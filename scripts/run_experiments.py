@@ -3,14 +3,11 @@
 """
 kANNolo Experiment Runner
 
-This script supports the unified `hnsw_build` and `hnsw_search` binaries.
+This script supports the unified `hnsw_build`, `hnsw_search` and `hnsw_rerank_search` binaries.
 
 Reranking and multivector experiments are configured using:
 - query-command = "./target/release/hnsw_rerank_search" for two-stage reranking search  
-- [query] sections with per-configuration parameters (ef-search, k_candidates, alpha, beta)
-- Reranking parameters (k_candidates, alpha, beta) now live in [query] subsections, not in [reranking]
-
-If a TOML file includes `dataset-type = "multivector"`, the runner will error out with a clear message.
+- [query] sections with per-configuration parameters for both first and second stage (ef-search, k_candidates, alpha, beta)
 """
 
 import re 

@@ -359,36 +359,28 @@ fn main() {
             match metric {
                 DistanceKind::Euclidean => match args.pq_subspaces.unwrap() {
                     8 => {
-                        if try_search_pq_f16::<8, SquaredEuclideanDistance, SquaredEuclideanDistance>(&args).is_ok() {
-                                return;
-                            }
-                        search_pq_f32::<8, SquaredEuclideanDistance, SquaredEuclideanDistance>(
-                            &args,
-                        )
+                        if try_search_pq_f16::<8, SquaredEuclideanDistance>(&args).is_ok() {
+                            return;
+                        }
+                        search_pq_f32::<8, SquaredEuclideanDistance>(&args)
                     }
                     16 => {
-                        if try_search_pq_f16::<16, SquaredEuclideanDistance, SquaredEuclideanDistance>(&args).is_ok() {
-                                return;
-                            }
-                        search_pq_f32::<16, SquaredEuclideanDistance, SquaredEuclideanDistance>(
-                            &args,
-                        )
+                        if try_search_pq_f16::<16, SquaredEuclideanDistance>(&args).is_ok() {
+                            return;
+                        }
+                        search_pq_f32::<16, SquaredEuclideanDistance>(&args)
                     }
                     32 => {
-                        if try_search_pq_f16::<32, SquaredEuclideanDistance, SquaredEuclideanDistance>(&args).is_ok() {
-                                return;
-                            }
-                        search_pq_f32::<32, SquaredEuclideanDistance, SquaredEuclideanDistance>(
-                            &args,
-                        )
+                        if try_search_pq_f16::<32, SquaredEuclideanDistance>(&args).is_ok() {
+                            return;
+                        }
+                        search_pq_f32::<32, SquaredEuclideanDistance>(&args)
                     }
                     64 => {
-                        if try_search_pq_f16::<64, SquaredEuclideanDistance, SquaredEuclideanDistance>(&args).is_ok() {
-                                return;
-                            }
-                        search_pq_f32::<64, SquaredEuclideanDistance, SquaredEuclideanDistance>(
-                            &args,
-                        )
+                        if try_search_pq_f16::<64, SquaredEuclideanDistance>(&args).is_ok() {
+                            return;
+                        }
+                        search_pq_f32::<64, SquaredEuclideanDistance>(&args)
                     }
                     m => {
                         eprintln!(
@@ -400,28 +392,28 @@ fn main() {
                 },
                 DistanceKind::DotProduct => match args.pq_subspaces.unwrap() {
                     8 => {
-                        if try_search_pq_f16::<8, DotProduct, DotProduct>(&args).is_ok() {
+                        if try_search_pq_f16::<8, DotProduct>(&args).is_ok() {
                             return;
                         }
-                        search_pq_f32::<8, DotProduct, DotProduct>(&args)
+                        search_pq_f32::<8, DotProduct>(&args)
                     }
                     16 => {
-                        if try_search_pq_f16::<16, DotProduct, DotProduct>(&args).is_ok() {
+                        if try_search_pq_f16::<16, DotProduct>(&args).is_ok() {
                             return;
                         }
-                        search_pq_f32::<16, DotProduct, DotProduct>(&args)
+                        search_pq_f32::<16, DotProduct>(&args)
                     }
                     32 => {
-                        if try_search_pq_f16::<32, DotProduct, DotProduct>(&args).is_ok() {
+                        if try_search_pq_f16::<32, DotProduct>(&args).is_ok() {
                             return;
                         }
-                        search_pq_f32::<32, DotProduct, DotProduct>(&args)
+                        search_pq_f32::<32, DotProduct>(&args)
                     }
                     64 => {
-                        if try_search_pq_f16::<64, DotProduct, DotProduct>(&args).is_ok() {
+                        if try_search_pq_f16::<64, DotProduct>(&args).is_ok() {
                             return;
                         }
-                        search_pq_f32::<64, DotProduct, DotProduct>(&args)
+                        search_pq_f32::<64, DotProduct>(&args)
                     }
                     m => {
                         eprintln!(
@@ -475,8 +467,7 @@ where
     for query_idx in 0..num_queries {
         for _ in 0..args.num_runs {
             let sparse_query = sparse_queries.get(query_idx as vectorium::VectorId);
-            let multivec_query_2d =
-                multivec_queries_3d.slice(ndarray::s![query_idx as usize, .., ..]);
+            let multivec_query_2d = multivec_queries_3d.slice(ndarray::s![query_idx, .., ..]);
             let multivec_query_flat: Vec<f32> = multivec_query_2d.iter().copied().collect();
             let multivec_query_view = DenseMultiVectorView::new(&multivec_query_flat, token_dim);
 
@@ -546,8 +537,7 @@ where
     for query_idx in 0..num_queries {
         for _ in 0..args.num_runs {
             let sparse_query = sparse_queries.get(query_idx as vectorium::VectorId);
-            let multivec_query_2d =
-                multivec_queries_3d.slice(ndarray::s![query_idx as usize, .., ..]);
+            let multivec_query_2d = multivec_queries_3d.slice(ndarray::s![query_idx, .., ..]);
             let multivec_query_flat: Vec<f32> = multivec_query_2d.iter().copied().collect();
             let multivec_query_view = DenseMultiVectorView::new(&multivec_query_flat, token_dim);
 
@@ -579,10 +569,9 @@ where
     }
 }
 
-fn try_search_pq_f16<const M: usize, D1, D2>(args: &Args) -> Result<(), String>
+fn try_search_pq_f16<const M: usize, D1>(args: &Args) -> Result<(), String>
 where
     D1: ScalarDenseSupportedDistance + Distance + ScalarSparseSupportedDistance + 'static,
-    D2: ScalarDenseSupportedDistance + Distance + ScalarSparseSupportedDistance + 'static,
 {
     let sparse_index: HNSW<PlainSparseDataset<u16, f16, D1>, Graph> =
         <HNSW<PlainSparseDataset<u16, f16, D1>, Graph> as IndexSerializer>::load_index(
@@ -612,8 +601,7 @@ where
     for query_idx in 0..num_queries {
         for _ in 0..args.num_runs {
             let sparse_query = sparse_queries.get(query_idx as vectorium::VectorId);
-            let multivec_query_2d =
-                multivec_queries_3d.slice(ndarray::s![query_idx as usize, .., ..]);
+            let multivec_query_2d = multivec_queries_3d.slice(ndarray::s![query_idx, .., ..]);
             let multivec_query_flat: Vec<f32> = multivec_query_2d.iter().copied().collect();
             let multivec_query_view = DenseMultiVectorView::new(&multivec_query_flat, token_dim);
 
@@ -647,10 +635,9 @@ where
     Ok(())
 }
 
-fn search_pq_f32<const M: usize, D1, D2>(args: &Args)
+fn search_pq_f32<const M: usize, D1>(args: &Args)
 where
     D1: ScalarDenseSupportedDistance + Distance + ScalarSparseSupportedDistance + 'static,
-    D2: ScalarDenseSupportedDistance + Distance + ScalarSparseSupportedDistance + 'static,
 {
     let sparse_index: HNSW<PlainSparseDataset<u16, f32, D1>, Graph> =
         <HNSW<PlainSparseDataset<u16, f32, D1>, Graph> as IndexSerializer>::load_index(
@@ -684,8 +671,7 @@ where
     for query_idx in 0..num_queries {
         for _ in 0..args.num_runs {
             let sparse_query = sparse_queries.get(query_idx as vectorium::VectorId);
-            let multivec_query_2d =
-                multivec_queries_3d.slice(ndarray::s![query_idx as usize, .., ..]);
+            let multivec_query_2d = multivec_queries_3d.slice(ndarray::s![query_idx, .., ..]);
             let multivec_query_flat: Vec<f32> = multivec_query_2d.iter().copied().collect();
             let multivec_query_view = DenseMultiVectorView::new(&multivec_query_flat, token_dim);
 

@@ -1,194 +1,289 @@
-## Using the Rust Code
+## Rust API
 
-This guide explains how to use kANNolo's Rust code independently ([standalone](#itself)) or integrate it into your own Rust project ([via Cargo](#notitsef)).
+kANNolo provides three command-line binaries for index building and search.
 
-kANNolo uses the HNSW graph for indexing vectors. It supports dense plain vectors, Product Quantization-encoded dense vectors, and sparse vectors. The Rust API is vectorium-first: datasets and encoders come from `vectorium`, and HNSW operates over `vectorium::Dataset`.
+**Binaries:**
+- `hnsw_build` – Build an HNSW index from dense or sparse data
+- `hnsw_search` – Search an existing HNSW index
+- `hnsw_rerank_search` – Two-stage search: sparse first-stage + multivector reranking
 
-#### Dense Data
-In kANNolo, dense vectors are read as 1-dimensional numpy arrays (`.npy` format) given by the concatenation of all the vectors in the collection. This holds for dataset, queries, and ground truth.
-
-#### Dense Plain Data
-To build an index over dense plain vectors, load data into a `vectorium::PlainDenseDataset` (or `DenseDataset` + a plain encoder) and call `HNSW::build_index`. 
-
-Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_search.rs`.
-
-#### Dense PQ Data
-To build an index over dense PQ vectors, load data into a `vectorium` dataset, create a `vectorium::encoders::pq::ProductQuantizer`, and call `HNSW::build_index`.
-
-Product Quantization needs two additional parameters:
-- `M`: Const parameter indicating the number of subspaces of Product Quantization. Supported values: 4, 8, 16, 32, 64, 96, 128. Higher values mean more accurate approximation but higher memory occupancy. M must divide the dimensionality of the original vectors.
-- The codebook size is fixed by vectorium (256 centroids per subspace); `nbits` is not configurable.
-
-Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_search.rs`.
-
-#### Sparse Data
-In kANNolo, sparse documents and queries should be in a binary format. For more details on this format see the [`docs/PythonUsage.md`](docs/PythonUsage.md)
-
-To build an index over sparse vectors, load data into a `vectorium::PlainSparseDataset` (or `SparseDataset` + a plain encoder) and call `HNSW::build_index`.
-For sparse vectors, `--component-type` controls sparse index component width (`u16` or `u32`), and `dotvbyte` encoding requires `--component-type u16`.
-
-Examples of usage can be found in `src/bin/hnsw_build.rs` and `src/bin/hnsw_search.rs`.
+**Data Formats:**
+- Dense: `.npy` files (float32 concatenated vectors)
+- Sparse: Binary seismic format (see [PythonUsage.md](PythonUsage.md) for format details). Use scripts/convert_npy_arrays_to_bin.py and scripts/convert_bin_to_npy_arrays.py for conversion from bin to npy or viceversa.
 
 ---
 
-### **Index Parameters**
-kANNolo's HNSW index structure is very simple, consisting in only two parameters to control the index quality during construction:
 
-- `--m`: Upper bound for the number of neighbors of each node in the graph in the upper levels of HNSW. The upper bound on ground level is doubled. Higher values result in a better connected graph. As a side effect, construction becomes slower, and above a certain threshold also search can become slower due to the high number of distances computed at each hop in the graph.
-- `--ef-construction`: Size of the candidates pool during the construction process. Higher values translate into a more precise construction and thus a more accurate search. As a downside, higher values lead to a slower construction.
+### hnsw_build
 
-Two additional parameters, `initial_build_batch_size` and `max_build_batch_size`, regulate the parallelization of the construction process. We decided to not allow for the tuning of these parameters in our current binary files in which they are less prone to adjustments and they are not part of the original HNSW structure.
+Build an HNSW index from dense or sparse data.
 
-To create and serialize an HNSW index on sparse data `documents.bin` with `num_neighbors_per_vec` (`m`) equal to 32 and `ef_construction` (efc) equal to 2000 for Maximum Inner Product Search (MIPS), run:
-
+**Required arguments:**
 ```bash
-./target/release/hnsw_build \
---data-file documents.bin \
---output-file kannolo_sparse_index \
---dataset-type sparse \
---value-type f16 \
---component-type u16 \
---encoder plain \
---m 32 \
---ef-construction 2000 \
---distance dotproduct
+--data-file <path>        Input data file (.npy for dense, .bin for sparse)
+--output-file <path>      Output index file
+--dataset-type <type>     dense or sparse
 ```
 
-To create and serialize an HNSW index on sparse data using DotVByte encoding, run:
-
+**Index parameters:**
 ```bash
-./target/release/hnsw_build \
---data-file documents.bin \
---output-file kannolo_sparse_dotvbyte_index \
---dataset-type sparse \
---component-type u16 \
---encoder dotvbyte \
---m 32 \
---ef-construction 2000 \
---distance dotproduct
+--m <int>                 Neighbors per node (default: 16)
+--ef-construction <int>   Construction effort (default: 150)
 ```
 
-
-To create and serialize an HNSW index on dense data `documents.npy` with `num_neighbors_per_vec` (`m`) equal to 16 and `ef_construction` (efc) equal to 200 for Euclidean Nearest Neighbors Search, run:
-
+**Data type parameters:**
 ```bash
-./target/release/hnsw_build \
---data-file documents.npy \
---output-file kannolo_dense_index \
---dataset-type dense \
---value-type f32 \
---encoder plain \
---m 16 \
---ef-construction 200 \
---distance euclidean
+--encoder <type>          plain (default), pq (dense only), dotvbyte (sparse only).
+--value-type <type>       f32 (default), f16, fixedu8 (sparse only), fixedu16 (sparse only).
+--component-type <type>   u16 (default), u32. (sparse only; dotvbyte requires u16)
 ```
 
-To create and serialize an HNSW index on dense PQ-encoded data with 64 subspaces and 256 centroids per subspace, obtained from plain vectors `documents.npy`, with `num_neighbors_per_vec` (`m`) equal to 16 and `ef_construction` (efc) equal to 200 for Maximum Inner Product Search (MIPS), run:
-
+**Search parameters:**
 ```bash
-./target/release/hnsw_build \
---data-file documents.npy \
---output-file kannolo_dense_pq_index \
---dataset-type dense \
---encoder pq \
---m 16 \
---ef-construction 200 \
---distance dotproduct \
---pq-subspaces 64
+--distance <type>         euclidean or dotproduct (default: dotproduct)
 ```
 
-Vectorium PQ selects its training samples internally. The CLI flags `--nbits` and `--sample-size` are accepted for compatibility but ignored.
+**PQ-specific (when --encoder pq):**
+```bash
+--pq-subspaces <int>      Number of subspaces. Supported: 4, 8, 16, 32, 48, 64, 96, 128, 192
+```
+
+**Graph structure:**
+```bash
+--graph-type <type>       standard (default) or fixed-degree
+```
+
+**Examples:**
+
+```bash
+# Dense plain index
+./target/release/hnsw_build \
+  --data-file documents.npy \
+  --output-file index.bin \
+  --dataset-type dense \
+  --encoder plain \
+  --value-type f32 \
+  --m 32 \
+  --ef-construction 200 \
+  --distance euclidean
+
+# Sparse plain index
+./target/release/hnsw_build \
+  --data-file documents.bin \
+  --output-file index.bin \
+  --dataset-type sparse \
+  --encoder plain \
+  --component-type u16 \
+  --m 32 \
+  --ef-construction 2000 \
+  --distance dotproduct
+
+# Dense PQ index
+./target/release/hnsw_build \
+  --data-file documents.npy \
+  --output-file index.bin \
+  --dataset-type dense \
+  --encoder pq \
+  --pq-subspaces 64 \
+  --m 32 \
+  --ef-construction 200 \
+  --distance dotproduct
+
+# Sparse DotVByte index
+./target/release/hnsw_build \
+  --data-file documents.bin \
+  --output-file index.bin \
+  --dataset-type sparse \
+  --encoder dotvbyte \
+  --component-type u16 \
+  --m 32 \
+  --ef-construction 2000 \
+  --distance dotproduct
+```
 
 ---
 
-### **Executing Queries**
-One parameter trades off efficiency and accuracy:
+### hnsw_search
 
-- `--ef_search`: Size of the candidates pool during the search process. Higher values translate into a more precise search.
+Search an HNSW index with dense or sparse queries.
 
-To search for top `k=10` results of sparse queries `queries.bin` with an HNSW index on sparse data saved in `kannolo_sparse_index` with `ef_search` parameter equal to 40, and save results in `results_sparse`, run:
+**Required arguments:**
+```bash
+--index-file <path>       HNSW index file (from hnsw_build)
+--query-file <path>       Query file (.npy for dense, .bin for sparse)
+--dataset-type <type>     dense or sparse (must match index)
+```
 
-Example command:
+**Search parameters:**
+```bash
+--k <int>                 Top-k results (default: 10)
+--ef-search <int>         Search effort (default: 40)
+--early-termination <type>  none (default) or distance-adaptive
+--lambda <float>          Threshold for distance-adaptive (default: 1.0, range: 0.005-0.25)
+```
+
+**Data type parameters:**
+```bash
+--encoder <type>          plain (default), pq, dotvbyte (must match index)
+--value-type <type>       f32 (default), f16, fixedu8, fixedu16
+--component-type <type>   u16 (default), u32
+```
+
+**Distance & search:**
+```bash
+--distance <type>         euclidean or dotproduct (must match index)
+--pq-subspaces <int>      Required only if --encoder pq was used during build
+```
+
+**Other:**
+```bash
+--output-path <path>      Output file for results (optional)
+--graph-type <type>       standard (default) or fixed-degree (must match index)
+--num-runs <int>          Number of runs for timing (default: 1)
+```
+
+**Output format:** TSV with columns: `query_id`, `document_id`, `rank`, `score`
+
+**Examples:**
 
 ```bash
+# Search dense plain index
 ./target/release/hnsw_search \
---index-file kannolo_sparse_index \
---query-file queries.bin \
---dataset-type sparse \
---value-type f16 \
---encoder plain \
---distance dotproduct \
---k 10 \
---ef-search 40 \
---output-path results_sparse 
+  --index-file index.bin \
+  --query-file queries.npy \
+  --dataset-type dense \
+  --encoder plain \
+  --value-type f32 \
+  --distance euclidean \
+  --k 10 \
+  --ef-search 200 \
+  --output-path results.tsv
+
+# Search sparse plain index
+./target/release/hnsw_search \
+  --index-file index.bin \
+  --query-file queries.bin \
+  --dataset-type sparse \
+  --encoder plain \
+  --component-type u16 \
+  --distance dotproduct \
+  --k 10 \
+  --ef-search 100 \
+  --output-path results.tsv
+
+# Search with early termination
+./target/release/hnsw_search \
+  --index-file index.bin \
+  --query-file queries.bin \
+  --dataset-type sparse \
+  --encoder plain \
+  --component-type u16 \
+  --distance dotproduct \
+  --k 10 \
+  --ef-search 100 \
+  --early-termination distance-adaptive \
+  --lambda 0.1 \
+  --output-path results.tsv
+
+# Search dense PQ index
+./target/release/hnsw_search \
+  --index-file index.bin \
+  --query-file queries.npy \
+  --dataset-type dense \
+  --encoder pq \
+  --pq-subspaces 64 \
+  --distance dotproduct \
+  --k 10 \
+  --ef-search 200 \
+  --output-path results.tsv
 ```
 
-To search for top `k=10` results of dense queries `queries.npy` with an HNSW index on dense data saved in `kannolo_dense_index` with `ef_search` parameter equal to 200, and save results in `results_dense`, run:
+---
 
-Example command:
+### hnsw_rerank_search
+
+Two-stage search: first-stage sparse HNSW + second-stage dense multivector reranking.
+
+**Required arguments:**
+```bash
+--index-file <path>              Pre-built sparse HNSW index
+--query-file <path>              Sparse queries (binary format)
+--multivec-data-folder <path>    Folder with multivector data
+```
+
+**Multivector data folder structure:**
+
+For **plain quantizer**:
+```
+multivec_data/
+  documents.npy              [n_docs, n_tokens, token_dim]
+  queries.npy                [n_queries, n_tokens, token_dim]
+  doclens.npy                [n_docs]
+```
+
+For **two-levels (PQ) quantizer**:
+```
+multivec_data/
+  documents.npy              [n_docs, n_tokens, token_dim]
+  queries.npy                [n_queries, n_tokens, token_dim]
+  doclens.npy                [n_docs]
+  centroids.npy              [n_centroids, token_dim]
+  pq_centroids.npy           [n_centroids, M, subspace_dim]
+  residuals.npy              [n_docs, n_tokens, token_dim]
+  index_assignment.npy       [n_docs, n_tokens]
+```
+
+**Search parameters:**
+```bash
+--k <int>                 Final top-k results (default: 10)
+--k-candidates <int>      First-stage candidates (default: 100)
+--ef-search <int>         HNSW search effort (default: 40)
+```
+
+**Reranking:**
+```bash
+--alpha <float>           First-stage weight (optional)
+--beta <int>              Second-stage early exit (optional)
+```
+
+**Multivector quantizer:**
+```bash
+--multivector-quantizer <type>  plain (default) or two-levels
+--pq-subspaces <int>            Required if --multivector-quantizer two-levels. Values: 8, 16, 32, 64
+```
+
+**Other:**
+```bash
+--output-path <path>      Output file for results
+--num-runs <int>          Number of runs for timing (default: 1)
+```
+
+**Example:**
 
 ```bash
-./target/release/hnsw_search \
---index-file kannolo_dense_index \
---query-file queries.npy \
---dataset-type dense \
---value-type f32 \
---encoder plain \
---distance euclidean \
---k 10 \
---ef-search 200 \
---output-path results_dense 
+# Plain multivector reranking
+./target/release/hnsw_rerank_search \
+  --index-file sparse_index.bin \
+  --query-file queries.bin \
+  --multivec-data-folder multivec_data/ \
+  --multivector-quantizer plain \
+  --k-candidates 100 \
+  --k 10 \
+  --ef-search 100 \
+  --alpha 0.5 \
+  --output-path results.tsv
+
+# Two-level PQ multivector reranking
+./target/release/hnsw_rerank_search \
+  --index-file sparse_index.bin \
+  --query-file queries.bin \
+  --multivec-data-folder multivec_data/ \
+  --multivector-quantizer two-levels \
+  --pq-subspaces 32 \
+  --k-candidates 100 \
+  --k 10 \
+  --ef-search 100 \
+  --alpha 0.5 \
+  --beta 10 \
+  --output-path results.tsv
 ```
-
-
-To search for top `k=10` results of dense queries `queries.npy` with an HNSW index on dense PQ-encoded data saved in `kannolo_dense_pq_index` with `ef_search` parameter equal to 200, and save results in `results_pq`, run:
-
-Example command:
-
-```bash
-./target/release/hnsw_search \
---index-file kannolo_dense_pq_index \
---query-file queries.npy \
---dataset-type dense \
---encoder pq \
---pq-subspaces 64 \
---distance dotproduct \
---k 10 \
---ef-search 200 \
---output-path results_pq 
-```
-
-To search with a sparse DotVByte index, run:
-
-```bash
-./target/release/hnsw_search \
---index-file kannolo_sparse_dotvbyte_index \
---query-file queries.bin \
---dataset-type sparse \
---component-type u16 \
---encoder dotvbyte \
---distance dotproduct \
---k 10 \
---ef-search 40 \
---output-path results_dotvbyte
-```
-
-Queries are executed in **single-thread mode** by default. To enable multithreading, modify the Rust code:
-
-```rust
-queries.iter() 
-// Change to:
-queries.par_iter()
-```
-
-The results are written to `results.tsv`. Each query produces `k` lines in the following format:
-
-```text
-query_id\tdocument_id\tresult_rank\tscore_value
-```
-
-Where:
-- `query_id`: A progressive identifier for the query.
-- `document_id`: The document ID from the indexed dataset.
-- `result_rank`: The ranking of the result by dot product.
-- `score_value`: The score of the document-query pair. It can be (squared) Euclidean distance or inner product.

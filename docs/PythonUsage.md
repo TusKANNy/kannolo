@@ -1,119 +1,291 @@
-## Usage Example in Python
+# Kannolo Python API Reference
+
+Kannolo provides a Python interface for vector search with support for:
+- **Dense indexes**: Plain and PQ-encoded HNSW
+- **Sparse indexes**: Multiple encoding schemes (plain, DotVByte, FixedU8, FixedU16)
+- **Flat (brute-force) indexes**: Dense and sparse exhaustive search
+- **Multivector reranking**: Two-stage sparse + multivector retrieval
+
+## Imports
+
 ```python
-from kannolo import DensePlainHNSW
-from kannolo import DensePlainHNSWf16
-from kannolo import SparsePlainHNSW
-from kannolo import SparsePlainHNSWf16
-from kannolo import DensePQHNSW
+from kannolo import (
+    # Dense HNSW
+    DensePlainHNSW,      # Dense plain HNSW (no quantization)
+    DensePQHNSW,         # Dense product-quantized HNSW
+    DenseFlatIndex,      # Dense exhaustive (brute-force) search
+    
+    # Sparse HNSW
+    SparsePlainHNSW,     # Sparse plain HNSW
+    SparseDotVByteHNSW,  # Sparse DotVByte-encoded HNSW
+    SparseFixedU8HNSW,   # Sparse fixed u8-encoded HNSW
+    SparseFixedU16HNSW,  # Sparse fixed u16-encoded HNSW
+    SparseFlatIndex,     # Sparse exhaustive (brute-force) search
+    
+    # Multivector reranking
+    SparseMultivecRerankIndex,            # Sparse HNSW + Plain multivector rerank
+    SparseMultivecTwoLevelsPQRerankIndex, # Sparse HNSW + Two-level PQ multivector rerank
+)
 import numpy as np
 ```
 
-The functioning of f16 indexes is the same as that of standard (f32) ones, we outline examples for f32 indexes.
+## Index Construction
 
-### Index Construction
+### HNSW Parameters
 
-Set index construction parameters.
+All HNSW indexes support:
+- `m` (int): Neighbors per node. Typical: 16–64. Default: 32
+- `ef_construction` (int): Graph construction effort. Higher = better quality, slower. Default: 200
+- `metric` (str): Distance metric. Options: `"euclidean"`, `"dotproduct"` (default)
 
-```python
-efConstruction = 200
-m = 32 # n. neighbors per node
-metric = "dotproduct" # Inner product. Alternatively, you can use "euclidean" for squared L2 metric
-```
-
-Build HNSW index on dense, plain data stored in a file.
+### Dense Plain HNSW
 
 ```python
-npy_input_file = "" # your input file
+# From .npy file (dtype=float32)
+index = DensePlainHNSW.build_from_file(
+    "data.npy",
+    m=32,
+    ef_construction=200,
+    metric="dotproduct"
+)
 
-index = DensePlainHNSW.build_from_file(npy_input_file, m, efConstruction, metric)
+# From numpy array
+data = np.random.randn(10000, 768).astype(np.float32)
+index = DensePlainHNSW.build_from_array(data, m=32, ef_construction=200)
 ```
 
-Build HNSW index on dense, PQ-encoded data.
+### Dense PQ HNSW
 
 ```python
-npy_input_file = "" # your input file
-
-# Set PQ's parameters
-m_pq = 192 # Number of subspaces of PQ. Supported values: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
-nbits = 8 # Accepted for compatibility; vectorium PQ uses a fixed codebook size.
-sample_size = 500_000 # Accepted for compatibility; vectorium PQ selects samples automatically.
-metric = "dotproduct" # Inner product. Alternatively, you can use "euclidean" for squared L2 metric
-
-index = DensePQHNSW.build_from_file(data_path, m_pq, nbits, m, efConstruction, metric, sample_size)
+# Product-quantized dense index
+index = DensePQHNSW.build_from_file(
+    "data.npy",
+    m_pq=32,           # PQ subspaces: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
+    m=32,              # HNSW neighbors
+    ef_construction=200,
+    metric="dotproduct"
+)
 ```
 
-
-Build HNSW index on sparse data.
+### Dense Flat Index
 
 ```python
-"""
-Binary File Format:
-- First 4 bytes: Unsigned 32-bit integer (little-endian) indicating the total number of sparse vectors.
-- For each vector:
-    - 4 bytes: Unsigned 32-bit integer (little-endian) representing the number of nonzero components.
-    - Next (4 * n) bytes: Array of n unsigned 32-bit integers (little-endian) for component indices (cast to int32).
-    - Following (4 * n) bytes: Array of n 32-bit floating point values (little-endian) for the nonzero components.
-"""
-bin_input_file = "" # your input file
+# Exhaustive search (no HNSW index, just linear scan)
+index = DenseFlatIndex.build_from_file("data.npy", metric="dotproduct")
 
-index = SparsePlainHNSW.build_from_file(data_path, m, efConstruction, "dotproduct")
+# Or from array
+data = np.random.randn(10000, 768).astype(np.float32)
+index = DenseFlatIndex.build_from_array(data, dim=768, metric="dotproduct")
 ```
 
-Alternatively, it is possible to build indexes directly with numpy arrays using the  ```build_from_array()``` function for dense data and the ```build_from_arrays()``` function for sparse data, instead of loading from file. 
-
-### Save/Load Index
-
-To save your index, run:
+### Sparse Plain HNSW
 
 ```python
-index.save(your_index_path)
+# From binary file (seismic format)
+index = SparsePlainHNSW.build_from_file(
+    "data.bin",
+    m=32,
+    ef_construction=200,
+    metric="dotproduct"
+)
+
+# From numpy arrays (components and values)
+components = np.array([0, 5, 10, 15], dtype=np.int32)
+values = np.array([0.5, 0.3, 0.8, 0.2], dtype=np.float32)
+offsets = np.array([0, 4], dtype=np.int64)  # one document starting at 0, ending at 4
+
+# Build with these vectors
+index = SparsePlainHNSW.build_from_arrays(
+    components, values, offsets,
+    m=32,
+    ef_construction=200,
+    metric="dotproduct"
+)
 ```
 
-If, instead of building a (dense plain) index, you want to load a previously serialized one, run:
+### Sparse Variants (DotVByte, FixedU8, FixedU16)
 
 ```python
-index = DensePlainHNSW.load(your_index_path)
+# All follow the same interface as SparsePlainHNSW
+index = SparseDotVByteHNSW.build_from_file("data.bin", m=32, ef_construction=200)
+index = SparseFixedU8HNSW.build_from_file("data.bin", m=32, ef_construction=200, metric="dotproduct")
+index = SparseFixedU16HNSW.build_from_file("data.bin", m=32, ef_construction=200, metric="dotproduct")
 ```
 
-### Search
-
-Set search parameters
-```python
-k = 10 # Number of results to be retrieved
-efSearch = 200 # Search parameter for regulating the accuracy
-```
-
-#### Batch Search
-
-Search multiple queries saved in a file.
+### Sparse Flat Index
 
 ```python
-query_file = "" # your queries file, .npy for dense, .bin for sparse
-dists, ids = index.search_batch(query_file, k, efSearch)
+# Exhaustive sparse search
+index = SparseFlatIndex.build_from_file("data.bin")
+
+# Or from arrays
+components = np.array([0, 5, 10], dtype=np.int32)
+values = np.array([0.5, 0.3, 0.8], dtype=np.float32)
+offsets = np.array([0, 3], dtype=np.int64)
+index = SparseFlatIndex.build_from_arrays(components, values, offsets)
 ```
 
-#### Single query search
+### Multivector Reranking
 
-Search for a single query.
-
-##### Dense
-
-Search for a dense query `my_query` stored in a numpy array.
+#### Plain Multivector
 
 ```python
-dists, ids = index.search(my_query, k, efSearch)
+# Expects multivec_data_folder with:
+# - documents.npy (shape: [n_docs, n_tokens, token_dim], dtype: float32)
+# - queries.npy (shape: [n_queries, n_tokens, token_dim], dtype: float32)
+# - doclens.npy (shape: [n_docs], dtype: int32/int64)
+
+index = SparseMultivecRerankIndex.build_from_file(
+    sparse_index_path="sparse_index_file",
+    multivec_data_folder="/path/to/multivec_data_folder"
+)
 ```
 
-##### Sparse
-
-Search for a sparse query represented by two numpy arrays: `components`, containing the component IDs (i32) of the sparse query vector, and `values`, containing the non-zero floating point values (f32) associated with the components.
-
-Conversion between numpy arrays and binary format for sparse data and queries can be performed with the `convert_bin_to_npy_arrays.py` and `convert_npy_arrays_to_bin.py` scripts.
+#### Two-Level PQ Multivector
 
 ```python
-dists, ids = index.search(components, values, k, efSearch)
+# Expects all files from plain, except documents.npy, plus:
+# - centroids.npy, pq_centroids.npy, residuals.npy, index_assignment.npy
+
+index = SparseMultivecTwoLevelsPQRerankIndex.build_from_file(
+    sparse_index_path="sparse_index.bin",
+    multivec_data_folder="/path/to/multivec_data",
+    pq_subspaces=32  # Must be 8, 16, 32, or 64
+)
 ```
 
-### Evaluation
+---
 
-For evaluation, see the demo notebooks in the `notebooks` folder.
+## Save / Load
+
+```python
+# Save any index
+index.save("my_index.bin")
+
+# Load (must specify metric for types that support it)
+index = DensePlainHNSW.load("my_index.bin", metric="dotproduct")
+index = SparsePlainHNSW.load("my_index.bin", metric="dotproduct")
+index = DensePQHNSW.load("my_index.bin", m_pq=32, metric="dotproduct")
+
+# Flat indexes
+index = DenseFlatIndex.load("my_index.bin")  # Requires nothing extra
+index = SparseFlatIndex.load("my_index.bin")
+```
+
+---
+
+## Search Operations
+
+### Dense Plain HNSW
+
+```python
+# Batch search (automatically detects # of queries from array length)
+queries = np.random.randn(100, 768).astype(np.float32)  # 100 queries
+dists, ids = index.search(queries, k=10, ef_search=200)
+# Returns: distances of shape [≤100*10], ids of shape [≤100*10]
+
+# With early exit threshold (optional, suggested 0.005-0.25)
+dists, ids = index.search(queries, k=10, ef_search=200, early_exit_threshold=0.1)
+```
+
+### Dense Flat Index
+
+```python
+queries = np.random.randn(100, 768).astype(np.float32)
+dists, ids = index.search(queries, k=10)
+```
+
+### Sparse Plain HNSW / Other Sparse Variants
+
+```python
+# Batch search for multiple sparse queries
+query_components = np.array([0, 5, 10, 100, 200], dtype=np.int32)
+query_values = np.array([0.8, 0.5, 0.3, 0.7, 0.2], dtype=np.float32)
+offsets = np.array([0, 3, 5], dtype=np.int64)  # Two queries: [0,3) and [3,5)
+
+dists, ids = index.search(
+    query_components,
+    query_values,
+    offsets,
+    k=10,
+    ef_search=200
+)
+
+# With early exit
+dists, ids = index.search(
+    query_components, query_values, offsets,
+    k=10, ef_search=200,
+    early_exit_threshold=0.1
+)
+```
+
+### Sparse Flat Index
+
+```python
+query_components = np.array([0, 5, 10, 100, 200], dtype=np.int32)
+query_values = np.array([0.8, 0.5, 0.3, 0.7, 0.2], dtype=np.float32)
+offsets = np.array([0, 3, 5], dtype=np.int64)  # Two queries
+
+dists, ids = index.search(query_components, query_values, offsets, k=10)
+```
+
+### Dense PQ HNSW
+
+```python
+queries = np.random.randn(100, 768).astype(np.float32)
+dists, ids = index.search(queries, k=10, ef_search=200)
+
+# With early exit
+dists, ids = index.search(queries, k=10, ef_search=200, early_exit_threshold=0.1)
+```
+
+### Sparse Multivector Reranking
+
+```python
+# Sparse + dense two-stage search
+query_components = np.array([0, 5, 10, 100], dtype=np.int32)
+query_values = np.array([0.8, 0.5, 0.3, 0.7], dtype=np.float32)
+sparse_offsets = np.array([0, 4], dtype=np.int64)  # One query
+
+# Dense multivector queries (must match n_queries from sparse_offsets)
+multivec_queries = np.random.randn(1, 8, 768).astype(np.float32)  # 1 query, 8 tokens, 768-dim each
+multivec_flat = multivec_queries.reshape(-1).astype(np.float32)
+
+dists, ids = index.search(
+    query_components=query_components,
+    query_values=query_values,
+    sparse_offsets=sparse_offsets,
+    multivec_queries=multivec_flat,
+    n_tokens=8,
+    token_dim=768,
+    k_candidates=25,  # First-stage candidates
+    k=10,               # Final results
+    ef_search=100,
+    alpha=0.05,          # First-stage weight (optional)
+    beta=2,            # Second-stage early exit (optional)
+    early_exit_threshold=None  # HNSW early exit (optional)
+)
+```
+
+---
+
+## Index Selection Guide
+
+| Use Case | Index | Notes |
+|----------|-------|-------|
+| Dense vectors, high accuracy | `DensePlainHNSW` | Default choice |
+| Dense vectors, memory limited | `DensePQHNSW` | Quantized, faster search |
+| Dense vectors, ground truth/exhaustive search | `DenseFlatIndex` | Exhaustive, exact neighbors |
+| Sparse vectors, standard | `SparsePlainHNSW` | Plain encoding, good recall |
+| Sparse vectors, memory limited | `SparseFixedU8HNSW` or `SparseDotVByteHNSW` | Compressed |
+| Sparse vectors, ground truth/exhaustive search | `SparseFlatIndex` | Exhaustive, exact |
+| Multivector retrieval | `SparseMultivecRerankIndex` | Sparse first-stage + multivec rerank |
+| Multivector + quantization | `SparseMultivecTwoLevelsPQRerankIndex` | Sparse + PQ rerank |
+
+---
+
+## Additional Resources
+
+- **Notebooks**: See [notebooks/](../notebooks/) for end-to-end examples
+- **Rust API**: See [RustUsage.md](RustUsage.md)
+- **Running Experiments**: See [RunExperiments.md](RunExperiments.md)

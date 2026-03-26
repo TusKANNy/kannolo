@@ -1,25 +1,30 @@
 use std::f32;
 
 use crate::graph::Graph;
-use crate::hnsw::{AcornGammaNeighbors, HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration};
+use crate::hnsw::{
+    AcornGammaNeighbors, EarlyTerminationStrategy, HNSW, HNSWBuildConfiguration,
+    HNSWSearchConfiguration,
+};
+use half::f16;
 use vectorium::IndexSerializer;
 use vectorium::core::index::Index;
 
-use half::f16;
 use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
+use vectorium::core::rerank_index::RerankIndex;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
 use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
 use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
 use vectorium::encoders::sparse_scalar::{PlainSparseQuantizer, ScalarSparseSupportedDistance};
 use vectorium::readers::{read_npy_f32, read_seismic_format};
-use vectorium::vector::{DenseVectorView, SparseVectorView};
+use vectorium::vector::{DenseMultiVectorView, DenseVectorView, SparseVectorView};
 use vectorium::{
     Dataset, DatasetGrowable, DenseDataset, FixedU8Q, FixedU16Q, Float, FromF32,
-    PackedSparseDataset, PlainDenseDataset, PlainSparseDataset, PlainSparseDatasetGrowable,
-    ScalarSparseDataset, ValueType,
+    MultiVectorDataset, PackedSparseDataset, PlainDenseDataset, PlainMultiVecQuantizer,
+    PlainSparseDataset, PlainSparseDatasetGrowable, ScalarSparseDataset, ValueType,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -46,6 +51,30 @@ where
     read_npy_f32::<D>(path).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading .npy file: {e:?}"))
     })
+}
+
+fn read_npy_dataset_f16<D>(path: &str) -> PyResult<PlainDenseDataset<f16, D>>
+where
+    D: ScalarDenseSupportedDistance + std::fmt::Debug,
+{
+    let dataset_f32 = read_npy_f32::<D>(path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading .npy file: {e:?}"))
+    })?;
+
+    let dim = dataset_f32.input_dim();
+    let n_vecs = dataset_f32.len();
+    let data_f32: Vec<f32> = dataset_f32
+        .iter()
+        .flat_map(|v| v.values().iter().copied())
+        .collect();
+    let data_f16: Vec<f16> = data_f32.iter().map(|&x| f16::from_f32(x)).collect();
+
+    let encoder = PlainDenseQuantizer::<f16, D>::new(dim);
+    Ok(DenseDataset::from_raw(
+        data_f16.into_boxed_slice(),
+        n_vecs,
+        encoder,
+    ))
 }
 
 fn convert_components_to_u16(components: &[i32]) -> PyResult<Vec<u16>> {
@@ -125,11 +154,11 @@ fn push_results<D: Distance>(
     }
 }
 
-// Dense plain f32
+// Dense plain f32 (internally stored as f16)
 
 enum DensePlainHNSWEnum {
-    Euclidean(HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph>),
-    DotProduct(HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph>),
+    Euclidean(HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph>),
+    DotProduct(HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph>),
 }
 
 #[pyclass]
@@ -154,11 +183,11 @@ impl DensePlainHNSW {
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let dataset = read_npy_dataset::<SquaredEuclideanDistance>(data_path)?;
+                let dataset = read_npy_dataset_f16::<SquaredEuclideanDistance>(data_path)?;
                 DensePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let dataset = read_npy_dataset::<DotProduct>(data_path)?;
+                let dataset = read_npy_dataset_f16::<DotProduct>(data_path)?;
                 DensePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
             }
         };
@@ -178,23 +207,24 @@ impl DensePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let data_vec = data_vec.as_slice()?.to_vec();
-        let n_vecs = data_vec.len() / dim;
+        let data_f32 = data_vec.as_slice()?.to_vec();
+        let data_f16: Vec<f16> = data_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let n_vecs = data_f16.len() / dim;
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
+                let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
                 let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_vec.into_boxed_slice(), n_vecs, encoder);
+                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
                 DensePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let encoder = PlainDenseQuantizer::<f32, DotProduct>::new(dim);
+                let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
                 let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_vec.into_boxed_slice(), n_vecs, encoder);
+                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
                 DensePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
             }
         };
@@ -221,12 +251,12 @@ impl DensePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f32, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
+                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 DensePlainHNSWEnum::DotProduct(index)
             }
@@ -237,64 +267,62 @@ impl DensePlainHNSW {
         })
     }
 
+    /// Search for approximate nearest neighbors.
+    ///
+    /// # Arguments
+    /// * `queries` – 1-D float32 numpy array. For a single query, pass an array of length `dimension`.
+    ///   For multiple queries, pass a concatenated array of length `num_queries × dimension`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (queries, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
-        query: PyReadonlyArray1<f32>,
+        queries: PyReadonlyArray1<f32>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let query_slice = query.as_slice()?;
-        let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            DensePlainHNSWEnum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            DensePlainHNSWEnum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
         }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-
-    pub fn search_batch(
-        &self,
-        queries_path: &str,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
         let mut ids = Vec::new();
         let mut distances = Vec::new();
 
+        let queries_slice = queries.as_slice()?;
+        let dim = match &self.inner {
+            DensePlainHNSWEnum::Euclidean(index) => index.dim(),
+            DensePlainHNSWEnum::DotProduct(index) => index.dim(),
+        };
+        let num_queries = queries_slice.len() / dim;
+        ids.reserve(num_queries * k);
+        distances.reserve(num_queries * k);
+
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
-                let queries = read_npy_dataset::<SquaredEuclideanDistance>(queries_path)?;
-                let num_queries = queries.len();
-                ids.reserve(num_queries * k);
-                distances.reserve(num_queries * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+                for i in 0..num_queries {
+                    let query_start = i * dim;
+                    let query_end = (i + 1) * dim;
+                    let query_slice = &queries_slice[query_start..query_end];
+                    let query_view = DenseVectorView::new(query_slice);
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
             }
             DensePlainHNSWEnum::DotProduct(index) => {
-                let queries = read_npy_dataset::<DotProduct>(queries_path)?;
-                let num_queries = queries.len();
-                ids.reserve(num_queries * k);
-                distances.reserve(num_queries * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+                for i in 0..num_queries {
+                    let query_start = i * dim;
+                    let query_end = (i + 1) * dim;
+                    let query_slice = &queries_slice[query_start..query_end];
+                    let query_view = DenseVectorView::new(query_slice);
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
             }
@@ -321,17 +349,25 @@ impl DensePlainHNSW {
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query, k, predicate, ef_search=100, early_exit_threshold=None))]
     pub fn search_filtered(
         &self,
         py: Python<'_>,
         query: PyReadonlyArray1<f32>,
         k: usize,
-        ef_search: usize,
         predicate: PyObject,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
 
         let pred_fn = |id: usize| -> bool {
             predicate
@@ -345,11 +381,11 @@ impl DensePlainHNSW {
 
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
-                let results = index.search_filtered(query_view, k, &search_config, &pred_fn);
+                let results = index.search_filtered(query_view, k, &search_config, pred_fn);
                 push_results(results, &mut distances, &mut ids);
             }
             DensePlainHNSWEnum::DotProduct(index) => {
-                let results = index.search_filtered(query_view, k, &search_config, &pred_fn);
+                let results = index.search_filtered(query_view, k, &search_config, pred_fn);
                 push_results(results, &mut distances, &mut ids);
             }
         }
@@ -394,13 +430,15 @@ impl DensePlainHNSW {
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query, k, predicate, ef_search=100, early_exit_threshold=None))]
     pub fn search_filtered_gamma(
         &self,
         py: Python<'_>,
         query: PyReadonlyArray1<f32>,
         k: usize,
-        ef_search: usize,
         predicate: PyObject,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let acorn_gamma = self.acorn_gamma.as_ref().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -410,7 +448,13 @@ impl DensePlainHNSW {
 
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
 
         let pred_fn = |id: usize| -> bool {
             predicate
@@ -429,7 +473,7 @@ impl DensePlainHNSW {
                     k,
                     &search_config,
                     acorn_gamma,
-                    &pred_fn,
+                    pred_fn,
                 );
                 push_results(results, &mut distances, &mut ids);
             }
@@ -439,7 +483,7 @@ impl DensePlainHNSW {
                     k,
                     &search_config,
                     acorn_gamma,
-                    &pred_fn,
+                    pred_fn,
                 );
                 push_results(results, &mut distances, &mut ids);
             }
@@ -453,203 +497,11 @@ impl DensePlainHNSW {
 
 // Dense plain f16
 
-enum DensePlainHNSWf16Enum {
-    Euclidean(HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph>),
-    DotProduct(HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph>),
-}
-
-#[pyclass]
-pub struct DensePlainHNSWf16 {
-    inner: DensePlainHNSWf16Enum,
-}
-
-#[pymethods]
-impl DensePlainHNSWf16 {
-    #[staticmethod]
-    #[pyo3(signature = (data_path, m=32, ef_construction=200, metric="dotproduct".to_string()))]
-    pub fn build_from_file(
-        data_path: &str,
-        m: usize,
-        ef_construction: usize,
-        metric: String,
-    ) -> PyResult<Self> {
-        let config = HNSWBuildConfiguration::default()
-            .with_num_neighbors(m)
-            .with_ef_construction(ef_construction);
-
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let data_f32 = read_npy_dataset::<SquaredEuclideanDistance>(data_path)?;
-                let dim = data_f32.input_dim();
-                let n_vecs = data_f32.len();
-                let data_f16: Vec<f16> = data_f32
-                    .values()
-                    .iter()
-                    .map(|v| f16::from_f32(*v))
-                    .collect();
-                let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
-                let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWf16Enum::Euclidean(HNSW::build_index(dataset, &config))
-            }
-            MetricKind::DotProduct => {
-                let data_f32 = read_npy_dataset::<DotProduct>(data_path)?;
-                let dim = data_f32.input_dim();
-                let n_vecs = data_f32.len();
-                let data_f16: Vec<f16> = data_f32
-                    .values()
-                    .iter()
-                    .map(|v| f16::from_f32(*v))
-                    .collect();
-                let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
-                let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWf16Enum::DotProduct(HNSW::build_index(dataset, &config))
-            }
-        };
-
-        Ok(DensePlainHNSWf16 { inner })
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="dotproduct".to_string()))]
-    pub fn build_from_array(
-        data_vec: PyReadonlyArray1<f32>,
-        dim: usize,
-        m: usize,
-        ef_construction: usize,
-        metric: String,
-    ) -> PyResult<Self> {
-        let data_vec = data_vec.as_slice()?.to_vec();
-        let n_vecs = data_vec.len() / dim;
-        let data_f16: Vec<f16> = data_vec.into_iter().map(f16::from_f32).collect();
-        let config = HNSWBuildConfiguration::default()
-            .with_num_neighbors(m)
-            .with_ef_construction(ef_construction);
-
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
-                let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWf16Enum::Euclidean(HNSW::build_index(dataset, &config))
-            }
-            MetricKind::DotProduct => {
-                let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
-                let dataset: DenseDataset<_> =
-                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWf16Enum::DotProduct(HNSW::build_index(dataset, &config))
-            }
-        };
-
-        Ok(DensePlainHNSWf16 { inner })
-    }
-
-    pub fn save(&self, path: &str) -> PyResult<()> {
-        match &self.inner {
-            DensePlainHNSWf16Enum::Euclidean(index) => index.save_index(path).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-            }),
-            DensePlainHNSWf16Enum::DotProduct(index) => index.save_index(path).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-            }),
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
-                DensePlainHNSWf16Enum::Euclidean(index)
-            }
-            MetricKind::DotProduct => {
-                let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
-                DensePlainHNSWf16Enum::DotProduct(index)
-            }
-        };
-        Ok(DensePlainHNSWf16 { inner })
-    }
-
-    pub fn search(
-        &self,
-        query: PyReadonlyArray1<f32>,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let query_slice = query.as_slice()?;
-        let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            DensePlainHNSWf16Enum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            DensePlainHNSWf16Enum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-        }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-
-    pub fn search_batch(
-        &self,
-        queries_path: &str,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
-        match &self.inner {
-            DensePlainHNSWf16Enum::Euclidean(index) => {
-                let queries = read_npy_dataset::<SquaredEuclideanDistance>(queries_path)?;
-                let num_queries = queries.len();
-                ids.reserve(num_queries * k);
-                distances.reserve(num_queries * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
-                }
-            }
-            DensePlainHNSWf16Enum::DotProduct(index) => {
-                let queries = read_npy_dataset::<DotProduct>(queries_path)?;
-                let num_queries = queries.len();
-                ids.reserve(num_queries * k);
-                distances.reserve(num_queries * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
-                }
-            }
-        }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-}
-
-// Sparse plain f32
+// Sparse plain f32 (internally stored as f16)
 
 enum SparsePlainHNSWEnum {
-    Euclidean(HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph>),
-    DotProduct(HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph>),
+    Euclidean(HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph>),
+    DotProduct(HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>),
 }
 
 #[pyclass]
@@ -660,10 +512,9 @@ pub struct SparsePlainHNSW {
 #[pymethods]
 impl SparsePlainHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_file(
         data_file: &str,
-        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -674,33 +525,23 @@ impl SparsePlainHNSW {
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let dataset: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
+                let dataset: PlainSparseDataset<u16, f16, SquaredEuclideanDistance> =
                     read_seismic_format(data_file).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                             "Error reading dataset: {:?}",
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 SparsePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let dataset: PlainSparseDataset<u16, f32, DotProduct> =
+                let dataset: PlainSparseDataset<u16, f16, DotProduct> =
                     read_seismic_format(data_file).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                             "Error reading dataset: {:?}",
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 SparsePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
             }
         };
@@ -709,23 +550,30 @@ impl SparsePlainHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i32>,
-        d: usize,
+        offsets: PyReadonlyArray1<i64>,
         m: usize,
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
-        let values_vec = values.as_slice()?.to_vec();
+        let values_f32 = values.as_slice()?.to_vec();
+        let values_f16: Vec<f16> = values_f32.iter().map(|&x| f16::from_f32(x)).collect();
         let offsets_vec = offsets
             .as_slice()?
             .iter()
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
+
+        // Compute dimensionality from max component index
+        let d = components_vec
+            .iter()
+            .max()
+            .map(|&x| (x as usize) + 1)
+            .unwrap_or(0);
 
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -733,18 +581,18 @@ impl SparsePlainHNSW {
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let dataset = build_sparse_dataset_from_parts::<f32, SquaredEuclideanDistance>(
+                let dataset = build_sparse_dataset_from_parts::<f16, SquaredEuclideanDistance>(
                     components_vec,
-                    values_vec,
+                    values_f16,
                     offsets_vec,
                     d,
                 )?;
                 SparsePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
             }
             MetricKind::DotProduct => {
-                let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
+                let dataset = build_sparse_dataset_from_parts::<f16, DotProduct>(
                     components_vec,
-                    values_vec,
+                    values_f16,
                     offsets_vec,
                     d,
                 )?;
@@ -771,12 +619,12 @@ impl SparsePlainHNSW {
     pub fn load(path: &str, metric: String) -> PyResult<Self> {
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f32, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
+                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWEnum::Euclidean(index)
             }
             MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> as IndexSerializer>::load_index(path)
+                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
                 SparsePlainHNSWEnum::DotProduct(index)
             }
@@ -784,328 +632,61 @@ impl SparsePlainHNSW {
         Ok(SparsePlainHNSW { inner })
     }
 
+    /// Search for approximate nearest neighbors in sparse data.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
+    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
+    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
-        _d: usize,
+        offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
-        let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            SparsePlainHNSWEnum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            SparsePlainHNSWEnum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
+        let offsets_slice = offsets.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
         }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-
-    pub fn search_batch(
-        &self,
-        query_file: &str,
-        d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
 
         let mut ids = Vec::new();
         let mut distances = Vec::new();
 
-        match &self.inner {
-            SparsePlainHNSWEnum::Euclidean(index) => {
-                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+        let num_queries = offsets_slice.len() - 1;
+        ids.reserve(num_queries * k);
+        distances.reserve(num_queries * k);
+
+        for i in 0..num_queries {
+            let query_start = offsets_slice[i] as usize;
+            let query_end = offsets_slice[i + 1] as usize;
+            let query_comps = &comp_vec[query_start..query_end];
+            let query_vals = &values_slice[query_start..query_end];
+            let query_view = SparseVectorView::new(query_comps, query_vals);
+
+            match &self.inner {
+                SparsePlainHNSWEnum::Euclidean(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
-            }
-            SparsePlainHNSWEnum::DotProduct(index) => {
-                let queries: PlainSparseDataset<u16, f32, DotProduct> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
-                }
-            }
-        }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-}
-
-// Sparse plain f16
-
-enum SparsePlainHNSWf16Enum {
-    Euclidean(HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph>),
-    DotProduct(HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>),
-}
-
-#[pyclass]
-pub struct SparsePlainHNSWf16 {
-    inner: SparsePlainHNSWf16Enum,
-}
-
-#[pymethods]
-impl SparsePlainHNSWf16 {
-    #[staticmethod]
-    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
-    pub fn build_from_file(
-        data_file: &str,
-        d: usize,
-        m: usize,
-        ef_construction: usize,
-        metric: String,
-    ) -> PyResult<Self> {
-        let config = HNSWBuildConfiguration::default()
-            .with_num_neighbors(m)
-            .with_ef_construction(ef_construction);
-
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let dataset: PlainSparseDataset<u16, f16, SquaredEuclideanDistance> =
-                    read_seismic_format(data_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading dataset: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
-                SparsePlainHNSWf16Enum::Euclidean(HNSW::build_index(dataset, &config))
-            }
-            MetricKind::DotProduct => {
-                let dataset: PlainSparseDataset<u16, f16, DotProduct> =
-                    read_seismic_format(data_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading dataset: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
-                SparsePlainHNSWf16Enum::DotProduct(HNSW::build_index(dataset, &config))
-            }
-        };
-
-        Ok(SparsePlainHNSWf16 { inner })
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
-    pub fn build_from_arrays(
-        components: PyReadonlyArray1<i32>,
-        values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i32>,
-        d: usize,
-        m: usize,
-        ef_construction: usize,
-        metric: String,
-    ) -> PyResult<Self> {
-        let components_vec = convert_components_to_u16(components.as_slice()?)?;
-        let values_vec: Vec<f16> = values
-            .as_slice()?
-            .iter()
-            .map(|&x| f16::from_f32(x))
-            .collect();
-        let offsets_vec = offsets
-            .as_slice()?
-            .iter()
-            .map(|&x| x as usize)
-            .collect::<Vec<_>>();
-
-        let config = HNSWBuildConfiguration::default()
-            .with_num_neighbors(m)
-            .with_ef_construction(ef_construction);
-
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let dataset = build_sparse_dataset_from_parts::<f16, SquaredEuclideanDistance>(
-                    components_vec,
-                    values_vec,
-                    offsets_vec,
-                    d,
-                )?;
-                SparsePlainHNSWf16Enum::Euclidean(HNSW::build_index(dataset, &config))
-            }
-            MetricKind::DotProduct => {
-                let dataset = build_sparse_dataset_from_parts::<f16, DotProduct>(
-                    components_vec,
-                    values_vec,
-                    offsets_vec,
-                    d,
-                )?;
-                SparsePlainHNSWf16Enum::DotProduct(HNSW::build_index(dataset, &config))
-            }
-        };
-
-        Ok(SparsePlainHNSWf16 { inner })
-    }
-
-    pub fn save(&self, path: &str) -> PyResult<()> {
-        match &self.inner {
-            SparsePlainHNSWf16Enum::Euclidean(index) => index.save_index(path).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-            }),
-            SparsePlainHNSWf16Enum::DotProduct(index) => index.save_index(path).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-            }),
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
-                let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
-                SparsePlainHNSWf16Enum::Euclidean(index)
-            }
-            MetricKind::DotProduct => {
-                let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
-                SparsePlainHNSWf16Enum::DotProduct(index)
-            }
-        };
-        Ok(SparsePlainHNSWf16 { inner })
-    }
-
-    pub fn search(
-        &self,
-        query_components: PyReadonlyArray1<i32>,
-        query_values: PyReadonlyArray1<f32>,
-        _d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
-        let values_slice = query_values.as_slice()?;
-        let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            SparsePlainHNSWf16Enum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            SparsePlainHNSWf16Enum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-        }
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-
-    pub fn search_batch(
-        &self,
-        query_file: &str,
-        d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
-        match &self.inner {
-            SparsePlainHNSWf16Enum::Euclidean(index) => {
-                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
-                }
-            }
-            SparsePlainHNSWf16Enum::DotProduct(index) => {
-                let queries: PlainSparseDataset<u16, f32, DotProduct> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+                SparsePlainHNSWEnum::DotProduct(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
             }
@@ -1129,13 +710,8 @@ pub struct SparseDotVByteHNSW {
 #[pymethods]
 impl SparseDotVByteHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, d, m=32, ef_construction=200))]
-    pub fn build_from_file(
-        data_file: &str,
-        d: usize,
-        m: usize,
-        ef_construction: usize,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (data_file, m=32, ef_construction=200))]
+    pub fn build_from_file(data_file: &str, m: usize, ef_construction: usize) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
@@ -1147,11 +723,6 @@ impl SparseDotVByteHNSW {
                     e
                 ))
             })?;
-        if d != dataset.input_dim() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provided dimension does not match dataset",
-            ));
-        }
 
         let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
         let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
@@ -1161,12 +732,11 @@ impl SparseDotVByteHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i32>,
-        d: usize,
+        offsets: PyReadonlyArray1<i64>,
         m: usize,
         ef_construction: usize,
     ) -> PyResult<Self> {
@@ -1177,6 +747,13 @@ impl SparseDotVByteHNSW {
             .iter()
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
+
+        // Compute dimensionality from max component index
+        let d = components_vec
+            .iter()
+            .max()
+            .map(|&x| (x as usize) + 1)
+            .unwrap_or(0);
 
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -1216,57 +793,51 @@ impl SparseDotVByteHNSW {
         Ok(SparseDotVByteHNSW { inner })
     }
 
+    /// Search for approximate nearest neighbors in compressed sparse data.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
+    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
+    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
-        _d: usize,
+        offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
-        let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        let results = self.inner.search(query_view, k, &search_config);
-        push_results(results, &mut distances, &mut ids);
-
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
-
-    pub fn search_batch(
-        &self,
-        query_file: &str,
-        d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let queries: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(query_file)
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Error reading query file: {:?}",
-                    e
-                ))
-            })?;
-        if d != queries.input_dim() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Provided dimension does not match query dataset",
-            ));
+        let offsets_slice = offsets.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
         }
 
-        let mut ids = Vec::with_capacity(queries.len() * k);
-        let mut distances = Vec::with_capacity(queries.len() * k);
-        for query in queries.iter() {
-            let results = self.inner.search(query, k, &search_config);
+        let num_queries = offsets_slice.len() - 1;
+        let mut ids = Vec::with_capacity(num_queries * k);
+        let mut distances = Vec::with_capacity(num_queries * k);
+
+        for i in 0..num_queries {
+            let query_start = offsets_slice[i] as usize;
+            let query_end = offsets_slice[i + 1] as usize;
+            let query_comps = &comp_vec[query_start..query_end];
+            let query_vals = &values_slice[query_start..query_end];
+            let query_view = SparseVectorView::new(query_comps, query_vals);
+            let results = self.inner.search(query_view, k, &search_config);
             push_results(results, &mut distances, &mut ids);
         }
 
@@ -1293,10 +864,9 @@ pub struct SparseFixedU8HNSW {
 #[pymethods]
 impl SparseFixedU8HNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_file(
         data_file: &str,
-        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -1314,11 +884,6 @@ impl SparseFixedU8HNSW {
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 let index: HNSW<
                     ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
@@ -1334,11 +899,6 @@ impl SparseFixedU8HNSW {
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
                     plain_hnsw.convert_dataset_into();
@@ -1350,12 +910,11 @@ impl SparseFixedU8HNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i32>,
-        d: usize,
+        offsets: PyReadonlyArray1<i64>,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -1367,6 +926,13 @@ impl SparseFixedU8HNSW {
             .iter()
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
+
+        // Compute dimensionality from max component index
+        let d = components_vec
+            .iter()
+            .max()
+            .map(|&x| (x as usize) + 1)
+            .unwrap_or(0);
 
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -1433,89 +999,45 @@ impl SparseFixedU8HNSW {
         Ok(SparseFixedU8HNSW { inner })
     }
 
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
-        _d: usize,
+        offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
-        let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            SparseFixedU8HNSWEnum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            SparseFixedU8HNSWEnum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
+        let offsets_slice = offsets.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
         }
 
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
+        let num_queries = offsets_slice.len() - 1;
+        let mut ids = Vec::with_capacity(num_queries * k);
+        let mut distances = Vec::with_capacity(num_queries * k);
 
-    pub fn search_batch(
-        &self,
-        query_file: &str,
-        d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        for i in 0..num_queries {
+            let query_start = offsets_slice[i] as usize;
+            let query_end = offsets_slice[i + 1] as usize;
+            let query_comps = &comp_vec[query_start..query_end];
+            let query_vals = &values_slice[query_start..query_end];
+            let query_view = SparseVectorView::new(query_comps, query_vals);
 
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
-        match &self.inner {
-            SparseFixedU8HNSWEnum::Euclidean(index) => {
-                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+            match &self.inner {
+                SparseFixedU8HNSWEnum::Euclidean(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
-            }
-            SparseFixedU8HNSWEnum::DotProduct(index) => {
-                let queries: PlainSparseDataset<u16, f32, DotProduct> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+                SparseFixedU8HNSWEnum::DotProduct(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
             }
@@ -1542,10 +1064,9 @@ pub struct SparseFixedU16HNSW {
 #[pymethods]
 impl SparseFixedU16HNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_file(
         data_file: &str,
-        d: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -1563,11 +1084,6 @@ impl SparseFixedU16HNSW {
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 let index: HNSW<
                     ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
@@ -1583,11 +1099,6 @@ impl SparseFixedU16HNSW {
                             e
                         ))
                     })?;
-                if d != dataset.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match dataset",
-                    ));
-                }
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
                     plain_hnsw.convert_dataset_into();
@@ -1599,12 +1110,11 @@ impl SparseFixedU16HNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, d, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i32>,
-        d: usize,
+        offsets: PyReadonlyArray1<i64>,
         m: usize,
         ef_construction: usize,
         metric: String,
@@ -1616,6 +1126,13 @@ impl SparseFixedU16HNSW {
             .iter()
             .map(|&x| x as usize)
             .collect::<Vec<_>>();
+
+        // Compute dimensionality from max component index
+        let d = components_vec
+            .iter()
+            .max()
+            .map(|&x| (x as usize) + 1)
+            .unwrap_or(0);
 
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -1682,89 +1199,45 @@ impl SparseFixedU16HNSW {
         Ok(SparseFixedU16HNSW { inner })
     }
 
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
-        _d: usize,
+        offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
-        let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
-
-        let mut distances = Vec::with_capacity(k);
-        let mut ids = Vec::with_capacity(k);
-        match &self.inner {
-            SparseFixedU16HNSWEnum::Euclidean(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
-            SparseFixedU16HNSWEnum::DotProduct(index) => {
-                let results = index.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
-            }
+        let offsets_slice = offsets.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
         }
 
-        Python::with_gil(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
-    }
+        let num_queries = offsets_slice.len() - 1;
+        let mut ids = Vec::with_capacity(num_queries * k);
+        let mut distances = Vec::with_capacity(num_queries * k);
 
-    pub fn search_batch(
-        &self,
-        query_file: &str,
-        d: usize,
-        k: usize,
-        ef_search: usize,
-    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        for i in 0..num_queries {
+            let query_start = offsets_slice[i] as usize;
+            let query_end = offsets_slice[i + 1] as usize;
+            let query_comps = &comp_vec[query_start..query_end];
+            let query_vals = &values_slice[query_start..query_end];
+            let query_view = SparseVectorView::new(query_comps, query_vals);
 
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
-        match &self.inner {
-            SparseFixedU16HNSWEnum::Euclidean(index) => {
-                let queries: PlainSparseDataset<u16, f32, SquaredEuclideanDistance> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+            match &self.inner {
+                SparseFixedU16HNSWEnum::Euclidean(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
-            }
-            SparseFixedU16HNSWEnum::DotProduct(index) => {
-                let queries: PlainSparseDataset<u16, f32, DotProduct> =
-                    read_seismic_format(query_file).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                            "Error reading query file: {:?}",
-                            e
-                        ))
-                    })?;
-                if d != queries.input_dim() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Provided dimension does not match query dataset",
-                    ));
-                }
-                ids.reserve(queries.len() * k);
-                distances.reserve(queries.len() * k);
-                for query in queries.iter() {
-                    let results = index.search(query, k, &search_config);
+                SparseFixedU16HNSWEnum::DotProduct(index) => {
+                    let results = index.search(query_view, k, &search_config);
                     push_results(results, &mut distances, &mut ids);
                 }
             }
@@ -2300,10 +1773,17 @@ impl DensePQHNSW {
         query: PyReadonlyArray1<f32>,
         k: usize,
         ef_search: usize,
+        early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let query_slice = query.as_slice()?;
         let query_view = DenseVectorView::new(query_slice);
-        let search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
 
         let mut distances = Vec::with_capacity(k);
         let mut ids = Vec::with_capacity(k);
@@ -2321,6 +1801,866 @@ impl DensePQHNSW {
         Python::with_gil(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+// Multivector Reranking
+
+/// Helper to load plain multivector dataset from folder
+fn load_multivec_dataset_plain(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    use ndarray::Array2;
+    use ndarray_npy::ReadNpyExt;
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::path::Path;
+
+    let documents_path = Path::new(data_folder).join("documents.npy");
+    let doclens_path = Path::new(data_folder).join("doclens.npy");
+
+    let documents_file = File::open(&documents_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening documents file at {:?}: {}",
+            documents_path, e
+        ))
+    })?;
+    let documents_u16: Array2<u16> =
+        Array2::read_npy(BufReader::new(documents_file)).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                "Error reading documents array: {}",
+                e
+            ))
+        })?;
+
+    let (_n_tokens, token_dim) = documents_u16.dim();
+    let documents_raw = documents_u16.into_raw_vec_and_offset().0;
+    let mut documents_flat: Vec<f32> = Vec::with_capacity(documents_raw.len());
+    for u16_val in documents_raw {
+        let f16_val = f16::from_bits(u16_val);
+        documents_flat.push(f32::from(f16_val));
+    }
+
+    let doclens_file = File::open(&doclens_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening doclens file at {:?}: {}",
+            doclens_path, e
+        ))
+    })?;
+    let doclens_array: ndarray::Array1<i32> =
+        ndarray::Array1::read_npy(BufReader::new(doclens_file)).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                "Error reading doclens array: {}",
+                e
+            ))
+        })?;
+
+    let doclens: Vec<usize> = doclens_array.iter().map(|&x| x as usize).collect();
+
+    // Build offsets array from doclens
+    let mut offsets = vec![0];
+    for &doclen in &doclens {
+        offsets.push(offsets.last().unwrap() + doclen * token_dim);
+    }
+
+    let encoder = PlainMultiVecQuantizer::<f32>::new(token_dim);
+    Ok(MultiVectorDataset::from_raw(
+        documents_flat.into(),
+        offsets.into(),
+        encoder,
+    ))
+}
+
+// Flat indexes for ground truth computation
+
+enum DenseFlatIndexEnum {
+    Euclidean(DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>),
+    DotProduct(DenseDataset<PlainDenseQuantizer<f16, DotProduct>>),
+}
+
+#[pyclass]
+pub struct DenseFlatIndex {
+    inner: DenseFlatIndexEnum,
+}
+
+#[pymethods]
+impl DenseFlatIndex {
+    #[staticmethod]
+    #[pyo3(signature = (data_path, metric="dotproduct".to_string()))]
+    pub fn build_from_file(data_path: &str, metric: String) -> PyResult<Self> {
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let dataset = read_npy_dataset_f16::<SquaredEuclideanDistance>(data_path)?;
+                DenseFlatIndexEnum::Euclidean(dataset)
+            }
+            MetricKind::DotProduct => {
+                let dataset = read_npy_dataset_f16::<DotProduct>(data_path)?;
+                DenseFlatIndexEnum::DotProduct(dataset)
+            }
+        };
+
+        Ok(DenseFlatIndex { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (data_vec, dim, metric="dotproduct".to_string()))]
+    pub fn build_from_array(
+        data_vec: PyReadonlyArray1<f32>,
+        dim: usize,
+        metric: String,
+    ) -> PyResult<Self> {
+        let data_f32 = data_vec.as_slice()?.to_vec();
+        let data_f16: Vec<f16> = data_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let n_vecs = data_f16.len() / dim;
+
+        let inner = match parse_metric(&metric)? {
+            MetricKind::Euclidean => {
+                let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
+                let dataset: DenseDataset<_> =
+                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
+                DenseFlatIndexEnum::Euclidean(dataset)
+            }
+            MetricKind::DotProduct => {
+                let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
+                let dataset: DenseDataset<_> =
+                    DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
+                DenseFlatIndexEnum::DotProduct(dataset)
+            }
+        };
+
+        Ok(DenseFlatIndex { inner })
+    }
+
+    /// Exhaustive search over all vectors for exact nearest neighbors.
+    ///
+    /// # Arguments
+    /// * `queries` – 2-D float32 numpy array of shape (num_queries, dim).
+    /// * `k` – Number of nearest neighbors to return per query.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (queries, k))]
+    #[pyo3(text_signature = "(queries, k)")]
+    pub fn search(
+        &self,
+        queries: PyReadonlyArray1<f32>,
+        k: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let queries_slice = queries.as_slice()?;
+
+        // Infer dimension from dataset
+        let dim = match &self.inner {
+            DenseFlatIndexEnum::Euclidean(dataset) => dataset.input_dim(),
+            DenseFlatIndexEnum::DotProduct(dataset) => dataset.input_dim(),
+        };
+
+        let num_queries = queries_slice.len() / dim;
+
+        // Collect query indices
+        let query_indices: Vec<usize> = (0..num_queries).collect();
+
+        let query_results: Vec<(Vec<f32>, Vec<i64>)> = match &self.inner {
+            DenseFlatIndexEnum::Euclidean(dataset) => query_indices
+                .into_par_iter()
+                .map(|i| {
+                    let query_start = i * dim;
+                    let query_end = (i + 1) * dim;
+                    let query_slice = &queries_slice[query_start..query_end];
+                    let query_view = DenseVectorView::new(query_slice);
+                    let results = dataset.search(query_view, k);
+
+                    let mut distances = Vec::new();
+                    let mut ids = Vec::new();
+                    push_results(results, &mut distances, &mut ids);
+                    (distances, ids)
+                })
+                .collect(),
+            DenseFlatIndexEnum::DotProduct(dataset) => query_indices
+                .into_par_iter()
+                .map(|i| {
+                    let query_start = i * dim;
+                    let query_end = (i + 1) * dim;
+                    let query_slice = &queries_slice[query_start..query_end];
+                    let query_view = DenseVectorView::new(query_slice);
+                    let results = dataset.search(query_view, k);
+
+                    let mut distances = Vec::new();
+                    let mut ids = Vec::new();
+                    push_results(results, &mut distances, &mut ids);
+                    (distances, ids)
+                })
+                .collect(),
+        };
+
+        let mut all_distances = Vec::new();
+        let mut all_ids = Vec::new();
+        for (distances, ids) in query_results {
+            all_distances.extend(distances);
+            all_ids.extend(ids);
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+enum SparseFlatIndexEnum {
+    DotProduct(PlainSparseDataset<u16, f16, DotProduct>),
+}
+
+#[pyclass]
+pub struct SparseFlatIndex {
+    inner: SparseFlatIndexEnum,
+}
+
+#[pymethods]
+impl SparseFlatIndex {
+    #[staticmethod]
+    #[pyo3(signature = (components, values, offsets))]
+    pub fn build_from_arrays(
+        components: PyReadonlyArray1<i32>,
+        values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i64>,
+    ) -> PyResult<Self> {
+        let comp_vec = convert_components_to_u16(components.as_slice()?)?;
+        let values_f32 = values.as_slice()?.to_vec();
+        let values_vec: Vec<f16> = values_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let offsets_slice = offsets.as_slice()?;
+        let offsets_usize: Vec<usize> = offsets_slice.iter().map(|&x| x as usize).collect();
+
+        // Compute dimensionality from max component index
+        let dim = comp_vec
+            .iter()
+            .max()
+            .map(|&x| (x as usize) + 1)
+            .unwrap_or(0);
+
+        let dataset = build_sparse_dataset_from_parts::<f16, DotProduct>(
+            comp_vec,
+            values_vec,
+            offsets_usize,
+            dim,
+        )?;
+
+        Ok(SparseFlatIndex {
+            inner: SparseFlatIndexEnum::DotProduct(dataset),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (data_file))]
+    pub fn build_from_file(data_file: &str) -> PyResult<Self> {
+        let data = read_seismic_format::<u16, f16, DotProduct>(data_file).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                "Error reading seismic format file: {e:?}"
+            ))
+        })?;
+
+        Ok(SparseFlatIndex {
+            inner: SparseFlatIndexEnum::DotProduct(data),
+        })
+    }
+
+    /// Exhaustive search over all vectors for exact nearest neighbors.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
+    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
+    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i64>,
+        k: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let offsets_slice = offsets.as_slice()?;
+
+        let num_queries = offsets_slice.len() - 1;
+
+        let query_results: Vec<(Vec<f32>, Vec<i64>)> = match &self.inner {
+            SparseFlatIndexEnum::DotProduct(dataset) => (0..num_queries)
+                .into_par_iter()
+                .map(|i| {
+                    let query_start = offsets_slice[i] as usize;
+                    let query_end = offsets_slice[i + 1] as usize;
+                    let query_comps = &comp_vec[query_start..query_end];
+                    let query_vals = &values_slice[query_start..query_end];
+                    let query_view = SparseVectorView::new(query_comps, query_vals);
+                    let results = dataset.search(query_view, k);
+
+                    let mut distances = Vec::new();
+                    let mut ids = Vec::new();
+                    push_results(results, &mut distances, &mut ids);
+                    (distances, ids)
+                })
+                .collect(),
+        };
+
+        let mut all_distances = Vec::new();
+        let mut all_ids = Vec::new();
+        for (distances, ids) in query_results {
+            all_distances.extend(distances);
+            all_ids.extend(ids);
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+#[pyclass]
+pub struct SparseMultivecRerankIndex {
+    inner: RerankIndex<
+        HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
+        PlainSparseDataset<u16, f16, DotProduct>,
+        MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
+    >,
+}
+
+#[pymethods]
+impl SparseMultivecRerankIndex {
+    /// Build a rerank index from a pre-built sparse HNSW index and multivector data folder.
+    ///
+    /// # Arguments
+    /// * `sparse_index_path` – Path to the pre-built sparse HNSW index file.
+    /// * `multivec_data_folder` – Path to folder containing multivector data files (plain quantizer).
+    ///
+    /// # Multivector Data Folder Structure (Plain Quantizer)
+    /// The folder must contain the following files:
+    /// * `documents.npy` – Dense document embeddings (shape: [n_documents, n_tokens, token_dim], dtype: float32)
+    /// * `queries.npy` – Dense query embeddings (shape: [n_queries, n_tokens, token_dim], dtype: float32)
+    /// * `doclens.npy` – Document lengths (shape: [n_documents], dtype: int32 or int64)
+    ///
+    #[staticmethod]
+    #[pyo3(signature = (sparse_index_path, multivec_data_folder))]
+    pub fn build_from_file(sparse_index_path: &str, multivec_data_folder: &str) -> PyResult<Self> {
+        let sparse_index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> =
+            <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(
+                sparse_index_path,
+            )
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error loading sparse index: {:?}",
+                    e
+                ))
+            })?;
+
+        let multivec_dataset = load_multivec_dataset_plain(multivec_data_folder)?;
+
+        Ok(SparseMultivecRerankIndex {
+            inner: RerankIndex::new(sparse_index, multivec_dataset),
+        })
+    }
+
+    /// Batch search with reranking using plain multivector encoding.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of sparse query component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of sparse query values (concatenated for batch).
+    /// * `sparse_offsets` – 1-D int64 array defining sparse query boundaries. For N queries, pass [0, n1, n1+n2, ..., total].
+    /// * `multivec_queries` – 1-D float32 array of all multivector queries concatenated (total_queries × n_tokens × token_dim).
+    /// * `n_tokens` – Number of tokens per multivector query (fixed).
+    /// * `token_dim` – Dimension of each token in the multivector queries.
+    /// * `k_candidates` – Number of candidates to retrieve in first stage. Default: 100.
+    /// * `k` – Number of final results to return per query. Default: 10.
+    /// * `ef_search` – Candidate list size for HNSW search. Default: 100.
+    /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
+    /// * `beta` – Beta parameter for early exit. Default: None.
+    /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        sparse_offsets: PyReadonlyArray1<i64>,
+        multivec_queries: PyReadonlyArray1<f32>,
+        n_tokens: usize,
+        token_dim: usize,
+        k_candidates: usize,
+        k: usize,
+        ef_search: usize,
+        alpha: Option<f32>,
+        beta: Option<usize>,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let query_values_slice = query_values.as_slice()?;
+        let sparse_offsets_slice = sparse_offsets.as_slice()?;
+        let multivec_queries_slice = multivec_queries.as_slice()?;
+
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut all_distances = Vec::new();
+        let mut all_ids = Vec::new();
+        let num_queries = sparse_offsets_slice.len() - 1;
+        let multivec_query_size = n_tokens * token_dim;
+
+        for q_idx in 0..num_queries {
+            // Extract sparse query for this index
+            let sparse_start = sparse_offsets_slice[q_idx] as usize;
+            let sparse_end = sparse_offsets_slice[q_idx + 1] as usize;
+            let query_comps = &comp_vec[sparse_start..sparse_end];
+            let query_vals = &query_values_slice[sparse_start..sparse_end];
+            let sparse_query = SparseVectorView::new(query_comps, query_vals);
+
+            // Extract multivector query for this index (chunked by n_tokens * token_dim)
+            let multivec_start = q_idx * multivec_query_size;
+            let multivec_end = (q_idx + 1) * multivec_query_size;
+            let multivec_query_flat = &multivec_queries_slice[multivec_start..multivec_end];
+            let multivec_query_view = DenseMultiVectorView::new(multivec_query_flat, token_dim);
+
+            let results = self.inner.search(
+                sparse_query,
+                multivec_query_view,
+                k_candidates,
+                k,
+                &search_config,
+                alpha,
+                beta,
+            );
+
+            for result in results {
+                all_distances.push(result.distance.distance());
+                all_ids.push(result.vector as i64);
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+}
+
+// Helper to load two-level PQ multivector dataset
+fn load_multivec_dataset_pq_8(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    load_multivec_dataset_pq_generic::<8>(data_folder)
+}
+
+fn load_multivec_dataset_pq_16(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    load_multivec_dataset_pq_generic::<16>(data_folder)
+}
+
+fn load_multivec_dataset_pq_32(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    load_multivec_dataset_pq_generic::<32>(data_folder)
+}
+
+fn load_multivec_dataset_pq_64(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    load_multivec_dataset_pq_generic::<64>(data_folder)
+}
+
+fn load_multivec_dataset_pq_generic<const M: usize>(
+    data_folder: &str,
+) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
+    use ndarray::Array1;
+    use ndarray_npy::ReadNpyExt;
+    use std::path::Path;
+
+    let coarse_path = Path::new(data_folder).join("centroids.npy");
+    let pq_centroids_path = Path::new(data_folder).join("pq_centroids.npy");
+    let residuals_path = Path::new(data_folder).join("residuals.npy");
+    let doclens_path = Path::new(data_folder).join("doclens.npy");
+    let assignment_path = Path::new(data_folder).join("index_assignment.npy");
+
+    // Load coarse centroids (n_centroids, dim) to determine token_dim
+    let coarse_file = std::fs::File::open(&coarse_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening centroids.npy at {:?}: {}",
+            coarse_path, e
+        ))
+    })?;
+    let coarse_reader = std::io::BufReader::new(coarse_file);
+    let coarse_array: ndarray::Array2<f32> =
+        ndarray::Array2::read_npy(coarse_reader).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                "Error reading centroids.npy: {}",
+                e
+            ))
+        })?;
+    let (n_coarse, token_dim) = coarse_array.dim();
+    let coarse_flat: Vec<f32> = coarse_array.into_iter().collect();
+
+    // Load PQ centroids
+    let pq_file = std::fs::File::open(&pq_centroids_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening pq_centroids.npy at {:?}: {}",
+            pq_centroids_path, e
+        ))
+    })?;
+    let pq_reader = std::io::BufReader::new(pq_file);
+    let pq_array: Array1<f32> = Array1::read_npy(pq_reader).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error reading pq_centroids.npy: {}",
+            e
+        ))
+    })?;
+    let pq_flat = pq_array.to_vec();
+
+    let dsub = token_dim / M;
+    const KSUB: usize = 256;
+
+    let mut pq_reconstruction_centroids = Vec::new();
+    for m in 0..M {
+        let offset = m * KSUB * dsub;
+        pq_reconstruction_centroids.extend_from_slice(&pq_flat[offset..offset + KSUB * dsub]);
+    }
+
+    // Load doclens
+    let doclens_file = std::fs::File::open(&doclens_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening doclens.npy at {:?}: {}",
+            doclens_path, e
+        ))
+    })?;
+    let doclens_reader = std::io::BufReader::new(doclens_file);
+    let doclens_array: Array1<i32> = Array1::read_npy(doclens_reader).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error reading doclens.npy: {}", e))
+    })?;
+    let doclens: Vec<usize> = doclens_array.iter().map(|&x| x as usize).collect();
+
+    // Load residuals
+    let residuals_file = std::fs::File::open(&residuals_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening residuals.npy at {:?}: {}",
+            residuals_path, e
+        ))
+    })?;
+    let residuals_reader = std::io::BufReader::new(residuals_file);
+    let residuals_array: ndarray::Array2<u8> = ndarray::Array2::read_npy(residuals_reader)
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                "Error reading residuals.npy: {}",
+                e
+            ))
+        })?;
+    let (n_tokens, m_check) = residuals_array.dim();
+    if m_check != M {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "residuals.npy has {} subspaces, expected {}",
+            m_check, M
+        )));
+    }
+
+    // Load index assignments
+    let assignment_file = std::fs::File::open(&assignment_path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error opening index_assignment.npy at {:?}: {}",
+            assignment_path, e
+        ))
+    })?;
+    let assignment_reader = std::io::BufReader::new(assignment_file);
+    let assignment_array: Array1<u64> = Array1::read_npy(assignment_reader).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+            "Error reading index_assignment.npy: {}",
+            e
+        ))
+    })?;
+    if assignment_array.len() != n_tokens {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "assignment_array length {} != n_tokens {}",
+            assignment_array.len(),
+            n_tokens
+        )));
+    }
+
+    // Reconstruct documents from two-level PQ
+    let mut reconstructed_tokens = Vec::with_capacity(n_tokens * token_dim);
+    for token_idx in 0..n_tokens {
+        let coarse_idx = assignment_array[token_idx] as usize;
+        if coarse_idx >= n_coarse {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "coarse_idx {} >= n_coarse {}",
+                coarse_idx, n_coarse
+            )));
+        }
+        let coarse_offset = coarse_idx * token_dim;
+
+        for subspace_idx in 0..M {
+            let code = residuals_array[[token_idx, subspace_idx]];
+            let pq_offset = subspace_idx * KSUB * dsub + (code as usize) * dsub;
+
+            for d in 0..dsub {
+                let coarse_val = coarse_flat[coarse_offset + subspace_idx * dsub + d];
+                let residual_val = pq_reconstruction_centroids[pq_offset + d];
+                reconstructed_tokens.push(coarse_val + residual_val);
+            }
+        }
+    }
+
+    let mut offsets = vec![0];
+    for &doclen in &doclens {
+        offsets.push(offsets.last().unwrap() + doclen * token_dim);
+    }
+
+    let encoder = PlainMultiVecQuantizer::new(token_dim);
+    Ok(MultiVectorDataset::from_raw(
+        reconstructed_tokens.into_boxed_slice(),
+        offsets.into(),
+        encoder,
+    ))
+}
+
+// Enum to handle different PQ subspace counts
+enum SparseMultivecTwoLevelsPQRerankIndexEnum {
+    M8(
+        RerankIndex<
+            HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
+            PlainSparseDataset<u16, f16, DotProduct>,
+            MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
+        >,
+    ),
+    M16(
+        RerankIndex<
+            HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
+            PlainSparseDataset<u16, f16, DotProduct>,
+            MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
+        >,
+    ),
+    M32(
+        RerankIndex<
+            HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
+            PlainSparseDataset<u16, f16, DotProduct>,
+            MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
+        >,
+    ),
+    M64(
+        RerankIndex<
+            HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
+            PlainSparseDataset<u16, f16, DotProduct>,
+            MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
+        >,
+    ),
+}
+
+#[pyclass]
+pub struct SparseMultivecTwoLevelsPQRerankIndex {
+    inner: SparseMultivecTwoLevelsPQRerankIndexEnum,
+}
+
+#[pymethods]
+impl SparseMultivecTwoLevelsPQRerankIndex {
+    /// Build a rerank index from a pre-built sparse HNSW index and multivector data folder with two-level PQ encoding.
+    ///
+    /// # Arguments
+    /// * `sparse_index_path` – Path to the pre-built sparse HNSW index file.
+    /// * `multivec_data_folder` – Path to folder containing multivector data files (two-level PQ quantizer).
+    /// * `pq_subspaces` – Number of PQ subspaces (M). Supported values: 8, 16, 32, 64.
+    ///
+    /// # Multivector Data Folder Structure (Two-Level PQ Quantizer)
+    /// The folder must contain the following files:
+    /// * `queries.npy` – Dense query embeddings (shape: [n_queries, n_tokens, token_dim], dtype: float32)
+    /// * `doclens.npy` – Document lengths (shape: [n_documents], dtype: int32 or int64)
+    /// * `centroids.npy` – Coarse centroids from first-level quantization (shape: [n_centroids, token_dim], dtype: float32)
+    /// * `index_assignment.npy` – Index assignments for documents to centroids (shape: [n_documents, n_tokens], dtype: int32 or int64)
+    /// * `residuals.npy` – PQ-encoded residuals (shape: [n_documents, n_tokens, token_dim], dtype: float32)
+    /// * `pq_centroids.npy` – PQ centroids (shape: [n_centroids, M, subspace_dim], dtype: float32)
+    ///
+    #[staticmethod]
+    #[pyo3(signature = (sparse_index_path, multivec_data_folder, pq_subspaces))]
+    pub fn build_from_file(
+        sparse_index_path: &str,
+        multivec_data_folder: &str,
+        pq_subspaces: usize,
+    ) -> PyResult<Self> {
+        let sparse_index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> =
+            <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(
+                sparse_index_path,
+            )
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                    "Error loading sparse index: {:?}",
+                    e
+                ))
+            })?;
+
+        let inner = match pq_subspaces {
+            8 => {
+                let multivec_dataset = load_multivec_dataset_pq_8(multivec_data_folder)?;
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M8(RerankIndex::new(
+                    sparse_index,
+                    multivec_dataset,
+                ))
+            }
+            16 => {
+                let multivec_dataset = load_multivec_dataset_pq_16(multivec_data_folder)?;
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M16(RerankIndex::new(
+                    sparse_index,
+                    multivec_dataset,
+                ))
+            }
+            32 => {
+                let multivec_dataset = load_multivec_dataset_pq_32(multivec_data_folder)?;
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M32(RerankIndex::new(
+                    sparse_index,
+                    multivec_dataset,
+                ))
+            }
+            64 => {
+                let multivec_dataset = load_multivec_dataset_pq_64(multivec_data_folder)?;
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M64(RerankIndex::new(
+                    sparse_index,
+                    multivec_dataset,
+                ))
+            }
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Unsupported pq_subspaces value: {}. Supported: 8, 16, 32, 64",
+                    pq_subspaces
+                )));
+            }
+        };
+
+        Ok(SparseMultivecTwoLevelsPQRerankIndex { inner })
+    }
+
+    /// Batch search with reranking using two-level PQ multivector encoding.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of sparse query component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of sparse query values (concatenated for batch).
+    /// * `sparse_offsets` – 1-D int64 array defining sparse query boundaries. For N queries, pass [0, n1, n1+n2, ..., total].
+    /// * `multivec_queries` – 1-D float32 array of all multivector queries concatenated (total_queries × n_tokens × token_dim).
+    /// * `n_tokens` – Number of tokens per multivector query (fixed).
+    /// * `token_dim` – Dimension of each token in the multivector queries.
+    /// * `k_candidates` – Number of candidates to retrieve in first stage. Default: 100.
+    /// * `k` – Number of final results to return per query. Default: 10.
+    /// * `ef_search` – Candidate list size for HNSW search. Default: 100.
+    /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
+    /// * `beta` – Beta parameter for early exit. Default: None.
+    /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        sparse_offsets: PyReadonlyArray1<i64>,
+        multivec_queries: PyReadonlyArray1<f32>,
+        n_tokens: usize,
+        token_dim: usize,
+        k_candidates: usize,
+        k: usize,
+        ef_search: usize,
+        alpha: Option<f32>,
+        beta: Option<usize>,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let query_values_slice = query_values.as_slice()?;
+        let sparse_offsets_slice = sparse_offsets.as_slice()?;
+        let multivec_queries_slice = multivec_queries.as_slice()?;
+
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut all_distances = Vec::new();
+        let mut all_ids = Vec::new();
+        let num_queries = sparse_offsets_slice.len() - 1;
+        let multivec_query_size = n_tokens * token_dim;
+
+        for q_idx in 0..num_queries {
+            // Extract sparse query for this index
+            let sparse_start = sparse_offsets_slice[q_idx] as usize;
+            let sparse_end = sparse_offsets_slice[q_idx + 1] as usize;
+            let query_comps = &comp_vec[sparse_start..sparse_end];
+            let query_vals = &query_values_slice[sparse_start..sparse_end];
+            let sparse_query = SparseVectorView::new(query_comps, query_vals);
+
+            // Extract multivector query for this index (chunked by n_tokens * token_dim)
+            let multivec_start = q_idx * multivec_query_size;
+            let multivec_end = (q_idx + 1) * multivec_query_size;
+            let multivec_query_flat = &multivec_queries_slice[multivec_start..multivec_end];
+            let multivec_query_view = DenseMultiVectorView::new(multivec_query_flat, token_dim);
+
+            let results = match &self.inner {
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M8(rerank_index) => rerank_index.search(
+                    sparse_query,
+                    multivec_query_view,
+                    k_candidates,
+                    k,
+                    &search_config,
+                    alpha,
+                    beta,
+                ),
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M16(rerank_index) => rerank_index.search(
+                    sparse_query,
+                    multivec_query_view,
+                    k_candidates,
+                    k,
+                    &search_config,
+                    alpha,
+                    beta,
+                ),
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M32(rerank_index) => rerank_index.search(
+                    sparse_query,
+                    multivec_query_view,
+                    k_candidates,
+                    k,
+                    &search_config,
+                    alpha,
+                    beta,
+                ),
+                SparseMultivecTwoLevelsPQRerankIndexEnum::M64(rerank_index) => rerank_index.search(
+                    sparse_query,
+                    multivec_query_view,
+                    k_candidates,
+                    k,
+                    &search_config,
+                    alpha,
+                    beta,
+                ),
+            };
+
+            for result in results {
+                all_distances.push(result.distance.distance());
+                all_ids.push(result.vector as i64);
+            }
+        }
+
+        Python::with_gil(|py| {
+            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
         })
     }

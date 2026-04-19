@@ -207,8 +207,11 @@ impl DensePlainHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let data_f32 = data_vec.as_slice()?.to_vec();
-        let data_f16: Vec<f16> = data_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let data_f16: Vec<f16> = data_vec
+            .as_slice()?
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect();
         let n_vecs = data_f16.len() / dim;
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -1655,22 +1658,14 @@ pub struct DensePQHNSW {
 #[pymethods]
 impl DensePQHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_path, m_pq, nbits=8, m=32, ef_construction=200, metric="dotproduct".to_string(), sample_size=100_000))]
+    #[pyo3(signature = (data_path, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_file(
         data_path: &str,
         m_pq: usize,
-        nbits: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
-        sample_size: usize,
     ) -> PyResult<Self> {
-        if nbits != 8 {
-            eprintln!("Warning: vectorium PQ ignores nbits (fixed codebook size).");
-        }
-        if sample_size != 100_000 {
-            eprintln!("Warning: vectorium PQ ignores sample_size and uses automatic sampling.");
-        }
 
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
@@ -1699,23 +1694,15 @@ impl DensePQHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m_pq, nbits=8, m=32, ef_construction=200, metric="dotproduct".to_string(), sample_size=100_000))]
+    #[pyo3(signature = (data_vec, dim, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string()))]
     pub fn build_from_array(
         data_vec: PyReadonlyArray1<f32>,
         dim: usize,
         m_pq: usize,
-        nbits: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
-        sample_size: usize,
     ) -> PyResult<Self> {
-        if nbits != 8 {
-            eprintln!("Warning: vectorium PQ ignores nbits (fixed codebook size).");
-        }
-        if sample_size != 100_000 {
-            eprintln!("Warning: vectorium PQ ignores sample_size and uses automatic sampling.");
-        }
 
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
@@ -1911,8 +1898,11 @@ impl DenseFlatIndex {
         dim: usize,
         metric: String,
     ) -> PyResult<Self> {
-        let data_f32 = data_vec.as_slice()?.to_vec();
-        let data_f16: Vec<f16> = data_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let data_f16: Vec<f16> = data_vec
+            .as_slice()?
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect();
         let n_vecs = data_f16.len() / dim;
 
         let inner = match parse_metric(&metric)? {

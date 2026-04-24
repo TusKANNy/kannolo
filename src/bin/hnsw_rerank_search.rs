@@ -11,12 +11,15 @@ use kannolo::hnsw::{EarlyTerminationStrategy, HNSW, HNSWSearchConfiguration};
 use vectorium::IndexSerializer;
 use vectorium::core::index::Index;
 use vectorium::core::rerank_index::RerankIndex;
+use vectorium::core::vector::DenseVectorView;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::ScalarDenseSupportedDistance;
 use vectorium::encoders::sparse_scalar::ScalarSparseSupportedDistance;
 use vectorium::readers::read_seismic_format;
 use vectorium::{
-    Dataset, DenseMultiVectorView, MultiVectorDataset, PlainMultiVecQuantizer, PlainSparseDataset,
+    Dataset, DatasetGrowable, DenseDataset, DenseMultiVectorView, MultiVecTwoLevelProductQuantizer,
+    MultiVectorDataset, PlainDenseDatasetGrowable, PlainDenseQuantizer, PlainMultiVecQuantizer,
+    PlainSparseDataset,
 };
 
 use ndarray::{Array1, Array2, Array3};
@@ -170,7 +173,7 @@ fn load_multivec_dataset_plain(
 /// Load multivector dataset for two-level PQ quantizer
 fn load_multivec_dataset_pq<const M: usize>(
     data_folder: &str,
-) -> MultiVectorDataset<PlainMultiVecQuantizer<f32>> {
+) -> MultiVectorDataset<MultiVecTwoLevelProductQuantizer<M, f16>> {
     use std::path::Path;
 
     let coarse_path = Path::new(data_folder).join("centroids.npy");
@@ -179,7 +182,7 @@ fn load_multivec_dataset_pq<const M: usize>(
     let doclens_path = Path::new(data_folder).join("doclens.npy");
     let assignment_path = Path::new(data_folder).join("index_assignment.npy");
 
-    // Load coarse centroids (n_centroids, dim) to determine token_dim
+    // Load coarse centroids (n_centroids, dim)
     let coarse_file = File::open(&coarse_path).unwrap_or_else(|e| {
         eprintln!("Error opening centroids.npy at {:?}: {}", coarse_path, e);
         std::process::exit(1);
@@ -188,9 +191,28 @@ fn load_multivec_dataset_pq<const M: usize>(
     let coarse_array: Array2<f32> =
         Array2::read_npy(coarse_reader).expect("Cannot read centroids.npy");
     let (n_coarse, token_dim) = coarse_array.dim();
-    let coarse_flat: Vec<f32> = coarse_array.into_iter().collect();
 
-    // Load PQ centroids
+    if token_dim % M != 0 {
+        eprintln!(
+            "Error: token_dim {} is not divisible by M={} for two-level PQ",
+            token_dim, M
+        );
+        std::process::exit(1);
+    }
+    let dsub = token_dim / M;
+
+    let mut coarse_ds =
+        PlainDenseDatasetGrowable::<f32, SquaredEuclideanDistance>::with_capacity(
+            PlainDenseQuantizer::new(token_dim),
+            n_coarse,
+        );
+    for row in coarse_array.rows() {
+        coarse_ds.push(DenseVectorView::new(row.as_slice().unwrap()));
+    }
+    let coarse_centroids: DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>> =
+        coarse_ds.into();
+
+    // Load PQ centroids (new flat Array1 or legacy Array3)
     let pq_file = File::open(&pq_centroids_path).unwrap_or_else(|e| {
         eprintln!(
             "Error opening pq_centroids.npy at {:?}: {}",
@@ -199,29 +221,131 @@ fn load_multivec_dataset_pq<const M: usize>(
         std::process::exit(1);
     });
     let pq_reader = std::io::BufReader::new(pq_file);
-    let pq_array: Array1<f32> = Array1::read_npy(pq_reader).expect("Cannot read pq_centroids.npy");
-    let pq_flat = pq_array.to_vec();
+    let expected_pq_len = M * 256 * dsub;
+    let pq_flat: Array1<f32> = match Array1::read_npy(pq_reader) {
+        Ok(arr1) => {
+            if arr1.len() != expected_pq_len {
+                eprintln!(
+                    "Error: pq_centroids.npy size mismatch: got {}, expected {}",
+                    arr1.len(),
+                    expected_pq_len
+                );
+                std::process::exit(1);
+            }
+            arr1
+        }
+        Err(err_arr1) => {
+            let arr3: Array3<f32> = Array3::read_npy(std::io::BufReader::new(
+                File::open(&pq_centroids_path).unwrap_or_else(|e| {
+                    eprintln!("Error opening pq_centroids.npy at {:?}: {}", pq_centroids_path, e);
+                    std::process::exit(1);
+                }),
+            ))
+            .unwrap_or_else(|err_arr3| {
+                eprintln!(
+                    "Error: failed to read pq_centroids.npy as Array1 ({}) or Array3 ({})",
+                    err_arr1, err_arr3
+                );
+                std::process::exit(1);
+            });
+            let (m_old, ksub_old, dsub_old) = arr3.dim();
+            if !(m_old == M && ksub_old == 256 && dsub_old == dsub) {
+                eprintln!(
+                    "Error: legacy pq_centroids.npy shape mismatch: got [{}, {}, {}], expected [{}, 256, {}]",
+                    m_old, ksub_old, dsub_old, M, dsub
+                );
+                std::process::exit(1);
+            }
+            Array1::from(arr3.into_iter().collect::<Vec<f32>>())
+        }
+    };
 
-    let dsub = token_dim / M;
-    const KSUB: usize = 256;
-
-    let mut pq_reconstruction_centroids = Vec::new();
-    for m in 0..M {
-        let offset = m * KSUB * dsub;
-        pq_reconstruction_centroids.extend_from_slice(&pq_flat[offset..offset + KSUB * dsub]);
+    let mut pq_centroids: Vec<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>> =
+        Vec::with_capacity(M);
+    for m_idx in 0..M {
+        let mut ds = PlainDenseDatasetGrowable::with_capacity(PlainDenseQuantizer::new(dsub), 256);
+        for k in 0..256 {
+            let offset = m_idx * 256 * dsub + k * dsub;
+            ds.push(DenseVectorView::new(
+                pq_flat.as_slice().unwrap()[offset..offset + dsub].as_ref(),
+            ));
+        }
+        pq_centroids.push(ds.into());
     }
 
-    // Load doclens
+    // Load doclens with dtype fallbacks
     let doclens_file = File::open(&doclens_path).unwrap_or_else(|e| {
         eprintln!("Error opening doclens.npy at {:?}: {}", doclens_path, e);
         std::process::exit(1);
     });
     let doclens_reader = std::io::BufReader::new(doclens_file);
-    let doclens_array: Array1<i32> =
-        Array1::read_npy(doclens_reader).expect("Cannot read doclens.npy");
+    let doclens_array: Array1<i32> = match Array1::<i32>::read_npy(doclens_reader) {
+        Ok(arr) => arr,
+        Err(err_i32) => match Array1::<i64>::read_npy(std::io::BufReader::new(
+            File::open(&doclens_path).unwrap_or_else(|e| {
+                eprintln!("Error opening doclens.npy at {:?}: {}", doclens_path, e);
+                std::process::exit(1);
+            }),
+        )) {
+            Ok(arr) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for &v in arr.iter() {
+                    if v < 0 || v > i32::MAX as i64 {
+                        eprintln!("Error: invalid doc length value {} in doclens.npy", v);
+                        std::process::exit(1);
+                    }
+                    out.push(v as i32);
+                }
+                Array1::from(out)
+            }
+            Err(err_i64) => match Array1::<u32>::read_npy(std::io::BufReader::new(
+                File::open(&doclens_path).unwrap_or_else(|e| {
+                    eprintln!("Error opening doclens.npy at {:?}: {}", doclens_path, e);
+                    std::process::exit(1);
+                }),
+            )) {
+                Ok(arr) => {
+                    let mut out = Vec::with_capacity(arr.len());
+                    for &v in arr.iter() {
+                        if v > i32::MAX as u32 {
+                            eprintln!("Error: invalid doc length value {} in doclens.npy", v);
+                            std::process::exit(1);
+                        }
+                        out.push(v as i32);
+                    }
+                    Array1::from(out)
+                }
+                Err(err_u32) => match Array1::<u64>::read_npy(std::io::BufReader::new(
+                    File::open(&doclens_path).unwrap_or_else(|e| {
+                        eprintln!("Error opening doclens.npy at {:?}: {}", doclens_path, e);
+                        std::process::exit(1);
+                    }),
+                )) {
+                    Ok(arr) => {
+                        let mut out = Vec::with_capacity(arr.len());
+                        for &v in arr.iter() {
+                            if v > i32::MAX as u64 {
+                                eprintln!("Error: invalid doc length value {} in doclens.npy", v);
+                                std::process::exit(1);
+                            }
+                            out.push(v as i32);
+                        }
+                        Array1::from(out)
+                    }
+                    Err(err_u64) => {
+                        eprintln!(
+                            "Error: cannot read doclens.npy as i32 ({}) / i64 ({}) / u32 ({}) / u64 ({})",
+                            err_i32, err_i64, err_u32, err_u64
+                        );
+                        std::process::exit(1);
+                    }
+                },
+            },
+        },
+    };
     let doclens: Vec<usize> = doclens_array.iter().map(|&x| x as usize).collect();
 
-    // Load residuals
+    // Load residuals (PQ codes)
     let residuals_file = File::open(&residuals_path).unwrap_or_else(|e| {
         eprintln!("Error opening residuals.npy at {:?}: {}", residuals_path, e);
         std::process::exit(1);
@@ -236,7 +360,7 @@ fn load_multivec_dataset_pq<const M: usize>(
         m_check, M
     );
 
-    // Load index assignments
+    // Load index assignments with dtype fallbacks
     let assignment_file = File::open(&assignment_path).unwrap_or_else(|e| {
         eprintln!(
             "Error opening index_assignment.npy at {:?}: {}",
@@ -245,40 +369,105 @@ fn load_multivec_dataset_pq<const M: usize>(
         std::process::exit(1);
     });
     let assignment_reader = std::io::BufReader::new(assignment_file);
-    let assignment_array: Array1<u64> =
-        Array1::read_npy(assignment_reader).expect("Cannot read index_assignment.npy");
+    let assignment_array: Array1<u64> = match Array1::<u64>::read_npy(assignment_reader) {
+        Ok(arr) => arr,
+        Err(err_u64) => match Array1::<u32>::read_npy(std::io::BufReader::new(
+            File::open(&assignment_path).unwrap_or_else(|e| {
+                eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                std::process::exit(1);
+            }),
+        )) {
+            Ok(arr) => arr.mapv(|x| x as u64),
+            Err(err_u32) => match Array1::<i64>::read_npy(std::io::BufReader::new(
+                File::open(&assignment_path).unwrap_or_else(|e| {
+                    eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                    std::process::exit(1);
+                }),
+            )) {
+                Ok(arr) => {
+                    let mut out = Vec::with_capacity(arr.len());
+                    for &v in arr.iter() {
+                        if v < 0 {
+                            eprintln!("Error: negative centroid id {} in index_assignment.npy", v);
+                            std::process::exit(1);
+                        }
+                        out.push(v as u64);
+                    }
+                    Array1::from(out)
+                }
+                Err(err_i64) => match Array1::<i32>::read_npy(std::io::BufReader::new(
+                    File::open(&assignment_path).unwrap_or_else(|e| {
+                        eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                        std::process::exit(1);
+                    }),
+                )) {
+                    Ok(arr) => {
+                        let mut out = Vec::with_capacity(arr.len());
+                        for &v in arr.iter() {
+                            if v < 0 {
+                                eprintln!("Error: negative centroid id {} in index_assignment.npy", v);
+                                std::process::exit(1);
+                            }
+                            out.push(v as u64);
+                        }
+                        Array1::from(out)
+                    }
+                    Err(err_i32) => {
+                        eprintln!(
+                            "Error: cannot read index_assignment.npy as u64 ({}) / u32 ({}) / i64 ({}) / i32 ({})",
+                            err_u64, err_u32, err_i64, err_i32
+                        );
+                        std::process::exit(1);
+                    }
+                },
+            },
+        },
+    };
     assert_eq!(assignment_array.len(), n_tokens);
 
-    // Reconstruct documents from two-level PQ
-    let mut reconstructed_tokens = Vec::with_capacity(n_tokens * token_dim);
-    for token_idx in 0..n_tokens {
-        let coarse_idx = assignment_array[token_idx] as usize;
-        assert!(coarse_idx < n_coarse);
-        let coarse_offset = coarse_idx * token_dim;
+    // Build the two-level PQ encoder from pretrained centroids
+    let quantizer = MultiVecTwoLevelProductQuantizer::<M, f16>::from_pretrained(
+        token_dim,
+        coarse_centroids,
+        pq_centroids,
+    );
 
-        for subspace_idx in 0..M {
-            let code = residuals_array[[token_idx, subspace_idx]];
-            let pq_offset = subspace_idx * KSUB * dsub + (code as usize) * dsub;
+    // Build encoded blocked payload per document:
+    // [coarse_ids: 4*n][pq_codes: M*n]
+    let bytes_per_token = 4 + M;
+    let mut encoded_data: Vec<u8> = Vec::with_capacity(n_tokens * bytes_per_token);
 
-            for d in 0..dsub {
-                let coarse_val = coarse_flat[coarse_offset + subspace_idx * dsub + d];
-                let residual_val = pq_reconstruction_centroids[pq_offset + d];
-                reconstructed_tokens.push(coarse_val + residual_val);
+    let mut token_offset = 0usize;
+    for &doclen in doclens_array.iter() {
+        let dlen = doclen as usize;
+
+        for i in 0..dlen {
+            let coarse_id = assignment_array[token_offset + i] as u32;
+            encoded_data.extend(coarse_id.to_le_bytes());
+        }
+        for i in 0..dlen {
+            for m_idx in 0..M {
+                encoded_data.push(residuals_array[[token_offset + i, m_idx]]);
             }
         }
+
+        token_offset += dlen;
     }
 
-    let mut offsets = vec![0];
+    if token_offset != n_tokens {
+        eprintln!(
+            "Error: processed token count mismatch: got {}, expected {}",
+            token_offset, n_tokens
+        );
+        std::process::exit(1);
+    }
+
+    let mut offsets: Vec<usize> = vec![0];
     for &doclen in &doclens {
-        offsets.push(offsets.last().unwrap() + doclen * token_dim);
+        offsets.push(offsets.last().unwrap() + doclen * bytes_per_token);
     }
 
-    let encoder = PlainMultiVecQuantizer::new(token_dim);
-    MultiVectorDataset::from_raw(
-        reconstructed_tokens.into_boxed_slice(),
-        offsets.into(),
-        encoder,
-    )
+    MultiVectorDataset::from_raw(encoded_data.into_boxed_slice(), offsets.into(), quantizer)
 }
 
 fn load_multivec_queries(data_folder: &str) -> Array3<f32> {

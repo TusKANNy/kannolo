@@ -145,12 +145,20 @@ where
 
 fn push_results<D: Distance>(
     results: Vec<vectorium::dataset::ScoredVector<D>>,
+    k: usize,
     distances: &mut Vec<f32>,
     ids: &mut Vec<i64>,
 ) {
-    for scored in results {
+    let mut found = 0;
+    for scored in results.into_iter().take(k) {
         distances.push(scored.distance.distance());
         ids.push(scored.vector as i64);
+        found += 1;
+    }
+
+    for _ in found..k {
+        distances.push(f32::INFINITY);
+        ids.push(-1);
     }
 }
 
@@ -316,7 +324,7 @@ impl DensePlainHNSW {
                     let query_slice = &queries_slice[query_start..query_end];
                     let query_view = DenseVectorView::new(query_slice);
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
             }
             DensePlainHNSWEnum::DotProduct(index) => {
@@ -326,7 +334,7 @@ impl DensePlainHNSW {
                     let query_slice = &queries_slice[query_start..query_end];
                     let query_view = DenseVectorView::new(query_slice);
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
             }
         }
@@ -385,11 +393,11 @@ impl DensePlainHNSW {
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
                 let results = index.search_filtered(query_view, k, &search_config, pred_fn);
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
             DensePlainHNSWEnum::DotProduct(index) => {
                 let results = index.search_filtered(query_view, k, &search_config, pred_fn);
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
         }
 
@@ -478,7 +486,7 @@ impl DensePlainHNSW {
                     acorn_gamma,
                     pred_fn,
                 );
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
             DensePlainHNSWEnum::DotProduct(index) => {
                 let results = index.search_filtered_gamma(
@@ -488,7 +496,7 @@ impl DensePlainHNSW {
                     acorn_gamma,
                     pred_fn,
                 );
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
         }
 
@@ -686,11 +694,11 @@ impl SparsePlainHNSW {
             match &self.inner {
                 SparsePlainHNSWEnum::Euclidean(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
                 SparsePlainHNSWEnum::DotProduct(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
             }
         }
@@ -841,7 +849,7 @@ impl SparseDotVByteHNSW {
             let query_vals = &values_slice[query_start..query_end];
             let query_view = SparseVectorView::new(query_comps, query_vals);
             let results = self.inner.search(query_view, k, &search_config);
-            push_results(results, &mut distances, &mut ids);
+            push_results(results, k, &mut distances, &mut ids);
         }
 
         Python::with_gil(|py| {
@@ -1037,11 +1045,11 @@ impl SparseFixedU8HNSW {
             match &self.inner {
                 SparseFixedU8HNSWEnum::Euclidean(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
                 SparseFixedU8HNSWEnum::DotProduct(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
             }
         }
@@ -1237,11 +1245,11 @@ impl SparseFixedU16HNSW {
             match &self.inner {
                 SparseFixedU16HNSWEnum::Euclidean(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
                 SparseFixedU16HNSWEnum::DotProduct(index) => {
                     let results = index.search(query_view, k, &search_config);
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                 }
             }
         }
@@ -1777,11 +1785,11 @@ impl DensePQHNSW {
         match &self.inner {
             DensePQHNSWEnum::Euclidean(inner) => {
                 let results = inner.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
             DensePQHNSWEnum::DotProduct(inner) => {
                 let results = inner.search(query_view, k, &search_config);
-                push_results(results, &mut distances, &mut ids);
+                push_results(results, k, &mut distances, &mut ids);
             }
         }
 
@@ -1963,7 +1971,7 @@ impl DenseFlatIndex {
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                     (distances, ids)
                 })
                 .collect(),
@@ -1978,7 +1986,7 @@ impl DenseFlatIndex {
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                     (distances, ids)
                 })
                 .collect(),
@@ -2093,7 +2101,7 @@ impl SparseFlatIndex {
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();
-                    push_results(results, &mut distances, &mut ids);
+                    push_results(results, k, &mut distances, &mut ids);
                     (distances, ids)
                 })
                 .collect(),
@@ -2134,7 +2142,6 @@ impl SparseMultivecRerankIndex {
     /// # Multivector Data Folder Structure (Plain Quantizer)
     /// The folder must contain the following files:
     /// * `documents.npy` – Dense document embeddings (shape: [n_documents, n_tokens, token_dim], dtype: float32)
-    /// * `queries.npy` – Dense query embeddings (shape: [n_queries, n_tokens, token_dim], dtype: float32)
     /// * `doclens.npy` – Document lengths (shape: [n_documents], dtype: int32 or int64)
     ///
     #[staticmethod]
@@ -2234,10 +2241,7 @@ impl SparseMultivecRerankIndex {
                 beta,
             );
 
-            for result in results {
-                all_distances.push(result.distance.distance());
-                all_ids.push(result.vector as i64);
-            }
+            push_results(results, k, &mut all_distances, &mut all_ids);
         }
 
         Python::with_gil(|py| {
@@ -2472,7 +2476,6 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
     ///
     /// # Multivector Data Folder Structure (Two-Level PQ Quantizer)
     /// The folder must contain the following files:
-    /// * `queries.npy` – Dense query embeddings (shape: [n_queries, n_tokens, token_dim], dtype: float32)
     /// * `doclens.npy` – Document lengths (shape: [n_documents], dtype: int32 or int64)
     /// * `centroids.npy` – Coarse centroids from first-level quantization (shape: [n_centroids, token_dim], dtype: float32)
     /// * `index_assignment.npy` – Index assignments for documents to centroids (shape: [n_documents, n_tokens], dtype: int32 or int64)
@@ -2642,10 +2645,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 ),
             };
 
-            for result in results {
-                all_distances.push(result.distance.distance());
-                all_ids.push(result.vector as i64);
-            }
+            push_results(results, k, &mut all_distances, &mut all_ids);
         }
 
         Python::with_gil(|py| {

@@ -1674,7 +1674,6 @@ impl DensePQHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
@@ -1711,7 +1710,6 @@ impl DensePQHNSW {
         ef_construction: usize,
         metric: String,
     ) -> PyResult<Self> {
-
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
         let config = HNSWBuildConfiguration::default()

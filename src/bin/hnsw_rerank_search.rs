@@ -181,6 +181,7 @@ fn load_multivec_dataset_pq<const M: usize>(
     let residuals_path = Path::new(data_folder).join("residuals.npy");
     let doclens_path = Path::new(data_folder).join("doclens.npy");
     let assignment_path = Path::new(data_folder).join("index_assignment.npy");
+    let norms_path = Path::new(data_folder).join("residual_norms.npy");
 
     // Load coarse centroids (n_centroids, dim)
     let coarse_file = File::open(&coarse_path).unwrap_or_else(|e| {
@@ -201,11 +202,10 @@ fn load_multivec_dataset_pq<const M: usize>(
     }
     let dsub = token_dim / M;
 
-    let mut coarse_ds =
-        PlainDenseDatasetGrowable::<f32, SquaredEuclideanDistance>::with_capacity(
-            PlainDenseQuantizer::new(token_dim),
-            n_coarse,
-        );
+    let mut coarse_ds = PlainDenseDatasetGrowable::<f32, SquaredEuclideanDistance>::with_capacity(
+        PlainDenseQuantizer::new(token_dim),
+        n_coarse,
+    );
     for row in coarse_array.rows() {
         coarse_ds.push(DenseVectorView::new(row.as_slice().unwrap()));
     }
@@ -237,7 +237,10 @@ fn load_multivec_dataset_pq<const M: usize>(
         Err(err_arr1) => {
             let arr3: Array3<f32> = Array3::read_npy(std::io::BufReader::new(
                 File::open(&pq_centroids_path).unwrap_or_else(|e| {
-                    eprintln!("Error opening pq_centroids.npy at {:?}: {}", pq_centroids_path, e);
+                    eprintln!(
+                        "Error opening pq_centroids.npy at {:?}: {}",
+                        pq_centroids_path, e
+                    );
                     std::process::exit(1);
                 }),
             ))
@@ -373,14 +376,20 @@ fn load_multivec_dataset_pq<const M: usize>(
         Ok(arr) => arr,
         Err(err_u64) => match Array1::<u32>::read_npy(std::io::BufReader::new(
             File::open(&assignment_path).unwrap_or_else(|e| {
-                eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                eprintln!(
+                    "Error opening index_assignment.npy at {:?}: {}",
+                    assignment_path, e
+                );
                 std::process::exit(1);
             }),
         )) {
             Ok(arr) => arr.mapv(|x| x as u64),
             Err(err_u32) => match Array1::<i64>::read_npy(std::io::BufReader::new(
                 File::open(&assignment_path).unwrap_or_else(|e| {
-                    eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                    eprintln!(
+                        "Error opening index_assignment.npy at {:?}: {}",
+                        assignment_path, e
+                    );
                     std::process::exit(1);
                 }),
             )) {
@@ -397,7 +406,10 @@ fn load_multivec_dataset_pq<const M: usize>(
                 }
                 Err(err_i64) => match Array1::<i32>::read_npy(std::io::BufReader::new(
                     File::open(&assignment_path).unwrap_or_else(|e| {
-                        eprintln!("Error opening index_assignment.npy at {:?}: {}", assignment_path, e);
+                        eprintln!(
+                            "Error opening index_assignment.npy at {:?}: {}",
+                            assignment_path, e
+                        );
                         std::process::exit(1);
                     }),
                 )) {
@@ -405,7 +417,10 @@ fn load_multivec_dataset_pq<const M: usize>(
                         let mut out = Vec::with_capacity(arr.len());
                         for &v in arr.iter() {
                             if v < 0 {
-                                eprintln!("Error: negative centroid id {} in index_assignment.npy", v);
+                                eprintln!(
+                                    "Error: negative centroid id {} in index_assignment.npy",
+                                    v
+                                );
                                 std::process::exit(1);
                             }
                             out.push(v as u64);
@@ -425,16 +440,44 @@ fn load_multivec_dataset_pq<const M: usize>(
     };
     assert_eq!(assignment_array.len(), n_tokens);
 
+    // Optional residual norms
+    let norms_array: Option<Array1<f32>> = if norms_path.exists() {
+        let norms_file = File::open(&norms_path).unwrap_or_else(|e| {
+            eprintln!(
+                "Error opening residual_norms.npy at {:?}: {}",
+                norms_path, e
+            );
+            std::process::exit(1);
+        });
+        let norms_reader = std::io::BufReader::new(norms_file);
+        let norms_arr: Array1<f32> =
+            Array1::read_npy(norms_reader).expect("Cannot read residual_norms.npy");
+        if norms_arr.len() != n_tokens {
+            eprintln!(
+                "Error: residual_norms.npy length mismatch: got {}, expected {}",
+                norms_arr.len(),
+                n_tokens
+            );
+            std::process::exit(1);
+        }
+        Some(norms_arr)
+    } else {
+        None
+    };
+
+    let with_norms = norms_array.is_some();
+
     // Build the two-level PQ encoder from pretrained centroids
     let quantizer = MultiVecTwoLevelProductQuantizer::<M, f16>::from_pretrained(
         token_dim,
         coarse_centroids,
         pq_centroids,
+        with_norms,
     );
 
     // Build encoded blocked payload per document:
-    // [coarse_ids: 4*n][pq_codes: M*n]
-    let bytes_per_token = 4 + M;
+    // [coarse_ids: 4*n][pq_codes: M*n][norms: 2*n (f16) if enabled]
+    let bytes_per_token = 4 + M + if with_norms { 2 } else { 0 };
     let mut encoded_data: Vec<u8> = Vec::with_capacity(n_tokens * bytes_per_token);
 
     let mut token_offset = 0usize;
@@ -448,6 +491,12 @@ fn load_multivec_dataset_pq<const M: usize>(
         for i in 0..dlen {
             for m_idx in 0..M {
                 encoded_data.push(residuals_array[[token_offset + i, m_idx]]);
+            }
+        }
+        if let Some(ref norms) = norms_array {
+            for i in 0..dlen {
+                encoded_data
+                    .extend_from_slice(&f16::from_f32(norms[token_offset + i]).to_le_bytes());
             }
         }
 

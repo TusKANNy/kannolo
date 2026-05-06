@@ -583,7 +583,7 @@ where
     type SearchParams = HNSWSearchConfiguration;
 
     #[inline]
-    fn n_vectors(&self) -> usize {
+    fn n_elements(&self) -> usize {
         self.dataset.len()
     }
 
@@ -796,6 +796,19 @@ where
 }
 
 impl<D, G> IndexSerializer for HNSW<D, G> {}
+
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset + SpaceUsage,
+    G: GraphTrait,
+{
+    /// Total space used by the dataset and all graph levels, in bytes.
+    pub fn space_usage_bytes(&self) -> usize {
+        let dataset_size = self.dataset.space_usage_bytes();
+        let graph_size: usize = self.levels.iter().map(|g| g.get_space_usage_bytes()).sum();
+        dataset_size + graph_size
+    }
+}
 
 /// Computes the probabilities for a node to be assigned to each level in the HNSW graph.
 ///
@@ -1264,34 +1277,34 @@ mod convert_dataset_tests {
     #[test]
     fn test_convert_dataset_into_dotvbyte() {
         let plain_hnsw = build_test_hnsw();
-        let n = plain_hnsw.n_vectors();
+        let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
             plain_hnsw.convert_dataset_into();
 
-        assert_eq!(hnsw.n_vectors(), n);
+        assert_eq!(hnsw.n_elements(), n);
     }
 
     #[test]
     fn test_convert_dataset_into_fixedu8() {
         let plain_hnsw = build_test_hnsw();
-        let n = plain_hnsw.n_vectors();
+        let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
             plain_hnsw.convert_dataset_into();
 
-        assert_eq!(hnsw.n_vectors(), n);
+        assert_eq!(hnsw.n_elements(), n);
     }
 
     #[test]
     fn test_convert_dataset_into_fixedu16() {
         let plain_hnsw = build_test_hnsw();
-        let n = plain_hnsw.n_vectors();
+        let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
             plain_hnsw.convert_dataset_into();
 
-        assert_eq!(hnsw.n_vectors(), n);
+        assert_eq!(hnsw.n_elements(), n);
     }
 
     #[test]

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "kannolo"
-version = "0.4.7"
+version = "0.4.8"
 description = "Python interface for the kANNolo library"
 requires-python = ">=3.9"
 classifiers = [
@@ -30,3 +30,6 @@ keywords = ["Approximate Nearest Neighbors", "Similarity Search", "indexing", "R
 dependencies = [
     "numpy",
 ]
+
+[tool.maturin]
+features = ["python"]

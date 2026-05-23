@@ -102,13 +102,22 @@ python -c "import kannolo; print('Successfully installed kannolo!')"
 ---
 
 
-### Rust 
+### Rust
 
-This command allows you to compile all the Rust binaries contained in `src/bin`
+The crate exposes two feature flags:
+
+| Feature | What it enables |
+|---|---|
+| `python` | PyO3 bindings — activated automatically by maturin when building the Python wheel |
+| `cli` | CLI binaries in `src/bin/` (`hnsw_build`, `hnsw_search`, `hnsw_rerank_search`) |
+
+Neither feature is active by default, so a plain `cargo build --release` compiles only the library crate. To build the CLI binaries, enable the `cli` feature:
 
 ```bash
-RUSTFLAGS="-C target-cpu=native" cargo build --release
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features cli
 ```
+
+The resulting binaries are placed in `target/release/`.
 
 Details on how to use kANNolo's core engine in Rust 🦀 can be found in [`docs/RustUsage.md`](docs/RustUsage.md).
 

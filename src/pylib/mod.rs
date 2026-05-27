@@ -571,8 +571,11 @@ impl SparsePlainHNSW {
         metric: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
-        let values_f32 = values.as_slice()?.to_vec();
-        let values_f16: Vec<f16> = values_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let values_f16: Vec<f16> = values
+            .as_slice()?
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect();
         let offsets_vec = offsets
             .as_slice()?
             .iter()
@@ -2024,8 +2027,11 @@ impl SparseFlatIndex {
         offsets: PyReadonlyArray1<i64>,
     ) -> PyResult<Self> {
         let comp_vec = convert_components_to_u16(components.as_slice()?)?;
-        let values_f32 = values.as_slice()?.to_vec();
-        let values_vec: Vec<f16> = values_f32.iter().map(|&x| f16::from_f32(x)).collect();
+        let values_vec: Vec<f16> = values
+            .as_slice()?
+            .iter()
+            .map(|&x| f16::from_f32(x))
+            .collect();
         let offsets_slice = offsets.as_slice()?;
         let offsets_usize: Vec<usize> = offsets_slice.iter().map(|&x| x as usize).collect();
 

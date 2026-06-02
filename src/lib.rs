@@ -22,9 +22,9 @@ use crate::pylib::SparseFixedU8HNSW as SparseFixedU8IndexPy;
 use crate::pylib::SparseFixedU16HNSW as SparseFixedU16IndexPy;
 #[cfg(feature = "python")]
 use crate::pylib::SparseFlatIndex;
-#[cfg(feature = "python")]
+#[cfg(all(feature = "python", feature = "multivec"))]
 use crate::pylib::SparseMultivecRerankIndex;
-#[cfg(feature = "python")]
+#[cfg(all(feature = "python", feature = "multivec"))]
 use crate::pylib::SparseMultivecTwoLevelsPQRerankIndex;
 #[cfg(feature = "python")]
 use crate::pylib::SparsePlainHNSW as SparsePlainIndexPy;
@@ -50,7 +50,9 @@ pub fn kannolo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DensePQIndexPy>()?;
     m.add_class::<DenseFlatIndex>()?;
     m.add_class::<SparseFlatIndex>()?;
+    #[cfg(feature = "multivec")]
     m.add_class::<SparseMultivecRerankIndex>()?;
+    #[cfg(feature = "multivec")]
     m.add_class::<SparseMultivecTwoLevelsPQRerankIndex>()?;
     Ok(())
 }

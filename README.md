@@ -35,8 +35,9 @@ For most users, this is the easiest option:
 ```bash
 pip install kannolo
 ```
-If a compatible wheel exists for your platform, `pip` will download and install it directly without compilation.
-If no compatible wheel exists, `pip` will automatically compile from source.
+The prebuilt wheel includes dense and sparse HNSW indexes. If a compatible wheel exists for your platform, `pip` downloads and installs it directly. If not, `pip` compiles from source.
+
+To use multivector reranking (`SparseMultivecRerankIndex`, `SparseMultivecTwoLevelsPQRerankIndex`), build from source with the `multivec` feature enabled (see [Building from source](#building-from-source-maximum-performance) below).
 
 ### Building from source (maximum performance)
 For maximum performance optimized to your CPU, build from source. Choose one of the two approaches below:
@@ -56,11 +57,12 @@ rustup default nightly
 ```
 
 #### Approach 1: Build from PyPI source
-Compile and install directly from PyPI with CPU optimization:
+Compile and install directly from PyPI with CPU optimization (dense and sparse indexes only):
 ```bash
 RUSTFLAGS="-C target-cpu=native" pip install --no-binary :all: kannolo
 ```
-This installs the package in your system/virtual environment site-packages.
+
+This installs the package in your system/virtual environment site-packages. For multivector reranking support, use Approach 2 instead.
 
 #### Approach 2: Build from GitHub (development mode)
 Clone the repository and build for development/modification:
@@ -88,9 +90,16 @@ pip install maturin
 ```
 
 4. **Build and install in editable mode:**
-```bash
-RUSTFLAGS="-C target-cpu=native" maturin develop --release
-```
+
+   Dense and sparse indexes only (default, lighter build):
+   ```bash
+   RUSTFLAGS="-C target-cpu=native" maturin develop --release
+   ```
+
+   With multivector reranking support (`SparseMultivecRerankIndex`, `SparseMultivecTwoLevelsPQRerankIndex`):
+   ```bash
+   RUSTFLAGS="-C target-cpu=native" maturin develop --release --features multivec
+   ```
 
 **Why use editable mode?** Changes to Python code take effect immediately without reinstalling. Perfect for development and prototyping.
 
@@ -104,17 +113,32 @@ python -c "import kannolo; print('Successfully installed kannolo!')"
 
 ### Rust
 
-The crate exposes two feature flags:
+The crate exposes three feature flags:
 
-| Feature | What it enables |
-|---|---|
-| `python` | PyO3 bindings — activated automatically by maturin when building the Python wheel |
-| `cli` | CLI binaries in `src/bin/` (`hnsw_build`, `hnsw_search`, `hnsw_rerank_search`) |
+| Feature | What it enables | Default |
+|---------|-----------------|:-------:|
+| `multivec` | Multivector reranking indexes (`SparseMultivecRerankIndex`, `SparseMultivecTwoLevelsPQRerankIndex`) and the `hnsw_rerank_search` CLI binary | No |
+| `python` | PyO3 bindings — activated automatically by maturin when building the Python wheel | No |
+| `cli` | CLI binaries: `hnsw_build`, `hnsw_search` (combine with `multivec` to also get `hnsw_rerank_search`) | No |
 
-Neither feature is active by default, so a plain `cargo build --release` compiles only the library crate. To build the CLI binaries, enable the `cli` feature:
+If you want to compile the **library only** (dense and sparse indexes, no multivec, no binaries):
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+```
 
+If you want the **CLI binaries** `hnsw_build` and `hnsw_search` (dense and sparse):
 ```bash
 RUSTFLAGS="-C target-cpu=native" cargo build --release --features cli
+```
+
+If you want **multivector reranking** in the library (adds `SparseMultivecRerankIndex` and `SparseMultivecTwoLevelsPQRerankIndex`):
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features multivec
+```
+
+If you want **all CLI binaries including `hnsw_rerank_search`**:
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features "cli,multivec"
 ```
 
 The resulting binaries are placed in `target/release/`.

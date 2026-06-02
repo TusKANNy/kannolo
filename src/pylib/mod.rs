@@ -13,6 +13,7 @@ use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+#[cfg(feature = "multivec")]
 use vectorium::core::rerank_index::RerankIndex;
 use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
 use vectorium::encoders::dense_scalar::{PlainDenseQuantizer, ScalarDenseSupportedDistance};
@@ -20,12 +21,16 @@ use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
 use vectorium::encoders::pq::{ProductQuantizer, ProductQuantizerDistance};
 use vectorium::encoders::sparse_scalar::{PlainSparseQuantizer, ScalarSparseSupportedDistance};
 use vectorium::readers::{read_npy_f32, read_seismic_format};
-use vectorium::vector::{DenseMultiVectorView, DenseVectorView, SparseVectorView};
+#[cfg(feature = "multivec")]
+use vectorium::vector::DenseMultiVectorView;
+use vectorium::vector::{DenseVectorView, SparseVectorView};
 use vectorium::{
     Dataset, DatasetGrowable, DenseDataset, FixedU8Q, FixedU16Q, Float, FromF32,
-    MultiVectorDataset, PackedSparseDataset, PlainDenseDataset, PlainMultiVecQuantizer,
-    PlainSparseDataset, PlainSparseDatasetGrowable, ScalarSparseDataset, ValueType,
+    PackedSparseDataset, PlainDenseDataset, PlainSparseDataset, PlainSparseDatasetGrowable,
+    ScalarSparseDataset, ValueType,
 };
+#[cfg(feature = "multivec")]
+use vectorium::{MultiVectorDataset, PlainMultiVecQuantizer};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum MetricKind {
@@ -1804,7 +1809,7 @@ impl DensePQHNSW {
 
 // Multivector Reranking
 
-/// Helper to load plain multivector dataset from folder
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_plain(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
@@ -2126,6 +2131,7 @@ impl SparseFlatIndex {
     }
 }
 
+#[cfg(feature = "multivec")]
 #[pyclass]
 pub struct SparseMultivecRerankIndex {
     inner: RerankIndex<
@@ -2135,6 +2141,7 @@ pub struct SparseMultivecRerankIndex {
     >,
 }
 
+#[cfg(feature = "multivec")]
 #[pymethods]
 impl SparseMultivecRerankIndex {
     /// Build a rerank index from a pre-built sparse HNSW index and multivector data folder.
@@ -2257,30 +2264,35 @@ impl SparseMultivecRerankIndex {
 }
 
 // Helper to load two-level PQ multivector dataset
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_pq_8(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
     load_multivec_dataset_pq_generic::<8>(data_folder)
 }
 
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_pq_16(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
     load_multivec_dataset_pq_generic::<16>(data_folder)
 }
 
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_pq_32(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
     load_multivec_dataset_pq_generic::<32>(data_folder)
 }
 
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_pq_64(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
     load_multivec_dataset_pq_generic::<64>(data_folder)
 }
 
+#[cfg(feature = "multivec")]
 fn load_multivec_dataset_pq_generic<const M: usize>(
     data_folder: &str,
 ) -> PyResult<MultiVectorDataset<PlainMultiVecQuantizer<f32>>> {
@@ -2433,6 +2445,7 @@ fn load_multivec_dataset_pq_generic<const M: usize>(
 }
 
 // Enum to handle different PQ subspace counts
+#[cfg(feature = "multivec")]
 enum SparseMultivecTwoLevelsPQRerankIndexEnum {
     M8(
         RerankIndex<
@@ -2464,11 +2477,13 @@ enum SparseMultivecTwoLevelsPQRerankIndexEnum {
     ),
 }
 
+#[cfg(feature = "multivec")]
 #[pyclass]
 pub struct SparseMultivecTwoLevelsPQRerankIndex {
     inner: SparseMultivecTwoLevelsPQRerankIndexEnum,
 }
 
+#[cfg(feature = "multivec")]
 #[pymethods]
 impl SparseMultivecTwoLevelsPQRerankIndex {
     /// Build a rerank index from a pre-built sparse HNSW index and multivector data folder with two-level PQ encoding.

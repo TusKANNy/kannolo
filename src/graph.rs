@@ -9,7 +9,7 @@ use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
 use crate::hnsw_utils::from_max_heap_to_min_heap;
-use crate::visited_set::{VisitedSet, create_visited_set};
+use crate::visited_set::create_visited_set;
 
 /// A trait that defines the common interface for different graph implementations.
 ///
@@ -209,7 +209,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited_table = create_visited_set(dataset.len(), ef);
+        let mut visited_table = create_visited_set(ef, lambda);
 
         top_candidates.push(entry_node);
         candidates.push(Reverse(entry_node));
@@ -269,8 +269,7 @@ pub trait GraphTrait {
             };
 
             for neighbor_local_id in self.neighbors(id_candidate) {
-                if !visited_table.contains(neighbor_local_id) {
-                    visited_table.insert(neighbor_local_id);
+                if visited_table.insert(neighbor_local_id) {
                     buf_local[count] = neighbor_local_id;
                     buf_ext[count] = self.get_external_id(neighbor_local_id) as VectorId;
                     count += 1;
@@ -340,7 +339,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(dataset.len(), ef);
+        let mut visited = create_visited_set(ef, lambda);
 
         // Always add the entry to the traversal set so we can expand from it even
         // when it does not satisfy the predicate.
@@ -372,10 +371,9 @@ pub trait GraphTrait {
             // Predicate-satisfying neighbors are admitted to the candidate/result heaps.
             // Non-predicate neighbors are collected for the two-hop phase below.
             for neighbor_local in self.neighbors(node.vector) {
-                if visited.contains(neighbor_local) {
+                if !visited.insert(neighbor_local) {
                     continue;
                 }
-                visited.insert(neighbor_local);
 
                 let ext = self.get_external_id(neighbor_local);
                 if predicate(ext) {
@@ -408,10 +406,9 @@ pub trait GraphTrait {
             // This compensates for sparse connectivity in the predicate sub-graph.
             for &mid_local in &non_pred_direct {
                 for neighbor_local in self.neighbors(mid_local) {
-                    if visited.contains(neighbor_local) {
+                    if !visited.insert(neighbor_local) {
                         continue;
                     }
-                    visited.insert(neighbor_local);
 
                     let ext = self.get_external_id(neighbor_local);
                     if predicate(ext) {
@@ -477,7 +474,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(dataset.len(), ef);
+        let mut visited = create_visited_set(ef, lambda);
 
         // Always add the entry to C (traversal); add to W (results) only if predicate passes.
         visited.insert(entry_node.vector);
@@ -495,10 +492,9 @@ pub trait GraphTrait {
             }
 
             for neighbor_local in self.neighbors(node.vector) {
-                if visited.contains(neighbor_local) {
+                if !visited.insert(neighbor_local) {
                     continue;
                 }
-                visited.insert(neighbor_local);
 
                 let ext = self.get_external_id(neighbor_local);
                 let d = query_evaluator.compute_distance(dataset.get(ext as VectorId));

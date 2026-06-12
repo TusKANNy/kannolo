@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."
@@ -17,10 +17,8 @@ num-traits  = "0.2.18"
 byteorder   = "1.5.0"
 half        = { version = "2.4.1", features = ["serde", "std", "num-traits"] }
 rayon       = "1.10.0"
-bitvec      = "1.0.1"
 bincode     = "2.0.1"
 rustc-hash  = "2.1.0"
-nohash-hasher = "0.2.0"
 optional    = { version = "0.5.0", features = ["serde"] }
 vectorium   = { git = "https://github.com/TusKANNy/vectorium.git" }
 indicatif   = { version = "0.18.3", features = ["rayon"] }

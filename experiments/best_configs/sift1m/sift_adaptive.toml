@@ -1,0 +1,91 @@
+name =          "sift_hnsw_adaptive_best"
+title =         "Search dense HNSWM on SIFT1M - adaptive best"
+description =   "Best adaptive configs from grid_sift_hnsw_adaptive"
+dataset =       "SIFT1M"
+dataset-type =  "dense"    # Dataset type: "dense" or "sparse"
+value-type =    "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+encoder       = "plain"      # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
+graph-type =    "standard"  # Graph type: "standard" or "fixed-degree"
+
+[settings]
+k =             10
+num-runs       =        1       # Number of runs. PLEASE think carefully how increasing
+                        # this may influence your query time
+NUMA =        "numactl --physcpubind='0' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
+build =         false  # Need to build the index or the index is already built?
+metric =        ""
+
+[folder]
+data =          "~/knn_datasets/dense_datasets/sift_1M" # data base path
+index =         "~/knn_indexes/dense_datasets/sift_1M" # index input path
+qrels_path =    ""
+experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
+
+[filename]
+dataset =       "dataset.npy" # dataset input file name
+queries =       "queries.npy" # queries input file name
+groundtruth =   "groundtruth.npy" # ground truth input file
+doc_ids =       ""
+query_ids =     ""
+index =         "sift_1M" # index file name
+
+[indexing_parameters]
+m =            32
+ef-construction =          200
+metric =       "euclidean" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
+
+[query]
+
+    # Target Recall: 90.0 | Recall: 90.184 | Query Time (us): 55
+    [query."recall_90.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      11
+    lambda = 0.06
+    # Target Recall: 91.0 | Recall: 91.564 | Query Time (us): 59
+    [query."recall_91.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      11
+    lambda = 0.07
+    # Target Recall: 92.0 | Recall: 92.504 | Query Time (us): 63
+    [query."recall_92.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      12
+    lambda = 0.07
+    # Target Recall: 93.0 | Recall: 93.678 | Query Time (us): 68
+    [query."recall_93.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      12
+    lambda = 0.08
+    # Target Recall: 94.0 | Recall: 94.036 | Query Time (us): 70
+    [query."recall_94.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      10
+    lambda = 0.1
+    # Target Recall: 95.0 | Recall: 95.041 | Query Time (us): 75
+    [query."recall_95.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      10
+    lambda = 0.11
+    # Target Recall: 96.0 | Recall: 96.381 | Query Time (us): 86
+    [query."recall_96.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      12
+    lambda = 0.11
+    # Target Recall: 97.0 | Recall: 97.089 | Query Time (us): 94
+    [query."recall_97.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      12
+    lambda = 0.12
+    # Target Recall: 98.0 | Recall: 98.208 | Query Time (us): 113
+    [query."recall_98.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      11
+    lambda = 0.15
+    # Target Recall: 99.0 | Recall: 99.001 | Query Time (us): 146
+    [query."recall_99.0"]
+    early-termination = "distance-adaptive"
+    ef-search =      15
+    lambda = 0.15

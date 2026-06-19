@@ -209,7 +209,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited_table = create_visited_set(ef, lambda);
+        let mut visited_table = create_visited_set(ef, lambda, self.n_nodes());
 
         top_candidates.push(entry_node);
         candidates.push(Reverse(entry_node));
@@ -339,7 +339,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(ef, lambda);
+        let mut visited = create_visited_set(ef, lambda, self.n_nodes());
 
         // Always add the entry to the traversal set so we can expand from it even
         // when it does not satisfy the predicate.
@@ -474,7 +474,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(ef, lambda);
+        let mut visited = create_visited_set(ef, lambda, self.n_nodes());
 
         // Always add the entry to C (traversal); add to W (results) only if predicate passes.
         visited.insert(entry_node.vector);

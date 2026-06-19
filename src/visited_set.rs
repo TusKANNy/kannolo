@@ -1,30 +1,32 @@
 use rustc_hash::FxHashSet;
 
+/// Slope on `ef_search` in the capacity formula (both regimes).
+/// Empirically determined.
+const CAPACITY_EF_SLOPE: f64 = 1.2;
+
+/// Slope on `lambda` in the adaptive early-termination capacity formula.
+/// Empirically determined.
+const CAPACITY_LAMBDA_SLOPE: f64 = 800.0;
+
 /// Estimates the number of distinct nodes a search is likely to visit, used to
-/// size the visited set's initial capacity.
-///
-/// With `lambda == 0.0` (standard HNSW, no early-termination relaxation), the
-/// number of visited nodes tracks `ef` closely, so a small multiple suffices.
-///
-/// With `lambda > 0.0` (distance-adaptive early termination), the relaxation
-/// allows the search to keep admitting candidates well past `ef` - in practice
-/// the number of visited nodes can reach several times `ef` depending on
-/// `lambda`. The `lambda * 10_000` term accounts for this, keeping the visited
-/// set's load factor close to 1 (and thus avoiding resizes) for typical lambda
-/// values used by the adaptive-best configs.
-fn estimate_visited_capacity(ef: usize, lambda: f32) -> usize {
+/// pre-size the `FxHashSet` visited set and limit mid-search rehashes.
+fn estimate_visited_capacity(ef: usize, lambda: f32, dataset_size: usize) -> usize {
+    let log2n = (dataset_size.max(2) as f64).log2();
     if lambda == 0.0 {
-        16 * ef + 200
+        (CAPACITY_EF_SLOPE * log2n * ef as f64) as usize + 200
     } else {
-        200 * ef + (lambda * 10_000.0) as usize
+        (log2n * (CAPACITY_EF_SLOPE * ef as f64 + CAPACITY_LAMBDA_SLOPE * lambda as f64)) as usize
     }
 }
 
 /// Creates a visited set sized for the given search parameters.
 ///
 /// `lambda` is the relaxation parameter of the distance-adaptive early
-/// termination strategy (`0.0` if not used), and affects the initial capacity
-/// estimate via [`estimate_visited_capacity`].
-pub fn create_visited_set(ef: usize, lambda: f32) -> FxHashSet<usize> {
-    FxHashSet::with_capacity_and_hasher(estimate_visited_capacity(ef, lambda), Default::default())
+/// termination strategy (`0.0` if not used). `dataset_size` is the number of
+/// vectors in the index, used to scale capacity with `log₂(dataset_size)`.
+pub fn create_visited_set(ef: usize, lambda: f32, dataset_size: usize) -> FxHashSet<usize> {
+    FxHashSet::with_capacity_and_hasher(
+        estimate_visited_capacity(ef, lambda, dataset_size),
+        Default::default(),
+    )
 }

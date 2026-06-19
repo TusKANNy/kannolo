@@ -344,7 +344,7 @@ impl DensePlainHNSW {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -371,7 +371,7 @@ impl DensePlainHNSW {
         py: Python<'_>,
         query: PyReadonlyArray1<f32>,
         k: usize,
-        predicate: PyObject,
+        predicate: Py<PyAny>,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
@@ -452,7 +452,7 @@ impl DensePlainHNSW {
         py: Python<'_>,
         query: PyReadonlyArray1<f32>,
         k: usize,
-        predicate: PyObject,
+        predicate: Py<PyAny>,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
@@ -711,7 +711,7 @@ impl SparsePlainHNSW {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -860,7 +860,7 @@ impl SparseDotVByteHNSW {
             push_results(results, k, &mut distances, &mut ids);
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -1062,7 +1062,7 @@ impl SparseFixedU8HNSW {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -1262,7 +1262,7 @@ impl SparseFixedU16HNSW {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -1799,7 +1799,7 @@ impl DensePQHNSW {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -2005,7 +2005,7 @@ impl DenseFlatIndex {
             all_ids.extend(ids);
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
             let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -2123,7 +2123,7 @@ impl SparseFlatIndex {
             all_ids.extend(ids);
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
             let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -2255,7 +2255,7 @@ impl SparseMultivecRerankIndex {
             push_results(results, k, &mut all_distances, &mut all_ids);
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
             let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
@@ -2667,7 +2667,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
             push_results(results, k, &mut all_distances, &mut all_ids);
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
             let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))

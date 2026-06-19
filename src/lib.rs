@@ -1,8 +1,3 @@
-#![feature(iter_array_chunks)]
-#![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_mm_shuffle))]
-#![feature(portable_simd)]
-#![feature(thread_id_value)]
-
 #[cfg(feature = "python")]
 use pyo3::types::PyModuleMethods;
 

@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use optional::Optioned;
 use serde::{Deserialize, Serialize};
@@ -971,7 +972,7 @@ impl From<GrowableGraph> for Graph {
         let n_nodes = growable_graph.n_nodes();
         let max_degree = growable_graph.max_degree();
 
-        let mut neighbors = Vec::with_capacity(growable_graph.neighbors.len());
+        let mut neighbors: Vec<u32> = Vec::with_capacity(growable_graph.neighbors.len());
         let mut offsets = Vec::with_capacity(n_nodes + 1);
 
         offsets.push(0);
@@ -981,7 +982,8 @@ impl From<GrowableGraph> for Graph {
             neighbors.extend(
                 growable_graph.neighbors[start..end]
                     .iter()
-                    .filter_map(|&opt| opt.into_option()),
+                    .map(|a| a.load(Ordering::Relaxed))
+                    .take_while(|&val| val != u32::MAX),
             );
             offsets.push(neighbors.len());
         }
@@ -1091,8 +1093,16 @@ impl From<GrowableGraph> for GraphFixedDegree {
             .ids_mapping
             .map(|mapping| mapping.into_boxed_slice());
 
+        // Safety: Optioned<u32> is #[repr(transparent)] over u32, and AtomicU32 has the same
+        // size/alignment as u32, with u32::MAX used as the None sentinel in both types.
+        let neighbors: Box<[Optioned<u32>]> = unsafe {
+            let boxed: Box<[AtomicU32]> = growable_graph.neighbors.into_boxed_slice();
+            let raw = Box::into_raw(boxed) as *mut [Optioned<u32>];
+            Box::from_raw(raw)
+        };
+
         GraphFixedDegree {
-            neighbors: growable_graph.neighbors.into_boxed_slice(),
+            neighbors,
             ids_mapping,
             max_degree: growable_graph.max_degree,
             n_edges: growable_graph.n_edges,
@@ -1101,14 +1111,15 @@ impl From<GrowableGraph> for GraphFixedDegree {
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
+// AtomicU32 is not Serialize/Deserialize; GrowableGraph is build-only and never serialized.
+#[derive(Default)]
 pub struct GrowableGraph {
-    neighbors: Vec<Optioned<u32>>, // Using Optioned<u32> to represent neighbors, where None is represented by u32::MAX
-    ids_mapping: Option<Vec<usize>>, // This is used to map the internal IDs to external IDs
+    neighbors: Vec<AtomicU32>, // u32::MAX = no neighbor (None sentinel, same as Optioned<u32>)
+    ids_mapping: Option<Vec<usize>>,
     max_degree: usize,
     n_edges: usize,
     n_nodes: usize,
-    inserted_nodes: usize, // Number of nodes that have been actually inserted
+    inserted_nodes: usize,
 }
 
 impl GraphTrait for GrowableGraph {
@@ -1118,8 +1129,9 @@ impl GraphTrait for GrowableGraph {
         let end = start + self.max_degree;
         self.neighbors[start..end]
             .iter()
-            .take_while(|&opt| opt.is_some())
-            .map(|opt| opt.unwrap() as usize)
+            .map(|a| a.load(Ordering::Relaxed))
+            .take_while(|&val| val != u32::MAX)
+            .map(|val| val as usize)
     }
 
     #[inline]
@@ -1150,7 +1162,7 @@ impl GraphTrait for GrowableGraph {
     }
 
     fn get_space_usage_bytes(&self) -> usize {
-        let neighbors_size = self.neighbors.len() * std::mem::size_of::<Optioned<u32>>();
+        let neighbors_size = self.neighbors.len() * std::mem::size_of::<AtomicU32>();
         let ids_mapping_size = self
             .ids_mapping
             .as_ref()
@@ -1164,17 +1176,17 @@ impl From<Graph> for GrowableGraph {
     fn from(graph: Graph) -> Self {
         let max_degree = graph.max_degree;
         let n_nodes = graph.n_nodes;
-        let mut neighbors = Vec::with_capacity(n_nodes * max_degree);
+        let mut neighbors: Vec<AtomicU32> = Vec::with_capacity(n_nodes * max_degree);
 
         for v in 0..n_nodes {
             let start = graph.offsets[v];
             let end = graph.offsets[v + 1];
             let slice = &graph.neighbors[start..end];
             for &nbr in slice {
-                neighbors.push(Optioned::some(nbr));
+                neighbors.push(AtomicU32::new(nbr));
             }
             let pad = max_degree.saturating_sub(slice.len());
-            neighbors.extend((0..pad).map(|_| Optioned::none()));
+            neighbors.extend((0..pad).map(|_| AtomicU32::new(u32::MAX)));
         }
 
         let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
@@ -1193,9 +1205,19 @@ impl From<Graph> for GrowableGraph {
 impl From<GraphFixedDegree> for GrowableGraph {
     fn from(graph: GraphFixedDegree) -> Self {
         let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
+        // Safety: Optioned<u32> is #[repr(transparent)] over u32, and AtomicU32 has the same
+        // size/alignment as u32, with u32::MAX used as the None sentinel in both types.
+        let neighbors = unsafe {
+            let mut vec = std::mem::ManuallyDrop::new(graph.neighbors.into_vec());
+            Vec::from_raw_parts(
+                vec.as_mut_ptr() as *mut AtomicU32,
+                vec.len(),
+                vec.capacity(),
+            )
+        };
 
         GrowableGraph {
-            neighbors: graph.neighbors.into_vec(),
+            neighbors,
             ids_mapping,
             max_degree: graph.max_degree,
             n_edges: graph.n_edges,
@@ -1234,9 +1256,11 @@ impl GrowableGraph {
 
     /// Pre-allocates space for a fixed number of nodes.
     pub fn reserve(&mut self, n_expected_nodes: usize) {
-        self.neighbors = vec![Optioned::none(); n_expected_nodes * self.max_degree];
-        self.n_nodes = n_expected_nodes; // The graph now has a fixed capacity
-        self.ids_mapping = None; // No mapping by default
+        self.neighbors = (0..n_expected_nodes * self.max_degree)
+            .map(|_| AtomicU32::new(u32::MAX))
+            .collect();
+        self.n_nodes = n_expected_nodes;
+        self.ids_mapping = None;
     }
 
     /// Sets the ID mapping for the graph, converting local IDs to external/original IDs.
@@ -1269,7 +1293,7 @@ impl GrowableGraph {
         // Add forward links
         let start = new_node_local_id * self.max_degree;
         for (i, &neighbor) in neighbors.iter().enumerate() {
-            self.neighbors[start + i] = Optioned::some(neighbor as u32);
+            self.neighbors[start + i].store(neighbor as u32, Ordering::Relaxed);
         }
         self.n_edges += neighbors.len();
 
@@ -1304,13 +1328,50 @@ impl GrowableGraph {
         for (neighbor_id, new_neighbor_list) in reverse_links {
             let start = *neighbor_id * self.max_degree;
             for (i, &n) in new_neighbor_list.iter().enumerate() {
-                self.neighbors[start + i] = Optioned::some(n as u32);
+                self.neighbors[start + i].store(n as u32, Ordering::Relaxed);
             }
-            // Pad with None
             for i in new_neighbor_list.len()..self.max_degree {
-                self.neighbors[start + i] = Optioned::none();
+                self.neighbors[start + i].store(u32::MAX, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Write forward and reverse links via interior mutability (`&self`).
+    /// Does NOT update `n_edges` or `ids_mapping` — the caller handles those separately.
+    pub fn write_links(
+        &self,
+        forward: &[usize],
+        local_id: usize,
+        reverse_links: &[(usize, Vec<usize>)],
+    ) {
+        let start = local_id * self.max_degree;
+        for (i, &nbr) in forward.iter().enumerate() {
+            self.neighbors[start + i].store(nbr as u32, Ordering::Relaxed);
+        }
+        // Forward-link slots beyond forward.len() stay u32::MAX (set by reserve()), no padding needed.
+
+        for (neighbor_id, new_list) in reverse_links {
+            let start = *neighbor_id * self.max_degree;
+            for (i, &n) in new_list.iter().enumerate() {
+                self.neighbors[start + i].store(n as u32, Ordering::Relaxed);
+            }
+            for i in new_list.len()..self.max_degree {
+                self.neighbors[start + i].store(u32::MAX, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Write a single ids_mapping entry. Called sequentially before the pipelined join so
+    /// that Phase 1 of the next batch can safely resolve external IDs of nodes being committed.
+    pub fn write_id_mapping(&mut self, local_id: usize, external_id: Option<usize>) {
+        if let Some(mapping) = self.ids_mapping.as_mut() {
+            mapping[local_id] = external_id.unwrap_or(local_id);
+        }
+    }
+
+    /// Add to the edge count after a pipelined batch completes.
+    pub fn add_n_edges(&mut self, count: usize) {
+        self.n_edges += count;
     }
 
     pub fn precompute_reverse_links<D>(

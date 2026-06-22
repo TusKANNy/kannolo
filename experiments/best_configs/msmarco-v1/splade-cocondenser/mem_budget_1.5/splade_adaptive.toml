@@ -1,5 +1,5 @@
 name =          "splade_hnsw_adaptive_best"
-title =         "Search sparse HNSWM on MSMARCO (SPLADE) - adaptive best"
+title =         "Search sparse HNSWM on MSMARCO (SPLADE CoCondenser) - adaptive best"
 description =   "Best adaptive configs from grid_splade_hnsw_adaptive (2026-02-14), memory budget 1.5"
 dataset =       "splade"
 dataset-type =   "sparse"    # Dataset type: "dense" or "sparse"
@@ -31,7 +31,7 @@ queries =       "queries.bin" # queries input file name
 groundtruth =   "groundtruth.tsv" # ground truth input file
 doc_ids =       ""
 query_ids =     ""
-index =         "ecir_2025_splade_vectorium" # index input file name
+index =         "hnsw_cocondenser" # index input file name
 
 [indexing_parameters]
 m =            32

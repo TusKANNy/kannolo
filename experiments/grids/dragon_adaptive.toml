@@ -1,43 +1,41 @@
 name =          "grid_dragon_hnsw_adaptive"
-title =         "Search sparse HNSWM on splade"
-description =   "Search sparse HNSWM on splade"
+title =         "Grid search on Dragon HNSW (MS MARCO) - adaptive early termination"
+description =   "Grid search on plain f16 Dragon HNSW index on MS MARCO v1"
 dataset =       "dragon"
-dataset-type =   "dense"    # Dataset type: "dense" or "sparse"
-value-type =     "f32"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
-# compile-command = "cargo build" # Compile in debug mode? default is release mode
-build-command = "./target/release/hnsw_build"  # Unified build binary
-query-command = "./target/release/hnsw_search" # Unified search binary
-encoder       =     "plain"      # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
-graph-type =    "standard"  # Graph type: "standard" or "fixed-degree"
+dataset-type =  "dense"
+value-type =    "f16"
+build-command = "./target/release/hnsw_build"
+query-command = "./target/release/hnsw_search"
+encoder       = "plain"
+graph-type =    "standard"
 
 [settings]
 k =             10
-num-runs       =        1       # Number of runs. PLEASE think carefully how increasing 
-                        # this may influence your query time
-#NUMA =          "numactl --physcpubind='0-15' --localalloc"    # Is the machine NUMA and need to prepend "numactl --physcpubind='0-15' --localalloc" to query command? Otherwise comment this!
-build =         false  # Need to build the index or the index is already built?
-metric =        "" 
+num-runs =      1
+NUMA =          "numactl --physcpubind='0' --localalloc"
+build =         false
+metric =        ""
 
-[folder] 
-data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon/" # data base path
-index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/dragon/" # index input path
-qrels_path =    "~/knn_datasets/sparse_datasets/msmarco_v1_passage/qrels.dev.small.tsv" 
-experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
+[folder]
+data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon"
+index =         ""
+qrels_path =    ""
+experiment =    "."
 
 [filename]
-dataset =       "dataset.npy" # dataset input file name
-queries =       "queries.npy" # queries input file name
-groundtruth =   "groundtruth.npy" # ground truth input file
+dataset =       "dataset.npy"
+queries =       "queries.npy"
+groundtruth =   "groundtruth.npy"
 doc_ids =       ""
 query_ids =     ""
-index =         "kannolo_ms_marco_dragon" # index file name
+index =         "dragon"
 
 [indexing_parameters]
-m =            [32] # 16?
-ef-construction =          [200]
-metric =       ["dotproduct"]
+m =      [32]
+ef-construction = [200]
+metric = ["dotproduct"]
 
 [querying_parameters]
 early-termination = ["distance-adaptive"]
-ef-search = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-lambda = [0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20]
+ef-search = [10, 11, 12, 13, 14, 15, 16, 17, 18]
+lambda = [0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19]

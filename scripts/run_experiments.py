@@ -168,7 +168,6 @@ def build_index(configs, experiment_dir):
         command_and_params.append(f"--encoder {configs['encoder']}")
     if "graph-type" in configs:
         command_and_params.append(f"--graph-type {configs['graph-type']}")
-
     # If there is a section [pq_parameters] in the configuration file, add the parameters to the command
     if "pq_parameters" in configs:
         for k, v in configs["pq_parameters"].items():

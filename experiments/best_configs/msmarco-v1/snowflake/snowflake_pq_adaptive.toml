@@ -1,0 +1,92 @@
+name =          "snowflake_pq_hnsw_adaptive_best"
+title =         "Search dense HNSWM on MS MARCO Snowflake (PQ-128) - adaptive best"
+description =   "Best adaptive configs from grid_snowflake_pq_hnsw_adaptive (2026-06-22)"
+dataset =       "snowflake_pq"
+dataset-type =  "dense"
+value-type =    "f32"
+build-command = "./target/release/hnsw_build"
+query-command = "./target/release/hnsw_search"
+encoder       = "pq"
+graph-type =    "standard"
+
+[settings]
+k =             10
+num-runs =      1
+NUMA =          "numactl --physcpubind='0' --localalloc"
+build =         false
+metric =        ""
+
+[folder]
+data =          "~/knn_datasets/dense_datasets/msmarco_v1_passage/snowflake/"
+index =         "~/knn_indexes/dense_datasets/msmarco_v1_passage/snowflake/"
+qrels_path =    ""
+experiment =    "."
+
+[filename]
+dataset =       "documents.npy"
+queries =       "queries_dev.npy"
+groundtruth =   "groundtruth.tsv"
+doc_ids =       ""
+query_ids =     ""
+index =         "hnsw_snowflake_pq"
+
+[pq_parameters]
+pq-subspaces = 128
+
+[indexing_parameters]
+m =               32
+ef-construction = 200
+metric =          "dotproduct"
+
+[query]
+
+    # Target Recall: 70.0 | Recall: 70.024 | Query Time (us): 151
+    [query."recall_70.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.01
+    # Target Recall: 71.0 | Recall: 71.213 | Query Time (us): 155
+    [query."recall_71.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.02
+    # Target Recall: 72.0 | Recall: 72.44 | Query Time (us): 159
+    [query."recall_72.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.04
+    # Target Recall: 73.0 | Recall: 73.357 | Query Time (us): 167
+    [query."recall_73.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.05
+    # Target Recall: 74.0 | Recall: 74.057 | Query Time (us): 176
+    [query."recall_74.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.06
+    # Target Recall: 75.0 | Recall: 75.07 | Query Time (us): 193
+    [query."recall_75.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.07
+    # Target Recall: 76.0 | Recall: 76.019 | Query Time (us): 215
+    [query."recall_76.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 16
+    lambda = 0.07
+    # Target Recall: 77.0 | Recall: 77.105 | Query Time (us): 254
+    [query."recall_77.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.12
+    # Target Recall: 78.0 | Recall: 78.052 | Query Time (us): 319
+    [query."recall_78.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.16
+    # Target Recall: 79.0 | Recall: 79.039 | Query Time (us): 555
+    [query."recall_79.0"]
+    early-termination = "distance-adaptive"
+    ef-search = 13
+    lambda = 0.2

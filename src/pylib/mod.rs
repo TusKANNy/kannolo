@@ -7,6 +7,7 @@ use crate::hnsw::{
 };
 use half::f16;
 use vectorium::IndexSerializer;
+use vectorium::core::flat_index::FlatIndex;
 use vectorium::core::index::Index;
 
 use numpy::{PyArray1, PyReadonlyArray1};
@@ -1973,7 +1974,7 @@ impl DenseFlatIndex {
                     let query_end = (i + 1) * dim;
                     let query_slice = &queries_slice[query_start..query_end];
                     let query_view = DenseVectorView::new(query_slice);
-                    let results = dataset.search(query_view, k);
+                    let results = FlatIndex::from(dataset).search(query_view, k, &());
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();
@@ -1988,7 +1989,7 @@ impl DenseFlatIndex {
                     let query_end = (i + 1) * dim;
                     let query_slice = &queries_slice[query_start..query_end];
                     let query_view = DenseVectorView::new(query_slice);
-                    let results = dataset.search(query_view, k);
+                    let results = FlatIndex::from(dataset).search(query_view, k, &());
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();
@@ -2106,7 +2107,7 @@ impl SparseFlatIndex {
                     let query_comps = &comp_vec[query_start..query_end];
                     let query_vals = &values_slice[query_start..query_end];
                     let query_view = SparseVectorView::new(query_comps, query_vals);
-                    let results = dataset.search(query_view, k);
+                    let results = FlatIndex::from(dataset).search(query_view, k, &());
 
                     let mut distances = Vec::new();
                     let mut ids = Vec::new();

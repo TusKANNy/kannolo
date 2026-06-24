@@ -284,21 +284,20 @@ impl DensePlainHNSW {
         })
     }
 
-    /// Search for approximate nearest neighbors.
+    /// Search for approximate nearest neighbors for a single query.
     ///
     /// # Arguments
-    /// * `queries` – 1-D float32 numpy array. For a single query, pass an array of length `dimension`.
-    ///   For multiple queries, pass a concatenated array of length `num_queries × dimension`.
-    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `query` – 1-D float32 numpy array of length `dimension`.
+    /// * `k` – Number of nearest neighbors to return.
     /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
     /// * `early_exit_threshold` – Early termination threshold. Default: None.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (queries, k, ef_search=100, early_exit_threshold=None))]
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
-        queries: PyReadonlyArray1<f32>,
+        query: PyReadonlyArray1<f32>,
         k: usize,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
@@ -310,38 +309,39 @@ impl DensePlainHNSW {
                     lambda: threshold,
                 });
         }
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
-        let queries_slice = queries.as_slice()?;
         let dim = match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => index.dim(),
             DensePlainHNSWEnum::DotProduct(index) => index.dim(),
         };
-        let num_queries = queries_slice.len() / dim;
-        ids.reserve(num_queries * k);
-        distances.reserve(num_queries * k);
+        let query_slice = query.as_slice()?;
+        if query_slice.len() != dim {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "query dimension {} does not match index dimension {}",
+                query_slice.len(),
+                dim
+            )));
+        }
+        let mut ids = Vec::with_capacity(k);
+        let mut distances = Vec::with_capacity(k);
+
+        let query_view = DenseVectorView::new(query_slice);
 
         match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => {
-                for i in 0..num_queries {
-                    let query_start = i * dim;
-                    let query_end = (i + 1) * dim;
-                    let query_slice = &queries_slice[query_start..query_end];
-                    let query_view = DenseVectorView::new(query_slice);
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
-                }
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
             }
             DensePlainHNSWEnum::DotProduct(index) => {
-                for i in 0..num_queries {
-                    let query_start = i * dim;
-                    let query_end = (i + 1) * dim;
-                    let query_slice = &queries_slice[query_start..query_end];
-                    let query_view = DenseVectorView::new(query_slice);
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
-                }
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
             }
         }
 
@@ -350,6 +350,102 @@ impl DensePlainHNSW {
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
         })
+    }
+
+    /// Search a batch of queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    ///
+    /// # Arguments
+    /// * `queries` – 1-D float32 numpy array of length `num_queries × dimension`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length `num_queries × k`.
+    #[pyo3(signature = (queries, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
+        queries: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+        num_threads: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let queries_slice = queries.as_slice()?;
+        let dim = match &self.inner {
+            DensePlainHNSWEnum::Euclidean(index) => index.dim(),
+            DensePlainHNSWEnum::DotProduct(index) => index.dim(),
+        };
+        if queries_slice.len() % dim != 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "queries array length {} is not a multiple of index dimension {}",
+                queries_slice.len(),
+                dim
+            )));
+        }
+        let num_queries = queries_slice.len() / dim;
+
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let query_view = DenseVectorView::new(&queries_slice[i * dim..(i + 1) * dim]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            match &self.inner {
+                DensePlainHNSWEnum::Euclidean(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                DensePlainHNSWEnum::DotProduct(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+            }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
+        }
+
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 
     /// ACORN-1 filtered search: returns the `k` approximate nearest neighbors
@@ -652,28 +748,96 @@ impl SparsePlainHNSW {
         Ok(SparsePlainHNSW { inner })
     }
 
-    /// Search for approximate nearest neighbors in sparse data.
+    /// Search for approximate nearest neighbors for a single sparse query.
     ///
     /// # Arguments
-    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
-    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
-    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
-    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
-    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `query_components` – 1-D int32 array of component indices for the query.
+    /// * `query_values` – 1-D float32 array of component values for the query.
+    /// * `k` – Number of nearest neighbors to return.
     /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
     /// * `early_exit_threshold` – Early termination threshold. Default: None.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query_components, query_values, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut ids = Vec::with_capacity(k);
+        let mut distances = Vec::with_capacity(k);
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+
+        match &self.inner {
+            SparsePlainHNSWEnum::Euclidean(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparsePlainHNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+        }
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Search a batch of sparse queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
+    /// * `offsets` – 1-D int64 array defining query boundaries, e.g. `[0, n1, n1+n2, ...]`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
@@ -686,37 +850,56 @@ impl SparsePlainHNSW {
                 });
         }
 
-        let mut ids = Vec::new();
-        let mut distances = Vec::new();
-
         let num_queries = offsets_slice.len() - 1;
-        ids.reserve(num_queries * k);
-        distances.reserve(num_queries * k);
 
-        for i in 0..num_queries {
-            let query_start = offsets_slice[i] as usize;
-            let query_end = offsets_slice[i + 1] as usize;
-            let query_comps = &comp_vec[query_start..query_end];
-            let query_vals = &values_slice[query_start..query_end];
-            let query_view = SparseVectorView::new(query_comps, query_vals);
-
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let start = offsets_slice[i] as usize;
+            let end = offsets_slice[i + 1] as usize;
+            let query_view =
+                SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
             match &self.inner {
                 SparsePlainHNSWEnum::Euclidean(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
                 SparsePlainHNSWEnum::DotProduct(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
             }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -813,28 +996,83 @@ impl SparseDotVByteHNSW {
         Ok(SparseDotVByteHNSW { inner })
     }
 
-    /// Search for approximate nearest neighbors in compressed sparse data.
+    /// Search for approximate nearest neighbors for a single compressed sparse query.
     ///
     /// # Arguments
-    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
-    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
-    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
-    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
-    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `query_components` – 1-D int32 array of component indices for the query.
+    /// * `query_values` – 1-D float32 array of component values for the query.
+    /// * `k` – Number of nearest neighbors to return.
     /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
     /// * `early_exit_threshold` – Early termination threshold. Default: None.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query_components, query_values, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut ids = Vec::with_capacity(k);
+        let mut distances = Vec::with_capacity(k);
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+        push_results(
+            self.inner.search(query_view, k, &search_config),
+            k,
+            &mut distances,
+            &mut ids,
+        );
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Search a batch of compressed sparse queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
+    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
+    /// * `offsets` – 1-D int64 array defining query boundaries, e.g. `[0, n1, n1+n2, ...]`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `ef_search` – Candidate list size (higher = better recall, slower). Default: 100.
+    /// * `early_exit_threshold` – Early termination threshold. Default: None.
+    /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length `num_queries × k`.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
@@ -848,24 +1086,43 @@ impl SparseDotVByteHNSW {
         }
 
         let num_queries = offsets_slice.len() - 1;
-        let mut ids = Vec::with_capacity(num_queries * k);
-        let mut distances = Vec::with_capacity(num_queries * k);
 
-        for i in 0..num_queries {
-            let query_start = offsets_slice[i] as usize;
-            let query_end = offsets_slice[i + 1] as usize;
-            let query_comps = &comp_vec[query_start..query_end];
-            let query_vals = &values_slice[query_start..query_end];
-            let query_view = SparseVectorView::new(query_comps, query_vals);
-            let results = self.inner.search(query_view, k, &search_config);
-            push_results(results, k, &mut distances, &mut ids);
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let start = offsets_slice[i] as usize;
+            let end = offsets_slice[i + 1] as usize;
+            let query_view =
+                SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            push_results(
+                self.inner.search(query_view, k, &search_config),
+                k,
+                &mut distances,
+                &mut ids,
+            );
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -1019,15 +1276,73 @@ impl SparseFixedU8HNSW {
         Ok(SparseFixedU8HNSW { inner })
     }
 
-    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
+    #[pyo3(signature = (query_components, query_values, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut ids = Vec::with_capacity(k);
+        let mut distances = Vec::with_capacity(k);
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+
+        match &self.inner {
+            SparseFixedU8HNSWEnum::Euclidean(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU8HNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+        }
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Search a batch of sparse queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
@@ -1041,33 +1356,55 @@ impl SparseFixedU8HNSW {
         }
 
         let num_queries = offsets_slice.len() - 1;
-        let mut ids = Vec::with_capacity(num_queries * k);
-        let mut distances = Vec::with_capacity(num_queries * k);
 
-        for i in 0..num_queries {
-            let query_start = offsets_slice[i] as usize;
-            let query_end = offsets_slice[i + 1] as usize;
-            let query_comps = &comp_vec[query_start..query_end];
-            let query_vals = &values_slice[query_start..query_end];
-            let query_view = SparseVectorView::new(query_comps, query_vals);
-
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let start = offsets_slice[i] as usize;
+            let end = offsets_slice[i + 1] as usize;
+            let query_view =
+                SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
             match &self.inner {
                 SparseFixedU8HNSWEnum::Euclidean(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
                 SparseFixedU8HNSWEnum::DotProduct(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
             }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -1219,15 +1556,73 @@ impl SparseFixedU16HNSW {
         Ok(SparseFixedU16HNSW { inner })
     }
 
-    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None))]
+    #[pyo3(signature = (query_components, query_values, k, ef_search=100, early_exit_threshold=None))]
     pub fn search(
         &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let mut ids = Vec::with_capacity(k);
+        let mut distances = Vec::with_capacity(k);
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
+
+        match &self.inner {
+            SparseFixedU16HNSWEnum::Euclidean(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU16HNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+        }
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Search a batch of sparse queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    #[pyo3(signature = (query_components, query_values, offsets, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i64>,
         k: usize,
         ef_search: usize,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
@@ -1241,33 +1636,55 @@ impl SparseFixedU16HNSW {
         }
 
         let num_queries = offsets_slice.len() - 1;
-        let mut ids = Vec::with_capacity(num_queries * k);
-        let mut distances = Vec::with_capacity(num_queries * k);
 
-        for i in 0..num_queries {
-            let query_start = offsets_slice[i] as usize;
-            let query_end = offsets_slice[i + 1] as usize;
-            let query_comps = &comp_vec[query_start..query_end];
-            let query_vals = &values_slice[query_start..query_end];
-            let query_view = SparseVectorView::new(query_comps, query_vals);
-
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let start = offsets_slice[i] as usize;
+            let end = offsets_slice[i + 1] as usize;
+            let query_view =
+                SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
             match &self.inner {
                 SparseFixedU16HNSWEnum::Euclidean(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
                 SparseFixedU16HNSWEnum::DotProduct(index) => {
-                    let results = index.search(query_view, k, &search_config);
-                    push_results(results, k, &mut distances, &mut ids);
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
                 }
             }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -1641,6 +2058,21 @@ where
         })
     }
 
+    fn dim(&self) -> usize {
+        match self {
+            DensePQHNSWGeneric::PQ8(index) => index.dim(),
+            DensePQHNSWGeneric::PQ16(index) => index.dim(),
+            DensePQHNSWGeneric::PQ32(index) => index.dim(),
+            DensePQHNSWGeneric::PQ48(index) => index.dim(),
+            DensePQHNSWGeneric::PQ64(index) => index.dim(),
+            DensePQHNSWGeneric::PQ96(index) => index.dim(),
+            DensePQHNSWGeneric::PQ128(index) => index.dim(),
+            DensePQHNSWGeneric::PQ192(index) => index.dim(),
+            DensePQHNSWGeneric::PQ256(index) => index.dim(),
+            DensePQHNSWGeneric::PQ384(index) => index.dim(),
+        }
+    }
+
     fn search(
         &self,
         query: DenseVectorView<'_, f32>,
@@ -1777,7 +2209,18 @@ impl DensePQHNSW {
         ef_search: usize,
         early_exit_threshold: Option<f32>,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let dim = match &self.inner {
+            DensePQHNSWEnum::Euclidean(inner) => inner.dim(),
+            DensePQHNSWEnum::DotProduct(inner) => inner.dim(),
+        };
         let query_slice = query.as_slice()?;
+        if query_slice.len() != dim {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "query dimension {} does not match index dimension {}",
+                query_slice.len(),
+                dim
+            )));
+        }
         let query_view = DenseVectorView::new(query_slice);
         let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
         if let Some(threshold) = early_exit_threshold {
@@ -1791,12 +2234,20 @@ impl DensePQHNSW {
         let mut ids = Vec::with_capacity(k);
         match &self.inner {
             DensePQHNSWEnum::Euclidean(inner) => {
-                let results = inner.search(query_view, k, &search_config);
-                push_results(results, k, &mut distances, &mut ids);
+                push_results(
+                    inner.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
             }
             DensePQHNSWEnum::DotProduct(inner) => {
-                let results = inner.search(query_view, k, &search_config);
-                push_results(results, k, &mut distances, &mut ids);
+                push_results(
+                    inner.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
             }
         }
 
@@ -1805,6 +2256,92 @@ impl DensePQHNSW {
             let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
         })
+    }
+
+    /// Search a batch of queries, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    #[pyo3(signature = (queries, k, ef_search=100, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
+        queries: PyReadonlyArray1<f32>,
+        k: usize,
+        ef_search: usize,
+        early_exit_threshold: Option<f32>,
+        num_threads: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let queries_slice = queries.as_slice()?;
+        let dim = match &self.inner {
+            DensePQHNSWEnum::Euclidean(inner) => inner.dim(),
+            DensePQHNSWEnum::DotProduct(inner) => inner.dim(),
+        };
+        if queries_slice.len() % dim != 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "queries array length {} is not a multiple of index dimension {}",
+                queries_slice.len(),
+                dim
+            )));
+        }
+        let num_queries = queries_slice.len() / dim;
+
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let query_view = DenseVectorView::new(&queries_slice[i * dim..(i + 1) * dim]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            match &self.inner {
+                DensePQHNSWEnum::Euclidean(inner) => {
+                    push_results(
+                        inner.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                DensePQHNSWEnum::DotProduct(inner) => {
+                    push_results(
+                        inner.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+            }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
+        }
+
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -1938,79 +2475,145 @@ impl DenseFlatIndex {
         Ok(DenseFlatIndex { inner })
     }
 
-    /// Exhaustive search over all vectors for exact nearest neighbors.
+    /// Exhaustive search over all vectors for exact nearest neighbors (single query).
     ///
     /// # Arguments
-    /// * `queries` – 2-D float32 numpy array of shape (num_queries, dim).
-    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `query` – 1-D float32 numpy array of length `dim`.
+    /// * `k` – Number of nearest neighbors to return.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (queries, k))]
-    #[pyo3(text_signature = "(queries, k)")]
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query, k))]
     pub fn search(
         &self,
-        queries: PyReadonlyArray1<f32>,
+        query: PyReadonlyArray1<f32>,
         k: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
-        let queries_slice = queries.as_slice()?;
-
-        // Infer dimension from dataset
         let dim = match &self.inner {
             DenseFlatIndexEnum::Euclidean(dataset) => dataset.input_dim(),
             DenseFlatIndexEnum::DotProduct(dataset) => dataset.input_dim(),
         };
+        let query_slice = query.as_slice()?;
+        if query_slice.len() != dim {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "query dimension {} does not match index dimension {}",
+                query_slice.len(),
+                dim
+            )));
+        }
+        let query_view = DenseVectorView::new(query_slice);
 
-        let num_queries = queries_slice.len() / dim;
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
 
-        // Collect query indices
-        let query_indices: Vec<usize> = (0..num_queries).collect();
-
-        let query_results: Vec<(Vec<f32>, Vec<i64>)> = match &self.inner {
-            DenseFlatIndexEnum::Euclidean(dataset) => query_indices
-                .into_par_iter()
-                .map(|i| {
-                    let query_start = i * dim;
-                    let query_end = (i + 1) * dim;
-                    let query_slice = &queries_slice[query_start..query_end];
-                    let query_view = DenseVectorView::new(query_slice);
-                    let results = FlatIndex::from(dataset).search(query_view, k, &());
-
-                    let mut distances = Vec::new();
-                    let mut ids = Vec::new();
-                    push_results(results, k, &mut distances, &mut ids);
-                    (distances, ids)
-                })
-                .collect(),
-            DenseFlatIndexEnum::DotProduct(dataset) => query_indices
-                .into_par_iter()
-                .map(|i| {
-                    let query_start = i * dim;
-                    let query_end = (i + 1) * dim;
-                    let query_slice = &queries_slice[query_start..query_end];
-                    let query_view = DenseVectorView::new(query_slice);
-                    let results = FlatIndex::from(dataset).search(query_view, k, &());
-
-                    let mut distances = Vec::new();
-                    let mut ids = Vec::new();
-                    push_results(results, k, &mut distances, &mut ids);
-                    (distances, ids)
-                })
-                .collect(),
-        };
-
-        let mut all_distances = Vec::new();
-        let mut all_ids = Vec::new();
-        for (distances, ids) in query_results {
-            all_distances.extend(distances);
-            all_ids.extend(ids);
+        match &self.inner {
+            DenseFlatIndexEnum::Euclidean(dataset) => {
+                push_results(
+                    FlatIndex::from(dataset).search(query_view, k, &()),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            DenseFlatIndexEnum::DotProduct(dataset) => {
+                push_results(
+                    FlatIndex::from(dataset).search(query_view, k, &()),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
         }
 
         Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
         })
+    }
+
+    /// Exhaustive batch search, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    ///
+    /// # Arguments
+    /// * `queries` – 1-D float32 numpy array of length `num_queries × dim`.
+    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of total length `num_queries × k`.
+    #[pyo3(signature = (queries, k, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
+        queries: PyReadonlyArray1<f32>,
+        k: usize,
+        num_threads: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let queries_slice = queries.as_slice()?;
+        let dim = match &self.inner {
+            DenseFlatIndexEnum::Euclidean(dataset) => dataset.input_dim(),
+            DenseFlatIndexEnum::DotProduct(dataset) => dataset.input_dim(),
+        };
+        if queries_slice.len() % dim != 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "queries array length {} is not a multiple of index dimension {}",
+                queries_slice.len(),
+                dim
+            )));
+        }
+        let num_queries = queries_slice.len() / dim;
+
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let query_view = DenseVectorView::new(&queries_slice[i * dim..(i + 1) * dim]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            match &self.inner {
+                DenseFlatIndexEnum::Euclidean(dataset) => {
+                    push_results(
+                        FlatIndex::from(dataset).search(query_view, k, &()),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                DenseFlatIndexEnum::DotProduct(dataset) => {
+                    push_results(
+                        FlatIndex::from(dataset).search(query_view, k, &()),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+            }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
+        }
+
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -2074,61 +2677,108 @@ impl SparseFlatIndex {
         })
     }
 
-    /// Exhaustive search over all vectors for exact nearest neighbors.
+    /// Exhaustive search over all vectors for exact nearest neighbors (single query).
     ///
     /// # Arguments
-    /// * `query_components` – 1-D int32 array of component indices (concatenated for batch).
-    /// * `query_values` – 1-D float32 array of component values (concatenated for batch).
-    /// * `offsets` – 1-D int64 array defining query boundaries. For a single query, pass `[0, num_components]`.
-    ///   For multiple queries, pass boundaries like `[0, n1, n1+n2, ...]`.
-    /// * `k` – Number of nearest neighbors to return per query.
+    /// * `query_components` – 1-D int32 array of component indices for the query.
+    /// * `query_values` – 1-D float32 array of component values for the query.
+    /// * `k` – Number of nearest neighbors to return.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
-        offsets: PyReadonlyArray1<i64>,
         k: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let values_slice = query_values.as_slice()?;
-        let offsets_slice = offsets.as_slice()?;
 
-        let num_queries = offsets_slice.len() - 1;
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        let query_view = SparseVectorView::new(&comp_vec, values_slice);
 
-        let query_results: Vec<(Vec<f32>, Vec<i64>)> = match &self.inner {
-            SparseFlatIndexEnum::DotProduct(dataset) => (0..num_queries)
-                .into_par_iter()
-                .map(|i| {
-                    let query_start = offsets_slice[i] as usize;
-                    let query_end = offsets_slice[i + 1] as usize;
-                    let query_comps = &comp_vec[query_start..query_end];
-                    let query_vals = &values_slice[query_start..query_end];
-                    let query_view = SparseVectorView::new(query_comps, query_vals);
-                    let results = FlatIndex::from(dataset).search(query_view, k, &());
-
-                    let mut distances = Vec::new();
-                    let mut ids = Vec::new();
-                    push_results(results, k, &mut distances, &mut ids);
-                    (distances, ids)
-                })
-                .collect(),
-        };
-
-        let mut all_distances = Vec::new();
-        let mut all_ids = Vec::new();
-        for (distances, ids) in query_results {
-            all_distances.extend(distances);
-            all_ids.extend(ids);
+        match &self.inner {
+            SparseFlatIndexEnum::DotProduct(dataset) => {
+                push_results(
+                    FlatIndex::from(dataset).search(query_view, k, &()),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
         }
 
         Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
             Ok((distances_array.into(), ids_array.into()))
         })
+    }
+
+    /// Exhaustive batch search, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    #[pyo3(signature = (query_components, query_values, offsets, k, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        offsets: PyReadonlyArray1<i64>,
+        k: usize,
+        num_threads: usize,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let values_slice = query_values.as_slice()?;
+        let offsets_slice = offsets.as_slice()?;
+        let num_queries = offsets_slice.len() - 1;
+
+        let search_one = |i: usize| -> (Vec<f32>, Vec<i64>) {
+            let start = offsets_slice[i] as usize;
+            let end = offsets_slice[i + 1] as usize;
+            let query_view =
+                SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            match &self.inner {
+                SparseFlatIndexEnum::DotProduct(dataset) => {
+                    push_results(
+                        FlatIndex::from(dataset).search(query_view, k, &()),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+            }
+            (distances, ids)
+        };
+
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
+        }
+
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -2177,7 +2827,82 @@ impl SparseMultivecRerankIndex {
         })
     }
 
-    /// Batch search with reranking using plain multivector encoding.
+    /// Search with reranking using plain multivector encoding (single query).
+    ///
+    /// # Arguments
+    /// * `query_components` – 1-D int32 array of sparse query component indices.
+    /// * `query_values` – 1-D float32 array of sparse query values.
+    /// * `multivec_query` – 1-D float32 array of the multivector query (n_tokens × token_dim).
+    /// * `n_tokens` – Number of tokens in the multivector query.
+    /// * `token_dim` – Dimension of each token.
+    /// * `k_candidates` – Number of candidates to retrieve in first stage. Default: 100.
+    /// * `k` – Number of final results to return. Default: 10.
+    /// * `ef_search` – Candidate list size for HNSW search. Default: 100.
+    /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
+    /// * `beta` – Beta parameter for early exit. Default: None.
+    /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    ///
+    /// # Returns
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    pub fn search(
+        &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        multivec_query: PyReadonlyArray1<f32>,
+        n_tokens: usize,
+        token_dim: usize,
+        k_candidates: usize,
+        k: usize,
+        ef_search: usize,
+        alpha: Option<f32>,
+        beta: Option<usize>,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let query_values_slice = query_values.as_slice()?;
+        let multivec_query_slice = multivec_query.as_slice()?;
+
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let sparse_query = SparseVectorView::new(&comp_vec, query_values_slice);
+        let multivec_query_view = DenseMultiVectorView::new(multivec_query_slice, token_dim);
+        let _ = n_tokens; // token count is implicit from slice length / token_dim
+
+        let results = self.inner.search(
+            sparse_query,
+            multivec_query_view,
+            k_candidates,
+            k,
+            &search_config,
+            alpha,
+            beta,
+        );
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        push_results(results, k, &mut distances, &mut ids);
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Batch search with reranking using plain multivector encoding, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
     ///
     /// # Arguments
     /// * `query_components` – 1-D int32 array of sparse query component indices (concatenated for batch).
@@ -2192,12 +2917,14 @@ impl SparseMultivecRerankIndex {
     /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
     /// * `beta` – Beta parameter for early exit. Default: None.
     /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
-    pub fn search(
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
         &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         sparse_offsets: PyReadonlyArray1<i64>,
@@ -2210,6 +2937,7 @@ impl SparseMultivecRerankIndex {
         alpha: Option<f32>,
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -2224,25 +2952,21 @@ impl SparseMultivecRerankIndex {
                 });
         }
 
-        let mut all_distances = Vec::new();
-        let mut all_ids = Vec::new();
         let num_queries = sparse_offsets_slice.len() - 1;
         let multivec_query_size = n_tokens * token_dim;
 
-        for q_idx in 0..num_queries {
-            // Extract sparse query for this index
+        let search_one = |q_idx: usize| -> (Vec<f32>, Vec<i64>) {
             let sparse_start = sparse_offsets_slice[q_idx] as usize;
             let sparse_end = sparse_offsets_slice[q_idx + 1] as usize;
-            let query_comps = &comp_vec[sparse_start..sparse_end];
-            let query_vals = &query_values_slice[sparse_start..sparse_end];
-            let sparse_query = SparseVectorView::new(query_comps, query_vals);
-
-            // Extract multivector query for this index (chunked by n_tokens * token_dim)
+            let sparse_query = SparseVectorView::new(
+                &comp_vec[sparse_start..sparse_end],
+                &query_values_slice[sparse_start..sparse_end],
+            );
             let multivec_start = q_idx * multivec_query_size;
-            let multivec_end = (q_idx + 1) * multivec_query_size;
-            let multivec_query_flat = &multivec_queries_slice[multivec_start..multivec_end];
-            let multivec_query_view = DenseMultiVectorView::new(multivec_query_flat, token_dim);
-
+            let multivec_query_view = DenseMultiVectorView::new(
+                &multivec_queries_slice[multivec_start..multivec_start + multivec_query_size],
+                token_dim,
+            );
             let results = self.inner.search(
                 sparse_query,
                 multivec_query_view,
@@ -2252,15 +2976,32 @@ impl SparseMultivecRerankIndex {
                 alpha,
                 beta,
             );
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            push_results(results, k, &mut distances, &mut ids);
+            (distances, ids)
+        };
 
-            push_results(results, k, &mut all_distances, &mut all_ids);
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }
 
@@ -2560,27 +3301,115 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
         Ok(SparseMultivecTwoLevelsPQRerankIndex { inner })
     }
 
-    /// Batch search with reranking using two-level PQ multivector encoding.
+    /// Search with reranking using two-level PQ multivector encoding (single query).
     ///
     /// # Arguments
-    /// * `query_components` – 1-D int32 array of sparse query component indices (concatenated for batch).
-    /// * `query_values` – 1-D float32 array of sparse query values (concatenated for batch).
-    /// * `sparse_offsets` – 1-D int64 array defining sparse query boundaries. For N queries, pass [0, n1, n1+n2, ..., total].
-    /// * `multivec_queries` – 1-D float32 array of all multivector queries concatenated (total_queries × n_tokens × token_dim).
-    /// * `n_tokens` – Number of tokens per multivector query (fixed).
-    /// * `token_dim` – Dimension of each token in the multivector queries.
+    /// * `query_components` – 1-D int32 array of sparse query component indices.
+    /// * `query_values` – 1-D float32 array of sparse query values.
+    /// * `multivec_query` – 1-D float32 array of the multivector query (n_tokens × token_dim).
+    /// * `n_tokens` – Number of tokens in the multivector query.
+    /// * `token_dim` – Dimension of each token.
     /// * `k_candidates` – Number of candidates to retrieve in first stage. Default: 100.
-    /// * `k` – Number of final results to return per query. Default: 10.
+    /// * `k` – Number of final results to return. Default: 10.
     /// * `ef_search` – Candidate list size for HNSW search. Default: 100.
     /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
     /// * `beta` – Beta parameter for early exit. Default: None.
     /// * `early_exit_threshold` – Lambda for early termination. Default: None.
     ///
     /// # Returns
-    /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
+    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
     pub fn search(
         &self,
+        query_components: PyReadonlyArray1<i32>,
+        query_values: PyReadonlyArray1<f32>,
+        multivec_query: PyReadonlyArray1<f32>,
+        n_tokens: usize,
+        token_dim: usize,
+        k_candidates: usize,
+        k: usize,
+        ef_search: usize,
+        alpha: Option<f32>,
+        beta: Option<usize>,
+        early_exit_threshold: Option<f32>,
+    ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
+        let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
+        let query_values_slice = query_values.as_slice()?;
+        let multivec_query_slice = multivec_query.as_slice()?;
+
+        let mut search_config = HNSWSearchConfiguration::default().with_ef_search(ef_search);
+        if let Some(threshold) = early_exit_threshold {
+            search_config =
+                search_config.with_early_termination(EarlyTerminationStrategy::DistanceAdaptive {
+                    lambda: threshold,
+                });
+        }
+
+        let sparse_query = SparseVectorView::new(&comp_vec, query_values_slice);
+        let multivec_query_view = DenseMultiVectorView::new(multivec_query_slice, token_dim);
+        let _ = n_tokens;
+
+        let results = match &self.inner {
+            SparseMultivecTwoLevelsPQRerankIndexEnum::M8(rerank_index) => rerank_index.search(
+                sparse_query,
+                multivec_query_view,
+                k_candidates,
+                k,
+                &search_config,
+                alpha,
+                beta,
+            ),
+            SparseMultivecTwoLevelsPQRerankIndexEnum::M16(rerank_index) => rerank_index.search(
+                sparse_query,
+                multivec_query_view,
+                k_candidates,
+                k,
+                &search_config,
+                alpha,
+                beta,
+            ),
+            SparseMultivecTwoLevelsPQRerankIndexEnum::M32(rerank_index) => rerank_index.search(
+                sparse_query,
+                multivec_query_view,
+                k_candidates,
+                k,
+                &search_config,
+                alpha,
+                beta,
+            ),
+            SparseMultivecTwoLevelsPQRerankIndexEnum::M64(rerank_index) => rerank_index.search(
+                sparse_query,
+                multivec_query_view,
+                k_candidates,
+                k,
+                &search_config,
+                alpha,
+                beta,
+            ),
+        };
+
+        let mut distances = Vec::with_capacity(k);
+        let mut ids = Vec::with_capacity(k);
+        push_results(results, k, &mut distances, &mut ids);
+
+        Python::attach(|py| {
+            let distances_array = PyArray1::from_vec(py, distances).to_owned();
+            let ids_array = PyArray1::from_vec(py, ids).to_owned();
+            Ok((distances_array.into(), ids_array.into()))
+        })
+    }
+
+    /// Batch search with reranking using two-level PQ multivector encoding, optionally in parallel.
+    ///
+    /// `num_threads` controls the threading model:
+    /// - `0` — use rayon's default thread pool (typically all available cores).
+    /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
+    ///   benchmarks that pin the process via `numactl --physcpubind`.
+    /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0))]
+    pub fn batch_search(
+        &self,
+        py: Python<'_>,
         query_components: PyReadonlyArray1<i32>,
         query_values: PyReadonlyArray1<f32>,
         sparse_offsets: PyReadonlyArray1<i64>,
@@ -2593,6 +3422,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
         alpha: Option<f32>,
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
+        num_threads: usize,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -2607,25 +3437,21 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 });
         }
 
-        let mut all_distances = Vec::new();
-        let mut all_ids = Vec::new();
         let num_queries = sparse_offsets_slice.len() - 1;
         let multivec_query_size = n_tokens * token_dim;
 
-        for q_idx in 0..num_queries {
-            // Extract sparse query for this index
+        let search_one = |q_idx: usize| -> (Vec<f32>, Vec<i64>) {
             let sparse_start = sparse_offsets_slice[q_idx] as usize;
             let sparse_end = sparse_offsets_slice[q_idx + 1] as usize;
-            let query_comps = &comp_vec[sparse_start..sparse_end];
-            let query_vals = &query_values_slice[sparse_start..sparse_end];
-            let sparse_query = SparseVectorView::new(query_comps, query_vals);
-
-            // Extract multivector query for this index (chunked by n_tokens * token_dim)
+            let sparse_query = SparseVectorView::new(
+                &comp_vec[sparse_start..sparse_end],
+                &query_values_slice[sparse_start..sparse_end],
+            );
             let multivec_start = q_idx * multivec_query_size;
-            let multivec_end = (q_idx + 1) * multivec_query_size;
-            let multivec_query_flat = &multivec_queries_slice[multivec_start..multivec_end];
-            let multivec_query_view = DenseMultiVectorView::new(multivec_query_flat, token_dim);
-
+            let multivec_query_view = DenseMultiVectorView::new(
+                &multivec_queries_slice[multivec_start..multivec_start + multivec_query_size],
+                token_dim,
+            );
             let results = match &self.inner {
                 SparseMultivecTwoLevelsPQRerankIndexEnum::M8(rerank_index) => rerank_index.search(
                     sparse_query,
@@ -2664,14 +3490,31 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     beta,
                 ),
             };
+            let mut distances = Vec::with_capacity(k);
+            let mut ids = Vec::with_capacity(k);
+            push_results(results, k, &mut distances, &mut ids);
+            (distances, ids)
+        };
 
-            push_results(results, k, &mut all_distances, &mut all_ids);
+        let results: Vec<(Vec<f32>, Vec<i64>)> = py.detach(|| match num_threads {
+            1 => (0..num_queries).map(search_one).collect(),
+            0 => (0..num_queries).into_par_iter().map(search_one).collect(),
+            n => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("failed to build rayon thread pool")
+                .install(|| (0..num_queries).into_par_iter().map(search_one).collect()),
+        });
+
+        let mut all_distances = Vec::with_capacity(num_queries * k);
+        let mut all_ids = Vec::with_capacity(num_queries * k);
+        for (d, i) in results {
+            all_distances.extend(d);
+            all_ids.extend(i);
         }
 
-        Python::attach(|py| {
-            let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
-            let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
-            Ok((distances_array.into(), ids_array.into()))
-        })
+        let distances_array = PyArray1::from_vec(py, all_distances).to_owned();
+        let ids_array = PyArray1::from_vec(py, all_ids).to_owned();
+        Ok((distances_array.into(), ids_array.into()))
     }
 }

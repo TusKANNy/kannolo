@@ -9,6 +9,11 @@ jobs:
   build-linux:
     name: Build wheels on Linux
     runs-on: ubuntu-latest
+    env:
+      # +avx2,+fma,+f16c: vectors stored as f16 internally; F16C (VCVTPH2PS) is required
+      # to vectorise the f16→f32 conversion in the distance kernel. F16C is always
+      # present on AVX2 machines (Ivy Bridge 2012+), so this raises no minimum requirement.
+      RUSTFLAGS: "-C target-feature=+avx2,+fma,+f16c"
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -27,7 +32,15 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+        include:
+          # AVX2+FMA+F16C for Intel Macs (Haswell / 2013+); F16C needed for f16 distance kernel
+          - target: x86_64-apple-darwin
+            rustflags: "-C target-feature=+avx2,+fma,+f16c"
+          # Apple Silicon — NEON is always on by default, no extra flags needed
+          - target: aarch64-apple-darwin
+            rustflags: ""
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -46,11 +59,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      - run: pip install build
-      - run: python -m build --sdist
+          python-version: "3.12"
+      - run: pip install maturin
+      - run: maturin sdist -o dist
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

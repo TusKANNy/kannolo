@@ -1,0 +1,64 @@
+name =          "dragon_ivf_flat"
+title =         "IVF on Dragon / MS MARCO (8.8M, dim=768, dot product)"
+description =   "IVF with HNSW index on centroids, f16 cluster storage, dot-product metric."
+distance =      "dotproduct"
+build-command = "./target/release/ivf_build"
+query-command = "./target/release/ivf_search"
+
+[settings]
+k =        10
+num-runs = 1
+build =    true
+metric =   ""
+
+[folder]
+data =       "~/knn_datasets/dense_datasets/msmarco_v1_passage/dragon"
+index =      "~/knn_indexes/dense_datasets/msmarco_v1_passage/dragon"
+experiment = "."
+
+[filename]
+dataset =     "dataset.npy"
+queries =     "queries.npy"
+groundtruth = "groundtruth.npy"
+index =       "dragon_ivf_hnsw_f16_dp_k65536"
+
+[indexing_parameters]
+n-clusters =         65536
+hnsw =               true
+m-hnsw =             32
+ef-construction =    200
+residuals =          false
+#m-pq =               128
+metric =             "dotproduct"
+kmeans-n-iter =      10
+kmeans-n-redo =      1
+kmeans-sample-size = 4194304  
+kmeans-spherical =   true     # L2-normalize centroids after each update 
+
+# ---- Search parameters ------------------------------------------------------
+# ef-search = max(2 * nprobe, 64)
+[query]
+
+    [query.nprobe_32]
+        ef-search = 64
+        n-probe = 32
+
+    [query.nprobe_64]
+        ef-search = 128
+        n-probe = 64
+
+    [query.nprobe_128]
+        ef-search = 256
+        n-probe = 128
+
+    [query.nprobe_256]
+        ef-search = 512
+        n-probe = 256
+
+    [query.nprobe_512]
+        ef-search = 1024
+        n-probe = 512
+
+    [query.nprobe_1024]
+        ef-search = 2048
+        n-probe = 1024

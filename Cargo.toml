@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."
@@ -20,7 +20,7 @@ rayon       = "1.10.0"
 bincode     = "2.0.1"
 rustc-hash  = "2.1.0"
 optional    = { version = "0.5.0", features = ["serde"] }
-vectorium   = { git = "https://github.com/TusKANNy/vectorium.git", tag = "v0.3.0" }
+vectorium   = { git = "https://github.com/TusKANNy/vectorium.git", tag = "v0.4.0" }
 indicatif   = { version = "0.18.3", features = ["rayon"] }
 clap        = { version = "4.3.19", features = ["derive"], optional = true }
 pyo3        = { version = "0.29.0", features = ["extension-module"], optional = true }
@@ -50,6 +50,16 @@ required-features = ["cli"]
 name = "hnsw_rerank_search"
 path = "src/bin/hnsw_rerank_search.rs"
 required-features = ["cli", "multivec"]
+
+[[bin]]
+name = "ivf_build"
+path = "src/bin/ivf_build.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "ivf_search"
+path = "src/bin/ivf_search.rs"
+required-features = ["cli"]
 
 [lib]
 name = "kannolo"

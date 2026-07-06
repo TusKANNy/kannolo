@@ -8,7 +8,7 @@ use crate::hnsw::{
 use half::f16;
 use vectorium::IndexSerializer;
 use vectorium::core::flat_index::FlatIndex;
-use vectorium::core::index::Index;
+use vectorium::core::index::{Index, IndexStats};
 
 use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -2787,7 +2787,6 @@ impl SparseFlatIndex {
 pub struct SparseMultivecRerankIndex {
     inner: RerankIndex<
         HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
-        PlainSparseDataset<u16, f16, DotProduct>,
         MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
     >,
 }
@@ -3192,28 +3191,24 @@ enum SparseMultivecTwoLevelsPQRerankIndexEnum {
     M8(
         RerankIndex<
             HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
-            PlainSparseDataset<u16, f16, DotProduct>,
             MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
         >,
     ),
     M16(
         RerankIndex<
             HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
-            PlainSparseDataset<u16, f16, DotProduct>,
             MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
         >,
     ),
     M32(
         RerankIndex<
             HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
-            PlainSparseDataset<u16, f16, DotProduct>,
             MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
         >,
     ),
     M64(
         RerankIndex<
             HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>,
-            PlainSparseDataset<u16, f16, DotProduct>,
             MultiVectorDataset<PlainMultiVecQuantizer<f32>>,
         >,
     ),

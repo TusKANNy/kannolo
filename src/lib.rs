@@ -32,7 +32,7 @@ pub mod graph;
 pub mod visited_set;
 
 pub mod indexes;
-pub use indexes::{hnsw, hnsw_utils};
+pub use indexes::{hnsw, hnsw_utils, ivf};
 
 #[cfg(feature = "python")]
 #[pymodule]

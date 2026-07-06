@@ -1,0 +1,56 @@
+name =          "sift_ivf_flat"
+title =         "IVF on SIFT-1M (1M, dim=128, L2)"
+description =   "IVFPQ64 (m=64) with residuals, L2 metric."
+dataset =       "sift"
+value-type =    "f16"
+distance =      "euclidean"
+build-command = "./target/release/ivf_build"
+query-command = "./target/release/ivf_search"
+
+[settings]
+k =        10
+num-runs = 1
+build =    true
+metric =   ""
+
+[folder]
+data =       "~/knn_datasets/dense_datasets/sift_1M"
+index =      "~/knn_indexes/dense_datasets/sift_1M"
+experiment = "."
+
+[filename]
+dataset =     "dataset.npy"
+queries =     "queries.npy"
+groundtruth = "groundtruth.npy"
+index =       "kannolo_sift_ivfpq_l2_k16384"
+
+[indexing_parameters]
+n-clusters =    16384
+hnsw =          false
+residuals =     true
+metric = "euclidean"
+m-pq =  64
+kmeans-n-iter = 10
+kmeans-n-redo = 1
+
+# ---- Search parameters ------------------------------------------------------
+[query]
+
+    [query.nprobe_16]
+        n-probe = 16
+
+    [query.nprobe_32]
+        n-probe = 32
+
+    [query.nprobe_64]
+        n-probe = 64
+
+    [query.nprobe_128]
+        n-probe = 128
+
+    [query.nprobe_256]
+        n-probe = 256
+
+    [query.nprobe_512]
+        n-probe = 512
+

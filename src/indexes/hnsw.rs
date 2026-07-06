@@ -562,15 +562,11 @@ where
     }
 }
 
-impl<D, G> Index<D> for HNSW<D, G>
+impl<D, G> vectorium::IndexStats for HNSW<D, G>
 where
     D: Dataset + Sync + SpaceUsage,
-    <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
     G: GraphTrait + From<GrowableGraph>,
 {
-    type BuildParams = HNSWBuildConfiguration;
-    type SearchParams = HNSWSearchConfiguration;
-
     #[inline]
     fn n_elements(&self) -> usize {
         self.dataset.len()
@@ -580,8 +576,14 @@ where
     fn dim(&self) -> usize {
         self.dataset.input_dim()
     }
+}
 
-    fn print_space_usage_bytes(&self) {
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset + Sync + SpaceUsage,
+    G: GraphTrait,
+{
+    pub fn print_space_usage_bytes(&self) {
         let dataset_size = self.dataset.space_usage_bytes();
         let index_size = self
             .levels
@@ -594,13 +596,24 @@ where
             "[######] Space usage: Dataset: {dataset_size} bytes, Index: {index_size} bytes, Total: {total_size} bytes"
         );
     }
+}
+
+impl<D, G> Index for HNSW<D, G>
+where
+    D: Dataset + Sync + SpaceUsage,
+    <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
+    G: GraphTrait + From<GrowableGraph>,
+{
+    type Query<'q> = <D::Encoder as VectorEncoder>::QueryVector<'q>;
+    type Distance = <D::Encoder as VectorEncoder>::Distance;
+    type SearchParams = HNSWSearchConfiguration;
 
     fn search<'q>(
-        &'q self,
-        query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
+        &self,
+        query: Self::Query<'q>,
         k: usize,
         search_params: &Self::SearchParams,
-    ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>> {
+    ) -> Vec<vectorium::dataset::ScoredVector<Self::Distance>> {
         let query_eval = self.dataset.encoder().query_evaluator(query);
         let num_levels = self.levels.len();
 
@@ -664,7 +677,14 @@ where
             })
             .collect()
     }
+}
 
+impl<D, G> HNSW<D, G>
+where
+    D: Dataset + Sync + SpaceUsage,
+    <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
+    G: GraphTrait + From<GrowableGraph>,
+{
     /// Builds the HNSW index from a source dataset.
     ///
     /// This function orchestrates the entire build process:
@@ -674,7 +694,7 @@ where
     /// 4. It iterates through all HNSW levels, from highest to lowest, inserting nodes.
     ///    - A hybrid sequential/parallel strategy is used based on the number of nodes at each level.
     /// 5. It finalizes the graph structures and creates the final `HNSW` index struct.
-    fn build_index(dataset: D, build_params: &Self::BuildParams) -> Self {
+    pub fn build_index(dataset: D, build_params: &HNSWBuildConfiguration) -> Self {
         let num_vectors = dataset.len();
         let m = build_params.num_neighbors_per_vec;
         let default_probabs =
@@ -1328,8 +1348,9 @@ mod convert_dataset_tests {
     use crate::graph::Graph;
     use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
     use vectorium::{
-        DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, PackedSparseDataset, PlainSparseDataset,
-        PlainSparseDatasetGrowable, PlainSparseQuantizer, ScalarSparseDataset, SparseVectorView,
+        DatasetGrowable, DotProduct, FixedU8Q, FixedU16Q, IndexStats, PackedSparseDataset,
+        PlainSparseDataset, PlainSparseDatasetGrowable, PlainSparseQuantizer, ScalarSparseDataset,
+        SparseVectorView,
     };
 
     fn build_test_hnsw() -> HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> {

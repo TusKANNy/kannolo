@@ -3,11 +3,26 @@
 """
 kANNolo Experiment Runner
 
-This script supports the unified `hnsw_build`, `hnsw_search` and `hnsw_rerank_search` binaries.
+Supports:
+- hnsw_build / hnsw_search            HNSW indexes (dense and sparse)
+- hnsw_rerank_search                   Two-stage reranking (multivec)
+- ivf_build / ivf_search               IVF indexes (dense; Euclidean or dot product)
 
-Reranking and multivector experiments are configured using:
-- query-command = "./target/release/hnsw_rerank_search" for two-stage reranking search  
-- [query] sections with per-configuration parameters for both first and second stage (ef-search, k_candidates, alpha, beta)
+IVFFlat TOML parameters
+  [indexing_parameters]
+    n-clusters      number of k-means clusters
+    hnsw            true / false  (centroid index type)
+    m-hnsw          HNSW M        (ignored when hnsw = false)
+    ef-construction HNSW efc      (ignored when hnsw = false)
+    residuals       true / false
+    m-pq            PQ subspaces  (omit for plain f32 clusters)
+    kmeans-n-iter   (optional, default 25)
+    kmeans-n-redo   (optional, default 1)
+
+  [querying_parameters]
+    n-probe         number of clusters to probe
+    ef-search       HNSW ef_search (ignored when hnsw = false)
+    lambda          early-term lambda (ignored when hnsw = false)
 """
 
 import re 
@@ -113,6 +128,48 @@ def get_index_filename(base_filename, configs):
     return "_".join(str(l) for l in name)
 
 
+def _bool_flag(value):
+    """Convert a Python bool (possibly from TOML) to a lowercase string for CLI flags."""
+    return str(value).lower()
+
+
+def _build_ivf_params(configs, input_file, output_file):
+    """Assemble ivf_build command-line parameters."""
+    ip = configs["indexing_parameters"]
+    params = [
+        configs["build-command"],
+        f"--data-file {input_file}",
+        f"--output-file {output_file}",
+        f"--n-clusters {ip['n-clusters']}",
+    ]
+    # Boolean flags: pass bare flag when true, omit entirely when false (clap default).
+    if "value-type" in configs:
+        params.append(f"--value-type {configs['value-type']}")
+    # metric in [indexing_parameters] is the primary source; top-level distance is a fallback
+    dist = ip.get("metric") or configs.get("distance")
+    if dist:
+        params.append(f"--distance {dist}")
+    if ip.get("hnsw", False):
+        params.append("--hnsw")
+        params.append(f"--m-hnsw {ip.get('m-hnsw', 32)}")
+        params.append(f"--ef-construction {ip.get('ef-construction', 200)}")
+    if ip.get("residuals", False):
+        params.append("--residuals")
+    if "m-pq" in ip:
+        params.append(f"--m-pq {ip['m-pq']}")
+    if "kmeans-n-iter" in ip:
+        params.append(f"--kmeans-n-iter {ip['kmeans-n-iter']}")
+    if "kmeans-n-redo" in ip:
+        params.append(f"--kmeans-n-redo {ip['kmeans-n-redo']}")
+    if "kmeans-sample-size" in ip:
+        params.append(f"--kmeans-sample-size {ip['kmeans-sample-size']}")
+    if ip.get("kmeans-hnsw", False):
+        params.append("--kmeans-hnsw")
+    if ip.get("kmeans-spherical", False):
+        params.append("--kmeans-spherical")
+    return params
+
+
 def build_index(configs, experiment_dir):
     """Build the index using the provided configuration."""
     if configs.get("dataset-type") == "multivector":
@@ -122,7 +179,7 @@ def build_index(configs, experiment_dir):
 
     os.makedirs(index_folder, exist_ok=True)
     output_file = os.path.join(index_folder, get_index_filename(configs["filename"]["index"], configs))
-    
+
     print()
     print(colored(f"Dataset filename:", "blue"), input_file)
     print(colored(f"Index filename:", "blue"), output_file)
@@ -131,47 +188,52 @@ def build_index(configs, experiment_dir):
     if not build_command:
         raise ValueError("Build command must be specified!!!")
 
-    metric = configs["indexing_parameters"]["metric"]
-    if metric == "l2":
-        print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
-        metric = "euclidean"
-    elif metric == "ip":
-        print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
-        metric = "dotproduct"
+    is_ivf = "ivf_build" in build_command
 
-    ef_construction = configs["indexing_parameters"].get(
-        "ef-construction",
-        configs["indexing_parameters"].get("efc"),
-    )
-    if ef_construction is None:
-        raise ValueError("indexing_parameters must include 'ef-construction' (or legacy 'efc').")
-    if "efc" in configs["indexing_parameters"] and "ef-construction" not in configs["indexing_parameters"]:
-        print(colored("Warning: 'efc' is deprecated; use 'ef-construction'.", "yellow"))
+    if is_ivf:
+        command_and_params = _build_ivf_params(configs, input_file, output_file)
+    else:
+        metric = configs["indexing_parameters"]["metric"]
+        if metric == "l2":
+            print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
+            metric = "euclidean"
+        elif metric == "ip":
+            print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
+            metric = "dotproduct"
 
-    command_and_params = [
-        build_command,
-        f"--data-file {input_file}",
-        f"--output-file {output_file}",
-        f"--m {configs['indexing_parameters']['m']}",
-        f"--ef-construction {ef_construction}",
-        f"--distance {metric}",
-    ]
+        ef_construction = configs["indexing_parameters"].get(
+            "ef-construction",
+            configs["indexing_parameters"].get("efc"),
+        )
+        if ef_construction is None:
+            raise ValueError("indexing_parameters must include 'ef-construction' (or legacy 'efc').")
+        if "efc" in configs["indexing_parameters"] and "ef-construction" not in configs["indexing_parameters"]:
+            print(colored("Warning: 'efc' is deprecated; use 'ef-construction'.", "yellow"))
 
-    # Add new unified binary parameters
-    if "dataset-type" in configs:
-        command_and_params.append(f"--dataset-type {configs['dataset-type']}")
-    if "value-type" in configs:
-        command_and_params.append(f"--value-type {configs['value-type']}")
-    if configs.get("dataset-type") == "sparse" and "component-type" in configs:
-        command_and_params.append(f"--component-type {configs['component-type']}")
-    if "encoder" in configs:
-        command_and_params.append(f"--encoder {configs['encoder']}")
-    if "graph-type" in configs:
-        command_and_params.append(f"--graph-type {configs['graph-type']}")
-    # If there is a section [pq_parameters] in the configuration file, add the parameters to the command
-    if "pq_parameters" in configs:
-        for k, v in configs["pq_parameters"].items():
-            command_and_params.append(f"--{k} {v}")
+        command_and_params = [
+            build_command,
+            f"--data-file {input_file}",
+            f"--output-file {output_file}",
+            f"--m {configs['indexing_parameters']['m']}",
+            f"--ef-construction {ef_construction}",
+            f"--distance {metric}",
+        ]
+
+        # Add new unified binary parameters
+        if "dataset-type" in configs:
+            command_and_params.append(f"--dataset-type {configs['dataset-type']}")
+        if "value-type" in configs:
+            command_and_params.append(f"--value-type {configs['value-type']}")
+        if configs.get("dataset-type") == "sparse" and "component-type" in configs:
+            command_and_params.append(f"--component-type {configs['component-type']}")
+        if "encoder" in configs:
+            command_and_params.append(f"--encoder {configs['encoder']}")
+        if "graph-type" in configs:
+            command_and_params.append(f"--graph-type {configs['graph-type']}")
+        # If there is a section [pq_parameters] in the configuration file, add the parameters to the command
+        if "pq_parameters" in configs:
+            for k, v in configs["pq_parameters"].items():
+                command_and_params.append(f"--{k} {v}")
 
     command = ' '.join(command_and_params)
 
@@ -290,19 +352,22 @@ def compute_accuracy(query_file, gt_file):
         # Read csv results and transform to numpy array
         column_names = ["query_id", "doc_id", "rank", "score"]
         res_pd = pd.read_csv(query_file, sep='\t', names=column_names)
-        res_npy = res_pd['doc_id'].to_numpy()
-        # Group results by query id and transform to npy array with shape (num_queries, num_results)
-        res_npy = res_npy.reshape(-1, res_pd.groupby('query_id').size().max())
-        k = res_npy.shape[1]
 
         # Read npy groundtruth
         doc_ids = np.load(gt_file, allow_pickle=True)
-        
-        # compute total results and total intersections
-        total_results = res_npy.shape[0] * res_npy.shape[1]
+
+        # Use groupby to handle variable result counts per query (e.g. when
+        # adaptive n_probe or a small n_probe returns fewer than k results for
+        # some queries, making the total non-divisible by k and breaking reshape).
+        k = res_pd.groupby('query_id').size().max()
+        grouped = res_pd.groupby('query_id')['doc_id']
+        total_results = 0
         total_intersections = 0
-        for i in range(res_npy.shape[0]):
-            total_intersections += len(np.intersect1d(res_npy[i], doc_ids[i][:k]))
+        for query_id, res_ids in grouped:
+            res_arr = res_ids.to_numpy()
+            gt_arr = doc_ids[query_id][:k]
+            total_intersections += len(np.intersect1d(res_arr, gt_arr))
+            total_results += k   # denominator is always k (ideal), not actual returned
     else:
         raise ValueError("Groundtruth file must be in csv or numpy format!!!")
         
@@ -313,40 +378,74 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
     """Execute a query based on the provided configuration."""
     if configs.get("dataset-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
-    
+
     query_command = configs.get("query-command", None)
     if not query_command:
         raise ValueError("Query command must be specified!!!")
-    
+
     index_file = os.path.join(configs["folder"]["index"], get_index_filename(configs["filename"]["index"], configs))
     print("Searching index at:", index_file)
-    
+
     query_file = os.path.join(configs["folder"]["data"], configs["filename"]["queries"])
     output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
-    
-    metric = configs["indexing_parameters"]["metric"]
-    if metric == "l2":
-        print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
-        metric = "euclidean"
-    elif metric == "ip":
-        print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
-        metric = "dotproduct"
 
-    command_and_params = [
-        configs['settings']['NUMA'] if "NUMA" in configs['settings'] else "",
-        query_command,
-        f"--index-file {index_file}",
-        f"--query-file {query_file}",
-        f"--k {configs['settings']['k']}",
-        f"--ef-search {query_config['ef-search']}",
-        f"--distance {metric}",
-        f"--output-path {output_file}",
-    ]
-
-    # Detect reranking binary (hnsw_rerank_search) vs standard search binary (hnsw_search)
+    is_ivf = "ivf_search" in query_command
     is_reranking_binary = "rerank" in query_command
-    
-    if not is_reranking_binary:
+
+    numa_prefix = configs['settings']['NUMA'] if "NUMA" in configs['settings'] else ""
+
+    if is_ivf:
+        ip = configs["indexing_parameters"]
+        command_and_params = [
+            numa_prefix,
+            query_command,
+            f"--index-file {index_file}",
+            f"--query-file {query_file}",
+            f"--k {configs['settings']['k']}",
+            f"--n-probe {query_config['n-probe']}",
+            f"--output-path {output_file}",
+        ]
+        if "value-type" in configs:
+            command_and_params.append(f"--value-type {configs['value-type']}")
+        dist = ip.get("metric") or configs.get("distance")
+        if dist:
+            command_and_params.append(f"--distance {dist}")
+        # Boolean flags: pass bare flag when true, omit when false (clap default).
+        if ip.get("hnsw", False):
+            command_and_params.append("--hnsw")
+        if ip.get("residuals", False):
+            command_and_params.append("--residuals")
+        if "m-pq" in ip:
+            command_and_params.append(f"--m-pq {ip['m-pq']}")
+        # ef-search and lambda are only meaningful when using HNSW centroids.
+        if ip.get("hnsw", False):
+            if "ef-search" in query_config:
+                command_and_params.append(f"--ef-search {query_config['ef-search']}")
+            if "lambda" in query_config:
+                command_and_params.append(f"--lambda {query_config['lambda']}")
+        if "num-runs" in configs["settings"]:
+            command_and_params.append(f"--num-runs {configs['settings']['num-runs']}")
+    else:
+        metric = configs["indexing_parameters"]["metric"]
+        if metric == "l2":
+            print(colored("Warning: metric 'l2' is deprecated; use 'euclidean'.", "yellow"))
+            metric = "euclidean"
+        elif metric == "ip":
+            print(colored("Warning: metric 'ip' is deprecated; use 'dotproduct'.", "yellow"))
+            metric = "dotproduct"
+
+        command_and_params = [
+            numa_prefix,
+            query_command,
+            f"--index-file {index_file}",
+            f"--query-file {query_file}",
+            f"--k {configs['settings']['k']}",
+            f"--ef-search {query_config['ef-search']}",
+            f"--distance {metric}",
+            f"--output-path {output_file}",
+        ]
+
+    if not is_ivf and not is_reranking_binary:
         if "dataset-type" in configs:
             command_and_params.append(f"--dataset-type {configs['dataset-type']}")
         if "value-type" in configs:

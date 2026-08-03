@@ -1,6 +1,10 @@
 use std::f32;
 
 use crate::graph::Graph;
+use crate::graph::graph::Graph as GenericGraph;
+use crate::graph::neighbors::{
+    MAX_NEIGHBORS_PER_NODE, NeighborData, Neighbors, PlainNeighbors, StreamVByteNeighbors,
+};
 use crate::hnsw::{
     AcornGammaNeighbors, EarlyTerminationStrategy, HNSW, HNSWBuildConfiguration,
     HNSWSearchConfiguration,
@@ -9,6 +13,8 @@ use half::f16;
 use vectorium::IndexSerializer;
 use vectorium::core::flat_index::FlatIndex;
 use vectorium::core::index::{Index, IndexStats};
+use vectorium::dataset::ConvertFrom;
+use vectorium::vector_encoder::{DenseVectorEncoder, VectorEncoder};
 
 use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -37,6 +43,69 @@ use vectorium::{MultiVectorDataset, PlainMultiVecQuantizer};
 enum MetricKind {
     Euclidean,
     DotProduct,
+}
+
+/// The HNSW graph storage/ordering strategy for build/load.
+///
+/// `Standard` and `Permuted` load as the same Rust type (`Graph<PlainNeighbors>`) — the
+/// EGB permutation, when applied, is baked into the serialized index data itself
+/// (`original_ids`), not reflected in the graph's storage type.
+///
+/// `Compressed` is the Python-facing name for what the CLI calls `streamvbyte`: the variant
+/// names the user-visible behaviour, while the `StreamVByteNeighbors` type it selects names
+/// the storage that implements it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum GraphTypeKind {
+    Standard,
+    Permuted,
+    Compressed,
+}
+
+fn parse_graph_type(graph_type: &str) -> PyResult<GraphTypeKind> {
+    match graph_type.to_lowercase().as_str() {
+        "standard" => Ok(GraphTypeKind::Standard),
+        "permuted" => Ok(GraphTypeKind::Permuted),
+        "compressed" => Ok(GraphTypeKind::Compressed),
+        other => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "unknown graph_type {other:?}; choose \"standard\" (the default), \"compressed\" \
+             (smaller index and faster queries), or \"permuted\" (faster queries only). All \
+             three return the same search results."
+        ))),
+    }
+}
+
+/// Parses `graph_type` for a *build* call, rejecting parameter combinations the chosen
+/// representation cannot express.
+///
+/// Checked here rather than in `StreamVByteNeighbors::from`, which only runs once the whole
+/// index has already been built — and which would abort the interpreter rather than raise,
+/// since the release profile sets `panic = "abort"`.
+fn parse_build_graph_type(graph_type: &str, m: usize) -> PyResult<GraphTypeKind> {
+    let gt = parse_graph_type(graph_type)?;
+
+    if gt == GraphTypeKind::Compressed && 2 * m > MAX_NEIGHBORS_PER_NODE {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "graph_type=\"compressed\" stores at most {MAX_NEIGHBORS_PER_NODE} neighbors per node, \
+             but m={m} gives 2 * m = {} on the ground level; use m <= {} or graph_type=\"standard\"",
+            2 * m,
+            MAX_NEIGHBORS_PER_NODE / 2
+        )));
+    }
+
+    Ok(gt)
+}
+
+/// Wraps a deserialization failure with the cause a caller is most likely to have hit.
+///
+/// Index files are plain bincode with no header or type tag, so loading one with the wrong
+/// `metric` or `graph_type` fails somewhere inside the decoder with a message that says
+/// nothing about the actual mistake.
+fn load_index_err<E: std::fmt::Debug>(e: E) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+        "Error loading index: {e:?}. Index files are not self-describing: check that `metric` and \
+         `graph_type` match the values used when the index was built, and that the file was \
+         written by this version of kannolo."
+    ))
 }
 
 fn parse_metric(metric: &str) -> PyResult<MetricKind> {
@@ -173,6 +242,18 @@ fn push_results<D: Distance>(
 enum DensePlainHNSWEnum {
     Euclidean(HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph>),
     DotProduct(HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph>),
+    EuclideanStreamVByte(
+        HNSW<
+            DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
+    DotProductStreamVByte(
+        HNSW<
+            DenseDataset<PlainDenseQuantizer<f16, DotProduct>>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
 }
 
 #[pyclass]
@@ -184,25 +265,45 @@ pub struct DensePlainHNSW {
 #[pymethods]
 impl DensePlainHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_path, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_path, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_file(
         data_path: &str,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
                 let dataset = read_npy_dataset_f16::<SquaredEuclideanDistance>(data_path)?;
-                DensePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => DensePlainHNSWEnum::Euclidean(plain),
+                    GraphTypeKind::Permuted => {
+                        DensePlainHNSWEnum::Euclidean(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => DensePlainHNSWEnum::EuclideanStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
             MetricKind::DotProduct => {
                 let dataset = read_npy_dataset_f16::<DotProduct>(data_path)?;
-                DensePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => DensePlainHNSWEnum::DotProduct(plain),
+                    GraphTypeKind::Permuted => {
+                        DensePlainHNSWEnum::DotProduct(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => DensePlainHNSWEnum::DotProductStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
         };
 
@@ -213,13 +314,14 @@ impl DensePlainHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_vec, dim, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_array(
         data_vec: PyReadonlyArray1<f32>,
         dim: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let data_f16: Vec<f16> = data_vec
             .as_slice()?
@@ -230,19 +332,38 @@ impl DensePlainHNSW {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
                 let encoder = PlainDenseQuantizer::<f16, SquaredEuclideanDistance>::new(dim);
                 let dataset: DenseDataset<_> =
                     DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => DensePlainHNSWEnum::Euclidean(plain),
+                    GraphTypeKind::Permuted => {
+                        DensePlainHNSWEnum::Euclidean(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => DensePlainHNSWEnum::EuclideanStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
             MetricKind::DotProduct => {
                 let encoder = PlainDenseQuantizer::<f16, DotProduct>::new(dim);
                 let dataset: DenseDataset<_> =
                     DenseDataset::from_raw(data_f16.into_boxed_slice(), n_vecs, encoder);
-                DensePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => DensePlainHNSWEnum::DotProduct(plain),
+                    GraphTypeKind::Permuted => {
+                        DensePlainHNSWEnum::DotProduct(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => DensePlainHNSWEnum::DotProductStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
         };
 
@@ -260,22 +381,63 @@ impl DensePlainHNSW {
             DensePlainHNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
             }),
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
         }
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
+    #[pyo3(signature = (path, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
+    pub fn load(path: &str, metric: String, graph_type: String) -> PyResult<Self> {
+        let gt = parse_graph_type(&graph_type)?;
+        let inner = match (parse_metric(&metric)?, gt) {
+            (MetricKind::Euclidean, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 DensePlainHNSWEnum::Euclidean(index)
             }
-            MetricKind::DotProduct => {
+            (MetricKind::Euclidean, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<PlainDenseQuantizer<f16, SquaredEuclideanDistance>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePlainHNSWEnum::EuclideanStreamVByte(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> = <HNSW<DenseDataset<PlainDenseQuantizer<f16, DotProduct>>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 DensePlainHNSWEnum::DotProduct(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<PlainDenseQuantizer<f16, DotProduct>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<PlainDenseQuantizer<f16, DotProduct>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePlainHNSWEnum::DotProductStreamVByte(index)
             }
         };
         Ok(DensePlainHNSW {
@@ -312,6 +474,8 @@ impl DensePlainHNSW {
         let dim = match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => index.dim(),
             DensePlainHNSWEnum::DotProduct(index) => index.dim(),
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => index.dim(),
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => index.dim(),
         };
         let query_slice = query.as_slice()?;
         if query_slice.len() != dim {
@@ -336,6 +500,22 @@ impl DensePlainHNSW {
                 );
             }
             DensePlainHNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => {
                 push_results(
                     index.search(query_view, k, &search_config),
                     k,
@@ -391,6 +571,8 @@ impl DensePlainHNSW {
         let dim = match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => index.dim(),
             DensePlainHNSWEnum::DotProduct(index) => index.dim(),
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => index.dim(),
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => index.dim(),
         };
         if queries_slice.len() % dim != 0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -415,6 +597,22 @@ impl DensePlainHNSW {
                     );
                 }
                 DensePlainHNSWEnum::DotProduct(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                DensePlainHNSWEnum::DotProductStreamVByte(index) => {
                     push_results(
                         index.search(query_view, k, &search_config),
                         k,
@@ -501,6 +699,14 @@ impl DensePlainHNSW {
                 let results = index.search_filtered(query_view, k, &search_config, pred_fn);
                 push_results(results, k, &mut distances, &mut ids);
             }
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                let results = index.search_filtered(query_view, k, &search_config, pred_fn);
+                push_results(results, k, &mut distances, &mut ids);
+            }
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => {
+                let results = index.search_filtered(query_view, k, &search_config, pred_fn);
+                push_results(results, k, &mut distances, &mut ids);
+            }
         }
 
         let distances_array = PyArray1::from_vec(py, distances).to_owned();
@@ -521,6 +727,12 @@ impl DensePlainHNSW {
         let neighbors = match &self.inner {
             DensePlainHNSWEnum::Euclidean(index) => index.build_acorn_gamma_neighbors(gamma),
             DensePlainHNSWEnum::DotProduct(index) => index.build_acorn_gamma_neighbors(gamma),
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                index.build_acorn_gamma_neighbors(gamma)
+            }
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => {
+                index.build_acorn_gamma_neighbors(gamma)
+            }
         };
         self.acorn_gamma = Some(neighbors);
     }
@@ -600,6 +812,26 @@ impl DensePlainHNSW {
                 );
                 push_results(results, k, &mut distances, &mut ids);
             }
+            DensePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                let results = index.search_filtered_gamma(
+                    query_view,
+                    k,
+                    &search_config,
+                    acorn_gamma,
+                    pred_fn,
+                );
+                push_results(results, k, &mut distances, &mut ids);
+            }
+            DensePlainHNSWEnum::DotProductStreamVByte(index) => {
+                let results = index.search_filtered_gamma(
+                    query_view,
+                    k,
+                    &search_config,
+                    acorn_gamma,
+                    pred_fn,
+                );
+                push_results(results, k, &mut distances, &mut ids);
+            }
         }
 
         let distances_array = PyArray1::from_vec(py, distances).to_owned();
@@ -615,6 +847,15 @@ impl DensePlainHNSW {
 enum SparsePlainHNSWEnum {
     Euclidean(HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph>),
     DotProduct(HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph>),
+    EuclideanStreamVByte(
+        HNSW<
+            PlainSparseDataset<u16, f16, SquaredEuclideanDistance>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
+    DotProductStreamVByte(
+        HNSW<PlainSparseDataset<u16, f16, DotProduct>, GenericGraph<StreamVByteNeighbors>>,
+    ),
 }
 
 #[pyclass]
@@ -625,16 +866,18 @@ pub struct SparsePlainHNSW {
 #[pymethods]
 impl SparsePlainHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_file(
         data_file: &str,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -645,7 +888,16 @@ impl SparsePlainHNSW {
                             e
                         ))
                     })?;
-                SparsePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => SparsePlainHNSWEnum::Euclidean(plain),
+                    GraphTypeKind::Permuted => {
+                        SparsePlainHNSWEnum::Euclidean(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => SparsePlainHNSWEnum::EuclideanStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
             MetricKind::DotProduct => {
                 let dataset: PlainSparseDataset<u16, f16, DotProduct> =
@@ -655,7 +907,16 @@ impl SparsePlainHNSW {
                             e
                         ))
                     })?;
-                SparsePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => SparsePlainHNSWEnum::DotProduct(plain),
+                    GraphTypeKind::Permuted => SparsePlainHNSWEnum::DotProduct(
+                        plain.permute_and_encode::<PlainNeighbors>(),
+                    ),
+                    GraphTypeKind::Compressed => SparsePlainHNSWEnum::DotProductStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
         };
 
@@ -663,7 +924,7 @@ impl SparsePlainHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
@@ -671,6 +932,7 @@ impl SparsePlainHNSW {
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
         let values_f16: Vec<f16> = values
@@ -694,6 +956,7 @@ impl SparsePlainHNSW {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -703,7 +966,16 @@ impl SparsePlainHNSW {
                     offsets_vec,
                     d,
                 )?;
-                SparsePlainHNSWEnum::Euclidean(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => SparsePlainHNSWEnum::Euclidean(plain),
+                    GraphTypeKind::Permuted => {
+                        SparsePlainHNSWEnum::Euclidean(plain.permute_and_encode::<PlainNeighbors>())
+                    }
+                    GraphTypeKind::Compressed => SparsePlainHNSWEnum::EuclideanStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
             MetricKind::DotProduct => {
                 let dataset = build_sparse_dataset_from_parts::<f16, DotProduct>(
@@ -712,7 +984,16 @@ impl SparsePlainHNSW {
                     offsets_vec,
                     d,
                 )?;
-                SparsePlainHNSWEnum::DotProduct(HNSW::build_index(dataset, &config))
+                let plain: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
+                match gt {
+                    GraphTypeKind::Standard => SparsePlainHNSWEnum::DotProduct(plain),
+                    GraphTypeKind::Permuted => SparsePlainHNSWEnum::DotProduct(
+                        plain.permute_and_encode::<PlainNeighbors>(),
+                    ),
+                    GraphTypeKind::Compressed => SparsePlainHNSWEnum::DotProductStreamVByte(
+                        plain.permute_and_encode::<StreamVByteNeighbors>(),
+                    ),
+                }
             }
         };
 
@@ -727,22 +1008,63 @@ impl SparsePlainHNSW {
             SparsePlainHNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
             }),
+            SparsePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
+            SparsePlainHNSWEnum::DotProductStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
         }
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
+    #[pyo3(signature = (path, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
+    pub fn load(path: &str, metric: String, graph_type: String) -> PyResult<Self> {
+        let gt = parse_graph_type(&graph_type)?;
+        let inner = match (parse_metric(&metric)?, gt) {
+            (MetricKind::Euclidean, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> = <HNSW<PlainSparseDataset<u16, f16, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparsePlainHNSWEnum::Euclidean(index)
             }
-            MetricKind::DotProduct => {
+            (MetricKind::Euclidean, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    PlainSparseDataset<u16, f16, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    PlainSparseDataset<u16, f16, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparsePlainHNSWEnum::EuclideanStreamVByte(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> = <HNSW<PlainSparseDataset<u16, f16, DotProduct>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparsePlainHNSWEnum::DotProduct(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    PlainSparseDataset<u16, f16, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    PlainSparseDataset<u16, f16, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparsePlainHNSWEnum::DotProductStreamVByte(index)
             }
         };
         Ok(SparsePlainHNSW { inner })
@@ -792,6 +1114,22 @@ impl SparsePlainHNSW {
                 );
             }
             SparsePlainHNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparsePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparsePlainHNSWEnum::DotProductStreamVByte(index) => {
                 push_results(
                     index.search(query_view, k, &search_config),
                     k,
@@ -876,6 +1214,22 @@ impl SparsePlainHNSW {
                         &mut ids,
                     );
                 }
+                SparsePlainHNSWEnum::EuclideanStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                SparsePlainHNSWEnum::DotProductStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
             }
             (distances, ids)
         };
@@ -905,19 +1259,62 @@ impl SparsePlainHNSW {
 
 // Sparse DotVByte (dotproduct only)
 
+enum SparseDotVByteHNSWEnum {
+    Plain(HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph>),
+    StreamVByte(
+        HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+}
+
+/// Applies `gt` to a plain-built sparse HNSW (permuting via EGB when requested) and
+/// converts it into the DotVByte-packed dataset representation.
+///
+/// **The conversion must run before `permute_and_encode`**, for the reason spelled out on
+/// `build_permuted_and_save` in `src/bin/hnsw_build.rs`: the DotVByte component mapping is fitted
+/// on a *prefix sample* of the dataset, so permuting first would train it on an EGB-clustered
+/// prefix and yield a worse encoding than the `standard` path gets.
+fn build_sparse_dotvbyte_inner(
+    plain_hnsw: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph>,
+    gt: GraphTypeKind,
+) -> SparseDotVByteHNSWEnum {
+    match gt {
+        GraphTypeKind::Standard => {
+            let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+                plain_hnsw.convert_dataset_into();
+            SparseDotVByteHNSWEnum::Plain(packed)
+        }
+        GraphTypeKind::Permuted => {
+            let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+                plain_hnsw.convert_dataset_into();
+            SparseDotVByteHNSWEnum::Plain(packed.permute_and_encode::<PlainNeighbors>())
+        }
+        GraphTypeKind::Compressed => {
+            let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
+                plain_hnsw.convert_dataset_into();
+            SparseDotVByteHNSWEnum::StreamVByte(packed.permute_and_encode::<StreamVByteNeighbors>())
+        }
+    }
+}
+
 #[pyclass]
 pub struct SparseDotVByteHNSW {
-    inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph>,
+    inner: SparseDotVByteHNSWEnum,
 }
 
 #[pymethods]
 impl SparseDotVByteHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200))]
-    pub fn build_from_file(data_file: &str, m: usize, ef_construction: usize) -> PyResult<Self> {
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, graph_type="standard".to_string()))]
+    pub fn build_from_file(
+        data_file: &str,
+        m: usize,
+        ef_construction: usize,
+        graph_type: String,
+    ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let dataset: PlainSparseDataset<u16, f32, DotProduct> = read_seismic_format(data_file)
             .map_err(|e| {
@@ -928,20 +1325,20 @@ impl SparseDotVByteHNSW {
             })?;
 
         let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-            plain_hnsw.convert_dataset_into();
+        let inner = build_sparse_dotvbyte_inner(plain_hnsw, gt);
 
         Ok(SparseDotVByteHNSW { inner })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, graph_type="standard".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
         offsets: PyReadonlyArray1<i64>,
         m: usize,
         ef_construction: usize,
+        graph_type: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
         let values_vec = values.as_slice()?.to_vec();
@@ -961,6 +1358,7 @@ impl SparseDotVByteHNSW {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
             components_vec,
@@ -969,29 +1367,50 @@ impl SparseDotVByteHNSW {
             d,
         )?;
         let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-            plain_hnsw.convert_dataset_into();
+        let inner = build_sparse_dotvbyte_inner(plain_hnsw, gt);
 
         Ok(SparseDotVByteHNSW { inner })
     }
 
     pub fn save(&self, path: &str) -> PyResult<()> {
-        self.inner.save_index(path).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
-        })
+        match &self.inner {
+            SparseDotVByteHNSWEnum::Plain(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+            SparseDotVByteHNSWEnum::StreamVByte(index) => index.save_index(path).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
+            }),
+        }
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    pub fn load(path: &str) -> PyResult<Self> {
-        let inner: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> = <HNSW<
-            PackedSparseDataset<DotVByteFixedU8Encoder>,
-            Graph,
-        > as IndexSerializer>::load_index(
-            path
-        )
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e))
-        })?;
+    #[pyo3(signature = (path, graph_type="standard".to_string()))]
+    pub fn load(path: &str, graph_type: String) -> PyResult<Self> {
+        let inner = match parse_graph_type(&graph_type)? {
+            GraphTypeKind::Standard | GraphTypeKind::Permuted => {
+                let index: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> = <HNSW<
+                    PackedSparseDataset<DotVByteFixedU8Encoder>,
+                    Graph,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                SparseDotVByteHNSWEnum::Plain(index)
+            }
+            GraphTypeKind::Compressed => {
+                let index: HNSW<
+                    PackedSparseDataset<DotVByteFixedU8Encoder>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    PackedSparseDataset<DotVByteFixedU8Encoder>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparseDotVByteHNSWEnum::StreamVByte(index)
+            }
+        };
 
         Ok(SparseDotVByteHNSW { inner })
     }
@@ -1029,12 +1448,24 @@ impl SparseDotVByteHNSW {
         let mut ids = Vec::with_capacity(k);
         let mut distances = Vec::with_capacity(k);
         let query_view = SparseVectorView::new(&comp_vec, values_slice);
-        push_results(
-            self.inner.search(query_view, k, &search_config),
-            k,
-            &mut distances,
-            &mut ids,
-        );
+        match &self.inner {
+            SparseDotVByteHNSWEnum::Plain(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseDotVByteHNSWEnum::StreamVByte(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+        }
 
         Python::attach(|py| {
             let distances_array = PyArray1::from_vec(py, distances).to_owned();
@@ -1094,12 +1525,24 @@ impl SparseDotVByteHNSW {
                 SparseVectorView::new(&comp_vec[start..end], &values_slice[start..end]);
             let mut distances = Vec::with_capacity(k);
             let mut ids = Vec::with_capacity(k);
-            push_results(
-                self.inner.search(query_view, k, &search_config),
-                k,
-                &mut distances,
-                &mut ids,
-            );
+            match &self.inner {
+                SparseDotVByteHNSWEnum::Plain(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                SparseDotVByteHNSWEnum::StreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+            }
             (distances, ids)
         };
 
@@ -1131,6 +1574,18 @@ impl SparseDotVByteHNSW {
 enum SparseFixedU8HNSWEnum {
     Euclidean(HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph>),
     DotProduct(HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph>),
+    EuclideanStreamVByte(
+        HNSW<
+            ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
+    DotProductStreamVByte(
+        HNSW<
+            ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
 }
 
 #[pyclass]
@@ -1141,16 +1596,18 @@ pub struct SparseFixedU8HNSW {
 #[pymethods]
 impl SparseFixedU8HNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_file(
         data_file: &str,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -1162,11 +1619,29 @@ impl SparseFixedU8HNSW {
                         ))
                     })?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<
-                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
-                    Graph,
-                > = plain_hnsw.convert_dataset_into();
-                SparseFixedU8HNSWEnum::Euclidean(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::Euclidean(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::EuclideanStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
             MetricKind::DotProduct => {
                 let dataset: PlainSparseDataset<u16, f32, DotProduct> =
@@ -1177,9 +1652,29 @@ impl SparseFixedU8HNSW {
                         ))
                     })?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
-                    plain_hnsw.convert_dataset_into();
-                SparseFixedU8HNSWEnum::DotProduct(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::DotProduct(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::DotProductStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
         };
 
@@ -1187,7 +1682,7 @@ impl SparseFixedU8HNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
@@ -1195,6 +1690,7 @@ impl SparseFixedU8HNSW {
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
         let values_vec = values.as_slice()?.to_vec();
@@ -1214,6 +1710,7 @@ impl SparseFixedU8HNSW {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -1224,11 +1721,29 @@ impl SparseFixedU8HNSW {
                     d,
                 )?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<
-                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
-                    Graph,
-                > = plain_hnsw.convert_dataset_into();
-                SparseFixedU8HNSWEnum::Euclidean(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::Euclidean(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::EuclideanStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
             MetricKind::DotProduct => {
                 let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
@@ -1238,9 +1753,29 @@ impl SparseFixedU8HNSW {
                     d,
                 )?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
-                    plain_hnsw.convert_dataset_into();
-                SparseFixedU8HNSWEnum::DotProduct(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::DotProduct(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU8HNSWEnum::DotProductStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
         };
 
@@ -1255,22 +1790,63 @@ impl SparseFixedU8HNSW {
             SparseFixedU8HNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
             }),
+            SparseFixedU8HNSWEnum::EuclideanStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
+            SparseFixedU8HNSWEnum::DotProductStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
         }
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
+    #[pyo3(signature = (path, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
+    pub fn load(path: &str, metric: String, graph_type: String) -> PyResult<Self> {
+        let gt = parse_graph_type(&graph_type)?;
+        let inner = match (parse_metric(&metric)?, gt) {
+            (MetricKind::Euclidean, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparseFixedU8HNSWEnum::Euclidean(index)
             }
-            MetricKind::DotProduct => {
+            (MetricKind::Euclidean, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparseFixedU8HNSWEnum::EuclideanStreamVByte(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparseFixedU8HNSWEnum::DotProduct(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparseFixedU8HNSWEnum::DotProductStreamVByte(index)
             }
         };
         Ok(SparseFixedU8HNSW { inner })
@@ -1309,6 +1885,22 @@ impl SparseFixedU8HNSW {
                 );
             }
             SparseFixedU8HNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU8HNSWEnum::EuclideanStreamVByte(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU8HNSWEnum::DotProductStreamVByte(index) => {
                 push_results(
                     index.search(query_view, k, &search_config),
                     k,
@@ -1381,6 +1973,22 @@ impl SparseFixedU8HNSW {
                         &mut ids,
                     );
                 }
+                SparseFixedU8HNSWEnum::EuclideanStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                SparseFixedU8HNSWEnum::DotProductStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
             }
             (distances, ids)
         };
@@ -1411,6 +2019,18 @@ impl SparseFixedU8HNSW {
 enum SparseFixedU16HNSWEnum {
     Euclidean(HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph>),
     DotProduct(HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph>),
+    EuclideanStreamVByte(
+        HNSW<
+            ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
+    DotProductStreamVByte(
+        HNSW<
+            ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+            GenericGraph<StreamVByteNeighbors>,
+        >,
+    ),
 }
 
 #[pyclass]
@@ -1421,16 +2041,18 @@ pub struct SparseFixedU16HNSW {
 #[pymethods]
 impl SparseFixedU16HNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_file, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_file(
         data_file: &str,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -1442,11 +2064,29 @@ impl SparseFixedU16HNSW {
                         ))
                     })?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<
-                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
-                    Graph,
-                > = plain_hnsw.convert_dataset_into();
-                SparseFixedU16HNSWEnum::Euclidean(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::Euclidean(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::EuclideanStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
             MetricKind::DotProduct => {
                 let dataset: PlainSparseDataset<u16, f32, DotProduct> =
@@ -1457,9 +2097,29 @@ impl SparseFixedU16HNSW {
                         ))
                     })?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
-                    plain_hnsw.convert_dataset_into();
-                SparseFixedU16HNSWEnum::DotProduct(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::DotProduct(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::DotProductStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
         };
 
@@ -1467,7 +2127,7 @@ impl SparseFixedU16HNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (components, values, offsets, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_arrays(
         components: PyReadonlyArray1<i32>,
         values: PyReadonlyArray1<f32>,
@@ -1475,6 +2135,7 @@ impl SparseFixedU16HNSW {
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let components_vec = convert_components_to_u16(components.as_slice()?)?;
         let values_vec = values.as_slice()?.to_vec();
@@ -1494,6 +2155,7 @@ impl SparseFixedU16HNSW {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -1504,11 +2166,29 @@ impl SparseFixedU16HNSW {
                     d,
                 )?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<
-                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
-                    Graph,
-                > = plain_hnsw.convert_dataset_into();
-                SparseFixedU16HNSWEnum::Euclidean(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::Euclidean(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::EuclideanStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
             MetricKind::DotProduct => {
                 let dataset = build_sparse_dataset_from_parts::<f32, DotProduct>(
@@ -1518,9 +2198,29 @@ impl SparseFixedU16HNSW {
                     d,
                 )?;
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
-                let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
-                    plain_hnsw.convert_dataset_into();
-                SparseFixedU16HNSWEnum::DotProduct(index)
+                match gt {
+                    GraphTypeKind::Standard => {
+                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                    }
+                    GraphTypeKind::Permuted => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::DotProduct(
+                            converted.permute_and_encode::<PlainNeighbors>(),
+                        )
+                    }
+                    GraphTypeKind::Compressed => {
+                        let converted: HNSW<
+                            ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                            Graph,
+                        > = plain_hnsw.convert_dataset_into();
+                        SparseFixedU16HNSWEnum::DotProductStreamVByte(
+                            converted.permute_and_encode::<StreamVByteNeighbors>(),
+                        )
+                    }
+                }
             }
         };
 
@@ -1535,22 +2235,63 @@ impl SparseFixedU16HNSW {
             SparseFixedU16HNSWEnum::DotProduct(index) => index.save_index(path).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error saving index: {:?}", e))
             }),
+            SparseFixedU16HNSWEnum::EuclideanStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
+            SparseFixedU16HNSWEnum::DotProductStreamVByte(index) => {
+                index.save_index(path).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Error saving index: {:?}",
+                        e
+                    ))
+                })
+            }
         }
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    #[pyo3(signature = (path, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, metric: String) -> PyResult<Self> {
-        let inner = match parse_metric(&metric)? {
-            MetricKind::Euclidean => {
+    #[pyo3(signature = (path, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
+    pub fn load(path: &str, metric: String, graph_type: String) -> PyResult<Self> {
+        let gt = parse_graph_type(&graph_type)?;
+        let inner = match (parse_metric(&metric)?, gt) {
+            (MetricKind::Euclidean, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparseFixedU16HNSWEnum::Euclidean(index)
             }
-            MetricKind::DotProduct => {
+            (MetricKind::Euclidean, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparseFixedU16HNSWEnum::EuclideanStreamVByte(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> = <HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> as IndexSerializer>::load_index(path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Error loading index: {:?}", e)))?;
+                    .map_err(load_index_err)?;
                 SparseFixedU16HNSWEnum::DotProduct(index)
+            }
+            (MetricKind::DotProduct, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                SparseFixedU16HNSWEnum::DotProductStreamVByte(index)
             }
         };
         Ok(SparseFixedU16HNSW { inner })
@@ -1589,6 +2330,22 @@ impl SparseFixedU16HNSW {
                 );
             }
             SparseFixedU16HNSWEnum::DotProduct(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU16HNSWEnum::EuclideanStreamVByte(index) => {
+                push_results(
+                    index.search(query_view, k, &search_config),
+                    k,
+                    &mut distances,
+                    &mut ids,
+                );
+            }
+            SparseFixedU16HNSWEnum::DotProductStreamVByte(index) => {
                 push_results(
                     index.search(query_view, k, &search_config),
                     k,
@@ -1661,6 +2418,22 @@ impl SparseFixedU16HNSW {
                         &mut ids,
                     );
                 }
+                SparseFixedU16HNSWEnum::EuclideanStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
+                SparseFixedU16HNSWEnum::DotProductStreamVByte(index) => {
+                    push_results(
+                        index.search(query_view, k, &search_config),
+                        k,
+                        &mut distances,
+                        &mut ids,
+                    );
+                }
             }
             (distances, ids)
         };
@@ -1704,6 +2477,130 @@ where
     PQ192(HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph>),
     PQ256(HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph>),
     PQ384(HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph>),
+    PQ8StreamVByte(HNSW<DenseDataset<ProductQuantizer<8, D>>, GenericGraph<StreamVByteNeighbors>>),
+    PQ16StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<16, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ32StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<32, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ48StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<48, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ64StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<64, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ96StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<96, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ128StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<128, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ192StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<192, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ256StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<256, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+    PQ384StreamVByte(
+        HNSW<DenseDataset<ProductQuantizer<384, D>>, GenericGraph<StreamVByteNeighbors>>,
+    ),
+}
+
+/// Builds a plain (uncompressed, original node order) PQ-quantized dense HNSW.
+fn build_pq_l2<const M: usize>(
+    dataset: PlainDenseDataset<f32, SquaredEuclideanDistance>,
+    config: &HNSWBuildConfiguration,
+) -> HNSW<DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>, Graph>
+where
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        VectorEncoder<Distance = SquaredEuclideanDistance>,
+    <ProductQuantizer<M, SquaredEuclideanDistance> as VectorEncoder>::Distance:
+        vectorium::distances::Distance,
+{
+    let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+    plain_index.convert_dataset_into()
+}
+
+/// Builds an EGB-permuted PQ-quantized dense HNSW, recompressed into `Ndst`
+/// (`PlainNeighbors` for `permuted`, `StreamVByteNeighbors` for `streamvbyte`).
+fn build_pq_l2_compressed<const M: usize, Ndst>(
+    dataset: PlainDenseDataset<f32, SquaredEuclideanDistance>,
+    config: &HNSWBuildConfiguration,
+) -> HNSW<DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>, GenericGraph<Ndst>>
+where
+    Ndst: Neighbors + From<NeighborData>,
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    // `permute_and_encode` hands the permuted dataset back as `Owned`; restated here because the
+    // compiler cannot normalize `Owned = Self` through the generic parameter (see
+    // `build_permuted_and_save` in `src/bin/hnsw_build.rs`).
+    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        Dataset<Owned = DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, SquaredEuclideanDistance>:
+        VectorEncoder<Distance = SquaredEuclideanDistance>,
+    <ProductQuantizer<M, SquaredEuclideanDistance> as VectorEncoder>::Distance:
+        vectorium::distances::Distance,
+{
+    // Quantize before permuting, never after — see `build_permuted_and_save`.
+    let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+    let converted: HNSW<DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>, Graph> =
+        plain_index.convert_dataset_into();
+    converted.permute_and_encode::<Ndst>()
+}
+
+/// Builds a plain (uncompressed, original node order) PQ-quantized dense HNSW.
+fn build_pq_ip<const M: usize>(
+    dataset: PlainDenseDataset<f32, DotProduct>,
+    config: &HNSWBuildConfiguration,
+) -> HNSW<DenseDataset<ProductQuantizer<M, DotProduct>>, Graph>
+where
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
+    <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
+{
+    let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+    plain_index.convert_dataset_into()
+}
+
+/// Builds an EGB-permuted PQ-quantized dense HNSW, recompressed into `Ndst`
+/// (`PlainNeighbors` for `permuted`, `StreamVByteNeighbors` for `streamvbyte`).
+fn build_pq_ip_compressed<const M: usize, Ndst>(
+    dataset: PlainDenseDataset<f32, DotProduct>,
+    config: &HNSWBuildConfiguration,
+) -> HNSW<DenseDataset<ProductQuantizer<M, DotProduct>>, GenericGraph<Ndst>>
+where
+    Ndst: Neighbors + From<NeighborData>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    // `permute_and_encode` hands the permuted dataset back as `Owned`; restated here because the
+    // compiler cannot normalize `Owned = Self` through the generic parameter (see
+    // `build_permuted_and_save` in `src/bin/hnsw_build.rs`).
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Owned = DenseDataset<ProductQuantizer<M, DotProduct>>>,
+    ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
+    ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
+    <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
+{
+    // Quantize before permuting, never after — see `build_permuted_and_save`.
+    let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
+    let converted: HNSW<DenseDataset<ProductQuantizer<M, DotProduct>>, Graph> =
+        plain_index.convert_dataset_into();
+    converted.permute_and_encode::<Ndst>()
 }
 
 impl DensePQHNSWGeneric<DotProduct> {
@@ -1711,72 +2608,175 @@ impl DensePQHNSWGeneric<DotProduct> {
         dataset: PlainDenseDataset<f32, DotProduct>,
         config: &HNSWBuildConfiguration,
         m_pq: usize,
+        gt: GraphTypeKind,
     ) -> PyResult<Self> {
-        match m_pq {
-            8 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<8, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ8(index))
+        Ok(match m_pq {
+            8 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ8(build_pq_ip::<8>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ8(build_pq_ip_compressed::<8, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ8StreamVByte(build_pq_ip_compressed::<
+                        8,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            16 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ16(build_pq_ip::<16>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ16(build_pq_ip_compressed::<16, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ16StreamVByte(build_pq_ip_compressed::<
+                        16,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            32 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ32(build_pq_ip::<32>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ32(build_pq_ip_compressed::<32, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ32StreamVByte(build_pq_ip_compressed::<
+                        32,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            48 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ48(build_pq_ip::<48>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ48(build_pq_ip_compressed::<48, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ48StreamVByte(build_pq_ip_compressed::<
+                        48,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            64 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ64(build_pq_ip::<64>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ64(build_pq_ip_compressed::<64, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ64StreamVByte(build_pq_ip_compressed::<
+                        64,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            96 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ96(build_pq_ip::<96>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ96(build_pq_ip_compressed::<96, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ96StreamVByte(build_pq_ip_compressed::<
+                        96,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            128 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ128(build_pq_ip::<128>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ128(build_pq_ip_compressed::<128, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ128StreamVByte(build_pq_ip_compressed::<
+                        128,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            192 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ192(build_pq_ip::<192>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ192(build_pq_ip_compressed::<192, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ192StreamVByte(build_pq_ip_compressed::<
+                        192,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            256 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ256(build_pq_ip::<256>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ256(build_pq_ip_compressed::<256, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ256StreamVByte(build_pq_ip_compressed::<
+                        256,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            384 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ384(build_pq_ip::<384>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ384(build_pq_ip_compressed::<384, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ384StreamVByte(build_pq_ip_compressed::<
+                        384,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
+                ));
             }
-            16 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<16, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ16(index))
-            }
-            32 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<32, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ32(index))
-            }
-            48 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<48, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ48(index))
-            }
-            64 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<64, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ64(index))
-            }
-            96 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<96, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ96(index))
-            }
-            128 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<128, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ128(index))
-            }
-            192 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<192, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ192(index))
-            }
-            256 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<256, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ256(index))
-            }
-            384 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<DenseDataset<ProductQuantizer<384, DotProduct>>, Graph> =
-                    plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ384(index))
-            }
-            _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
-            )),
-        }
+        })
     }
 }
 
@@ -1785,92 +2785,175 @@ impl DensePQHNSWGeneric<SquaredEuclideanDistance> {
         dataset: PlainDenseDataset<f32, SquaredEuclideanDistance>,
         config: &HNSWBuildConfiguration,
         m_pq: usize,
+        gt: GraphTypeKind,
     ) -> PyResult<Self> {
-        match m_pq {
-            8 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<8, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ8(index))
+        Ok(match m_pq {
+            8 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ8(build_pq_l2::<8>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ8(build_pq_l2_compressed::<8, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ8StreamVByte(build_pq_l2_compressed::<
+                        8,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            16 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ16(build_pq_l2::<16>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ16(build_pq_l2_compressed::<16, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ16StreamVByte(build_pq_l2_compressed::<
+                        16,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            32 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ32(build_pq_l2::<32>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ32(build_pq_l2_compressed::<32, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ32StreamVByte(build_pq_l2_compressed::<
+                        32,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            48 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ48(build_pq_l2::<48>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ48(build_pq_l2_compressed::<48, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ48StreamVByte(build_pq_l2_compressed::<
+                        48,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            64 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ64(build_pq_l2::<64>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ64(build_pq_l2_compressed::<64, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ64StreamVByte(build_pq_l2_compressed::<
+                        64,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            96 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ96(build_pq_l2::<96>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ96(build_pq_l2_compressed::<96, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ96StreamVByte(build_pq_l2_compressed::<
+                        96,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            128 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ128(build_pq_l2::<128>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ128(build_pq_l2_compressed::<128, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ128StreamVByte(build_pq_l2_compressed::<
+                        128,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            192 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ192(build_pq_l2::<192>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ192(build_pq_l2_compressed::<192, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ192StreamVByte(build_pq_l2_compressed::<
+                        192,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            256 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ256(build_pq_l2::<256>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ256(build_pq_l2_compressed::<256, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ256StreamVByte(build_pq_l2_compressed::<
+                        256,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            384 => match gt {
+                GraphTypeKind::Standard => {
+                    DensePQHNSWGeneric::PQ384(build_pq_l2::<384>(dataset, config))
+                }
+                GraphTypeKind::Permuted => {
+                    DensePQHNSWGeneric::PQ384(build_pq_l2_compressed::<384, PlainNeighbors>(
+                        dataset, config,
+                    ))
+                }
+                GraphTypeKind::Compressed => {
+                    DensePQHNSWGeneric::PQ384StreamVByte(build_pq_l2_compressed::<
+                        384,
+                        StreamVByteNeighbors,
+                    >(dataset, config))
+                }
+            },
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
+                ));
             }
-            16 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<16, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ16(index))
-            }
-            32 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<32, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ32(index))
-            }
-            48 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<48, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ48(index))
-            }
-            64 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<64, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ64(index))
-            }
-            96 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<96, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ96(index))
-            }
-            128 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<128, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ128(index))
-            }
-            192 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<192, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ192(index))
-            }
-            256 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<256, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ256(index))
-            }
-            384 => {
-                let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-                let index: HNSW<
-                    DenseDataset<ProductQuantizer<384, SquaredEuclideanDistance>>,
-                    Graph,
-                > = plain_index.convert_dataset_into();
-                Ok(DensePQHNSWGeneric::PQ384(index))
-            }
-            _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Unsupported m_pq value. Supported values: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384.",
-            )),
-        }
+        })
     }
 }
 
@@ -1878,157 +2961,211 @@ impl<D> DensePQHNSWGeneric<D>
 where
     D: ProductQuantizerDistance + Distance + ScalarDenseSupportedDistance,
 {
-    fn load(path: &str, m_pq: usize) -> PyResult<Self> {
-        let inner = match m_pq {
-            8 => {
+    fn load(path: &str, m_pq: usize, gt: GraphTypeKind) -> PyResult<Self> {
+        let inner = match (m_pq, gt) {
+            (8, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<8, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ8(index)
             }
-            16 => {
+            (8, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<8, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<8, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ8StreamVByte(index)
+            }
+            (16, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<16, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ16(index)
             }
-            32 => {
+            (16, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<16, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<16, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ16StreamVByte(index)
+            }
+            (32, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<32, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ32(index)
             }
-            48 => {
+            (32, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<32, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<32, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ32StreamVByte(index)
+            }
+            (48, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<48, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ48(index)
             }
-            64 => {
+            (48, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<48, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<48, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ48StreamVByte(index)
+            }
+            (64, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<64, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ64(index)
             }
-            96 => {
+            (64, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<64, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<64, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ64StreamVByte(index)
+            }
+            (96, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<96, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ96(index)
             }
-            128 => {
+            (96, GraphTypeKind::Compressed) => {
+                let index: HNSW<DenseDataset<ProductQuantizer<96, D>>, GenericGraph<StreamVByteNeighbors>> = <HNSW<
+                    DenseDataset<ProductQuantizer<96, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(
+                    path
+                )
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ96StreamVByte(index)
+            }
+            (128, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<128, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<128, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ128(index)
             }
-            192 => {
+            (128, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<128, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<ProductQuantizer<128, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ128StreamVByte(index)
+            }
+            (192, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<192, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<192, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ192(index)
             }
-            256 => {
+            (192, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<192, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<ProductQuantizer<192, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ192StreamVByte(index)
+            }
+            (256, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<256, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<256, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ256(index)
             }
-            384 => {
+            (256, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<256, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<ProductQuantizer<256, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ256StreamVByte(index)
+            }
+            (384, GraphTypeKind::Standard | GraphTypeKind::Permuted) => {
                 let index: HNSW<DenseDataset<ProductQuantizer<384, D>>, Graph> = <HNSW<
                     DenseDataset<ProductQuantizer<384, D>>,
                     Graph,
                 > as IndexSerializer>::load_index(
                     path
                 )
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Error loading index: {:?}",
-                        e
-                    ))
-                })?;
+                .map_err(load_index_err)?;
                 DensePQHNSWGeneric::PQ384(index)
+            }
+            (384, GraphTypeKind::Compressed) => {
+                let index: HNSW<
+                    DenseDataset<ProductQuantizer<384, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > = <HNSW<
+                    DenseDataset<ProductQuantizer<384, D>>,
+                    GenericGraph<StreamVByteNeighbors>,
+                > as IndexSerializer>::load_index(path)
+                .map_err(load_index_err)?;
+                DensePQHNSWGeneric::PQ384StreamVByte(index)
             }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -2051,6 +3188,16 @@ where
             DensePQHNSWGeneric::PQ192(index) => index.save_index(path),
             DensePQHNSWGeneric::PQ256(index) => index.save_index(path),
             DensePQHNSWGeneric::PQ384(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ8StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ16StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ32StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ48StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ64StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ96StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ128StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ192StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ256StreamVByte(index) => index.save_index(path),
+            DensePQHNSWGeneric::PQ384StreamVByte(index) => index.save_index(path),
         };
 
         result.map_err(|e| {
@@ -2070,6 +3217,16 @@ where
             DensePQHNSWGeneric::PQ192(index) => index.dim(),
             DensePQHNSWGeneric::PQ256(index) => index.dim(),
             DensePQHNSWGeneric::PQ384(index) => index.dim(),
+            DensePQHNSWGeneric::PQ8StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ16StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ32StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ48StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ64StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ96StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ128StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ192StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ256StreamVByte(index) => index.dim(),
+            DensePQHNSWGeneric::PQ384StreamVByte(index) => index.dim(),
         }
     }
 
@@ -2090,6 +3247,16 @@ where
             DensePQHNSWGeneric::PQ192(index) => index.search(query, k, search_config),
             DensePQHNSWGeneric::PQ256(index) => index.search(query, k, search_config),
             DensePQHNSWGeneric::PQ384(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ8StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ16StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ32StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ48StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ64StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ96StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ128StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ192StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ256StreamVByte(index) => index.search(query, k, search_config),
+            DensePQHNSWGeneric::PQ384StreamVByte(index) => index.search(query, k, search_config),
         }
     }
 }
@@ -2107,17 +3274,19 @@ pub struct DensePQHNSW {
 #[pymethods]
 impl DensePQHNSW {
     #[staticmethod]
-    #[pyo3(signature = (data_path, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_path, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_file(
         data_path: &str,
         m_pq: usize,
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -2125,7 +3294,7 @@ impl DensePQHNSW {
                     read_npy_dataset::<SquaredEuclideanDistance>(data_path)?;
                 DensePQHNSWEnum::Euclidean(
                     DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
-                        dataset, &config, m_pq,
+                        dataset, &config, m_pq, gt,
                     )?,
                 )
             }
@@ -2133,7 +3302,7 @@ impl DensePQHNSW {
                 let dataset: PlainDenseDataset<f32, DotProduct> =
                     read_npy_dataset::<DotProduct>(data_path)?;
                 DensePQHNSWEnum::DotProduct(DensePQHNSWGeneric::<DotProduct>::build_from_dataset(
-                    dataset, &config, m_pq,
+                    dataset, &config, m_pq, gt,
                 )?)
             }
         };
@@ -2142,7 +3311,7 @@ impl DensePQHNSW {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (data_vec, dim, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string()))]
+    #[pyo3(signature = (data_vec, dim, m_pq, m=32, ef_construction=200, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
     pub fn build_from_array(
         data_vec: PyReadonlyArray1<f32>,
         dim: usize,
@@ -2150,12 +3319,14 @@ impl DensePQHNSW {
         m: usize,
         ef_construction: usize,
         metric: String,
+        graph_type: String,
     ) -> PyResult<Self> {
         let data_vec = data_vec.as_slice()?.to_vec();
         let n_vecs = data_vec.len() / dim;
         let config = HNSWBuildConfiguration::default()
             .with_num_neighbors(m)
             .with_ef_construction(ef_construction);
+        let gt = parse_build_graph_type(&graph_type, m)?;
 
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
@@ -2164,7 +3335,7 @@ impl DensePQHNSW {
                     DenseDataset::from_raw(data_vec.into_boxed_slice(), n_vecs, encoder);
                 DensePQHNSWEnum::Euclidean(
                     DensePQHNSWGeneric::<SquaredEuclideanDistance>::build_from_dataset(
-                        dataset, &config, m_pq,
+                        dataset, &config, m_pq, gt,
                     )?,
                 )
             }
@@ -2173,7 +3344,7 @@ impl DensePQHNSW {
                 let dataset: PlainDenseDataset<f32, DotProduct> =
                     DenseDataset::from_raw(data_vec.into_boxed_slice(), n_vecs, encoder);
                 DensePQHNSWEnum::DotProduct(DensePQHNSWGeneric::<DotProduct>::build_from_dataset(
-                    dataset, &config, m_pq,
+                    dataset, &config, m_pq, gt,
                 )?)
             }
         };
@@ -2181,15 +3352,18 @@ impl DensePQHNSW {
         Ok(DensePQHNSW { inner })
     }
 
+    /// Loads a previously saved index. `graph_type` must match the value used at build
+    /// time (`standard`/`permuted` both load as the same on-disk representation).
     #[staticmethod]
-    #[pyo3(signature = (path, m_pq, metric="dotproduct".to_string()))]
-    pub fn load(path: &str, m_pq: usize, metric: String) -> PyResult<Self> {
+    #[pyo3(signature = (path, m_pq, metric="dotproduct".to_string(), graph_type="standard".to_string()))]
+    pub fn load(path: &str, m_pq: usize, metric: String, graph_type: String) -> PyResult<Self> {
+        let gt = parse_graph_type(&graph_type)?;
         let inner = match parse_metric(&metric)? {
             MetricKind::Euclidean => {
-                DensePQHNSWEnum::Euclidean(DensePQHNSWGeneric::load(path, m_pq)?)
+                DensePQHNSWEnum::Euclidean(DensePQHNSWGeneric::load(path, m_pq, gt)?)
             }
             MetricKind::DotProduct => {
-                DensePQHNSWEnum::DotProduct(DensePQHNSWGeneric::load(path, m_pq)?)
+                DensePQHNSWEnum::DotProduct(DensePQHNSWGeneric::load(path, m_pq, gt)?)
             }
         };
         Ok(DensePQHNSW { inner })

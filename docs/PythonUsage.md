@@ -37,6 +37,17 @@ All HNSW indexes support:
 - `m` (int): Neighbors per node. Typical: 16–64. Default: 32
 - `ef_construction` (int): Graph construction effort. Higher = better quality, slower. Default: 200
 - `metric` (str): Distance metric. Options: `"euclidean"`, `"dotproduct"` (default)
+- `graph_type` (str): How the graph is stored. Leave it out and you get `"standard"`.
+  See [GraphCompression.md](GraphCompression.md)
+  - `"standard"` (default) — original node order, uncompressed
+  - `"compressed"` — reordered *and* compressed: roughly halves the graph portion of the
+    index and keeps the query speed-up below. Requires `m <= 128`
+  - `"permuted"` — reordered only: faster queries, because nodes that are searched together
+    end up stored together, but no size saving (marginally larger than `"standard"`)
+
+  All three return identical search results; they differ in index size and query speed.
+  Whatever you pass to the builder must be passed again to `load()`: index files are not
+  self-describing, so `load()` cannot detect it for you.
 
 ### Dense Plain HNSW
 
@@ -46,12 +57,14 @@ index = DensePlainHNSW.build_from_file(
     "data.npy",
     m=32,
     ef_construction=200,
-    metric="dotproduct"
+    metric="dotproduct",
+    graph_type="standard"   # or "compressed" / "permuted"
 )
 
-# From numpy array
+# From numpy array. The array must be flattened, and `dim` is required:
+# vectors are passed as one contiguous 1-D buffer of n_vectors * dim floats.
 data = np.random.randn(10000, 768).astype(np.float32)
-index = DensePlainHNSW.build_from_array(data, m=32, ef_construction=200)
+index = DensePlainHNSW.build_from_array(data.flatten(), dim=768, m=32, ef_construction=200)
 ```
 
 ### Dense PQ HNSW
@@ -60,12 +73,15 @@ index = DensePlainHNSW.build_from_array(data, m=32, ef_construction=200)
 # Product-quantized dense index
 index = DensePQHNSW.build_from_file(
     "data.npy",
-    m_pq=32,           # PQ subspaces: 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
+    m_pq=32,           # PQ subspaces: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384
     m=32,              # HNSW neighbors
     ef_construction=200,
     metric="dotproduct"
 )
 ```
+
+`m_pq` must divide the vector dimensionality. Note that the CLI's `--pq-subspaces` accepts a
+different set (`4` … `192`); `256` and `384` are Python-only, and `4` is CLI-only.
 
 ### Dense Flat Index
 
@@ -73,9 +89,9 @@ index = DensePQHNSW.build_from_file(
 # Exhaustive search (no HNSW index, just linear scan)
 index = DenseFlatIndex.build_from_file("data.npy", metric="dotproduct")
 
-# Or from array
+# Or from array (flattened, as above)
 data = np.random.randn(10000, 768).astype(np.float32)
-index = DenseFlatIndex.build_from_array(data, dim=768, metric="dotproduct")
+index = DenseFlatIndex.build_from_array(data.flatten(), dim=768, metric="dotproduct")
 ```
 
 ### Sparse Plain HNSW
@@ -167,6 +183,9 @@ index = DensePlainHNSW.load("my_index.bin", metric="dotproduct")
 index = SparsePlainHNSW.load("my_index.bin", metric="dotproduct")
 index = DensePQHNSW.load("my_index.bin", m_pq=32, metric="dotproduct")
 
+# HNSW indexes built with a non-default graph type must be loaded with the same one
+index = DensePlainHNSW.load("my_index.bin", metric="dotproduct", graph_type="compressed")
+
 # Flat indexes
 index = DenseFlatIndex.load("my_index.bin")  # Requires nothing extra
 index = SparseFlatIndex.load("my_index.bin")
@@ -176,96 +195,151 @@ index = SparseFlatIndex.load("my_index.bin")
 
 ## Search Operations
 
-### Dense Plain HNSW
+Every index exposes **two** methods, and they are not interchangeable:
+
+- **`search(...)`** — one query. Dense indexes take a 1-D array of exactly `dim` floats and
+  raise `ValueError` otherwise; sparse indexes take one `(components, values)` pair and take
+  **no** `offsets` argument.
+- **`batch_search(...)`** — many queries at once, optionally in parallel. Dense indexes take
+  all queries concatenated into one flat array; sparse indexes take the concatenated
+  `components`/`values` plus an `offsets` array delimiting each query.
+
+Both return `(distances, ids)` as two 1-D numpy arrays. **Results are always padded to `k`**:
+if fewer than `k` neighbors are found, the remainder is filled with `inf` distances and `-1`
+ids. `batch_search` returns `num_queries * k` entries, query-major.
+
+Returned ids are always ids into your original dataset, whatever `graph_type` you built with.
+
+### `num_threads` (batch only)
+
+- `0` (default) — rayon's default pool, typically every core.
+- `1` — a plain serial loop with no rayon involvement. Use this to reproduce single-threaded
+  benchmarks that pin the process with `numactl --physcpubind`.
+- `n` — a temporary pool of `n` threads for the duration of the call.
+
+### Dense indexes (`DensePlainHNSW`, `DensePQHNSW`)
 
 ```python
-# Batch search (automatically detects # of queries from array length)
-queries = np.random.randn(100, 768).astype(np.float32)  # 100 queries
-dists, ids = index.search(queries, k=10, ef_search=200)
-# Returns: distances of shape [≤100*10], ids of shape [≤100*10]
+# Single query: a 1-D array of exactly `dim` floats.
+query = np.random.randn(768).astype(np.float32)
+dists, ids = index.search(query, k=10, ef_search=200)
 
 # With early exit threshold (optional, suggested 0.005-0.25)
-dists, ids = index.search(queries, k=10, ef_search=200, early_exit_threshold=0.1)
+dists, ids = index.search(query, k=10, ef_search=200, early_exit_threshold=0.1)
+
+# Many queries: flatten them into a single contiguous buffer.
+queries = np.random.randn(100, 768).astype(np.float32)
+dists, ids = index.batch_search(queries.flatten(), k=10, ef_search=200, num_threads=0)
+# dists and ids each hold 100 * 10 entries, query-major.
 ```
+
+`DensePQHNSW.search` has no default arguments: pass `ef_search` and `early_exit_threshold`
+explicitly.
 
 ### Dense Flat Index
 
 ```python
+query = np.random.randn(768).astype(np.float32)
+dists, ids = index.search(query, k=10)
+
 queries = np.random.randn(100, 768).astype(np.float32)
-dists, ids = index.search(queries, k=10)
+dists, ids = index.batch_search(queries.flatten(), k=10, num_threads=0)
 ```
 
-### Sparse Plain HNSW / Other Sparse Variants
+### Sparse HNSW (`SparsePlainHNSW`, `SparseDotVByteHNSW`, `SparseFixedU8HNSW`, `SparseFixedU16HNSW`)
 
 ```python
-# Batch search for multiple sparse queries
+# Single query: components and values only, no offsets.
+query_components = np.array([0, 5, 10], dtype=np.int32)
+query_values = np.array([0.8, 0.5, 0.3], dtype=np.float32)
+dists, ids = index.search(query_components, query_values, k=10, ef_search=200)
+
+# Many queries: concatenate them and delimit with offsets.
 query_components = np.array([0, 5, 10, 100, 200], dtype=np.int32)
 query_values = np.array([0.8, 0.5, 0.3, 0.7, 0.2], dtype=np.float32)
 offsets = np.array([0, 3, 5], dtype=np.int64)  # Two queries: [0,3) and [3,5)
 
-dists, ids = index.search(
-    query_components,
-    query_values,
-    offsets,
-    k=10,
-    ef_search=200
-)
-
-# With early exit
-dists, ids = index.search(
+dists, ids = index.batch_search(
     query_components, query_values, offsets,
     k=10, ef_search=200,
-    early_exit_threshold=0.1
+    early_exit_threshold=0.1,   # optional
+    num_threads=0,
 )
 ```
 
 ### Sparse Flat Index
 
 ```python
-query_components = np.array([0, 5, 10, 100, 200], dtype=np.int32)
-query_values = np.array([0.8, 0.5, 0.3, 0.7, 0.2], dtype=np.float32)
-offsets = np.array([0, 3, 5], dtype=np.int64)  # Two queries
+query_components = np.array([0, 5, 10], dtype=np.int32)
+query_values = np.array([0.8, 0.5, 0.3], dtype=np.float32)
+dists, ids = index.search(query_components, query_values, k=10)
 
-dists, ids = index.search(query_components, query_values, offsets, k=10)
-```
-
-### Dense PQ HNSW
-
-```python
-queries = np.random.randn(100, 768).astype(np.float32)
-dists, ids = index.search(queries, k=10, ef_search=200)
-
-# With early exit
-dists, ids = index.search(queries, k=10, ef_search=200, early_exit_threshold=0.1)
+# Batch form takes offsets.
+offsets = np.array([0, 3], dtype=np.int64)
+dists, ids = index.batch_search(query_components, query_values, offsets, k=10, num_threads=0)
 ```
 
 ### Sparse Multivector Reranking
 
+The single-query form takes `multivec_query` (singular) and no offsets:
+
 ```python
-# Sparse + dense two-stage search
 query_components = np.array([0, 5, 10, 100], dtype=np.int32)
 query_values = np.array([0.8, 0.5, 0.3, 0.7], dtype=np.float32)
-sparse_offsets = np.array([0, 4], dtype=np.int64)  # One query
 
-# Dense multivector queries (must match n_queries from sparse_offsets)
-multivec_queries = np.random.randn(1, 8, 768).astype(np.float32)  # 1 query, 8 tokens, 768-dim each
-multivec_flat = multivec_queries.reshape(-1).astype(np.float32)
+# One query: 8 tokens of 768 dimensions, flattened.
+multivec_query = np.random.randn(8, 768).astype(np.float32).reshape(-1)
 
 dists, ids = index.search(
-    query_components=query_components,
-    query_values=query_values,
-    sparse_offsets=sparse_offsets,
-    multivec_queries=multivec_flat,
+    query_components, query_values, multivec_query,
     n_tokens=8,
     token_dim=768,
-    k_candidates=25,  # First-stage candidates
-    k=10,               # Final results
+    k_candidates=25,   # First-stage candidates
+    k=10,              # Final results
     ef_search=100,
-    alpha=0.05,          # First-stage weight (optional)
+    alpha=0.05,        # First-stage weight (optional)
     beta=2,            # Second-stage early exit (optional)
-    early_exit_threshold=None  # HNSW early exit (optional)
 )
 ```
+
+The batch form adds `sparse_offsets` and takes `multivec_queries` (plural):
+
+```python
+sparse_offsets = np.array([0, 4], dtype=np.int64)  # One query
+multivec_queries = np.random.randn(1, 8, 768).astype(np.float32).reshape(-1)
+
+dists, ids = index.batch_search(
+    query_components, query_values, sparse_offsets, multivec_queries,
+    n_tokens=8, token_dim=768,
+    k_candidates=25, k=10, ef_search=100,
+    num_threads=0,
+)
+```
+
+---
+
+## Filtered Search (ACORN)
+
+Predicate-aware search — "the `k` nearest neighbors for which `predicate(id)` is true" — is
+available on **`DensePlainHNSW` only**. It is not a post-filter: the predicate steers the
+graph traversal, so recall stays usable even when few vectors qualify.
+
+The predicate is a Python callable receiving an original dataset id and returning `bool`.
+It is invoked during traversal, so keep it cheap.
+
+```python
+# ACORN-1: two-hop expansion computed on the fly. Nothing to prepare.
+dists, ids = index.search_filtered(query, k=10, predicate=lambda i: i % 2 == 0, ef_search=100)
+
+# ACORN-gamma: precompute the expansion once, then search repeatedly.
+# Trades memory for speed; gamma of 2-4 is a sensible starting point.
+index.build_acorn_gamma(gamma=3)
+dists, ids = index.search_filtered_gamma(query, k=10, predicate=lambda i: i % 2 == 0, ef_search=100)
+```
+
+`build_acorn_gamma` must be called before `search_filtered_gamma`, which otherwise raises
+`RuntimeError`. The expanded lists live on the index object in memory and are **not** written
+by `save()`: call `build_acorn_gamma` again after `load()`.
 
 ---
 

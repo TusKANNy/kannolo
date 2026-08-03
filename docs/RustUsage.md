@@ -1,11 +1,24 @@
-## Rust API
+## Command-Line Usage
 
-kANNolo provides three command-line binaries for index building and search.
+kANNolo provides five command-line binaries for index building and search. This page is a
+task-oriented walkthrough; [Binaries.md](Binaries.md) is the exhaustive flag reference.
 
 **Binaries:**
 - `hnsw_build` – Build an HNSW index from dense or sparse data
 - `hnsw_search` – Search an existing HNSW index
+- `ivf_build` – Build an IVF (inverted file) index; dense only
+- `ivf_search` – Search an IVF index
 - `hnsw_rerank_search` – Two-stage search: sparse first-stage + multivector reranking
+
+The binaries require the `cli` feature; `hnsw_rerank_search` also requires `multivec`. A plain
+`cargo build` compiles only the library:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features cli
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features "cli,multivec"
+```
+
+The IVF binaries are covered in [Binaries.md](Binaries.md) rather than here.
 
 **Data Formats:**
 - Dense: `.npy` files (float32 concatenated vectors)
@@ -46,12 +59,17 @@ Build an HNSW index from dense or sparse data.
 **PQ-specific (when --encoder pq):**
 ```bash
 --pq-subspaces <int>      Number of subspaces. Supported: 4, 8, 16, 32, 48, 64, 96, 128, 192
+                          (must divide the vector dimensionality)
 ```
 
 **Graph structure:**
 ```bash
---graph-type <type>       standard (default) or fixed-degree
+--graph-type <type>       standard (default), fixed-degree, permuted, or streamvbyte
 ```
+`permuted` reorders the graph so that nodes traversed together are stored together, which makes
+queries faster without shrinking the index. `streamvbyte` adds compression on top of that
+reordering and roughly halves the graph portion of the index; it requires `--m` of at most 128.
+Results are identical for every graph type. See [GraphCompression.md](GraphCompression.md).
 
 **Examples:**
 
@@ -138,7 +156,7 @@ Search an HNSW index with dense or sparse queries.
 **Other:**
 ```bash
 --output-path <path>      Output file for results (optional)
---graph-type <type>       standard (default) or fixed-degree (must match index)
+--graph-type <type>       standard (default), fixed-degree, permuted, or streamvbyte (must match index)
 --num-runs <int>          Number of runs for timing (default: 1)
 ```
 

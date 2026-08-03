@@ -2,12 +2,13 @@
 
 We provide a quick way to replicate the results of our paper. 
 
-Use the [`scripts/run_experiments.py`](scripts/run_experiments.py) script to quickly reproduce a result from the paper. 
+Use the [`scripts/run_experiments.py`](../scripts/run_experiments.py) script to quickly reproduce a result from the paper. 
 This script is configurable via TOML files, which specify the parameters to build the index and execute queries on it.  
 The script measures average query time (in microseconds), recall with respect to the true closest vectors of the query (accuracy@k), MRR or other metrics with respect to judged qrels if specified, and index space usage (bytes).
-Reranking and multivector experiments are no longer supported; the runner will error if a config includes them.
 
-TOML files to reproduce the experiments of our paper can be found in [`experiments/ecir2025`](experiments/ecir2025).
+The runner drives `hnsw_build`/`hnsw_search`, the IVF binaries (`ivf_build`/`ivf_search`, selected by naming them in `build-command`/`query-command`), and `hnsw_rerank_search` for two-stage reranking. What is *not* supported is `dataset-type = "multivector"`: that path was removed and the runner raises an error if a config still uses it.
+
+TOML files to reproduce the experiments of our paper can be found in [`experiments/ecir2025`](../experiments/ecir2025), and the graph-compression experiments in [`experiments/compressed_graph`](../experiments/compressed_graph).
 
 Datasets can be found at [`Hugging Face`](https://huggingface.co/collections/tuskanny/kannolo-datasets-67f2527781f4f7a1b4c9fe54).
 
@@ -81,11 +82,31 @@ The TOML configuration files have been updated to work with the unified binaries
 - `value-type`: Value type - `"f32"`, `"f16"`, `"fixedu8"`, or `"fixedu16"` (for `encoder = "pq"` and `encoder = "dotvbyte"`, this is ignored)
 - `component-type`: Sparse-only component type - `"u16"` or `"u32"` (DotVByte requires `"u16"`)
 - `encoder`: Encoder type - `"plain"`, `"pq"`, or `"dotvbyte"` (`pq` is dense-only, `dotvbyte` is sparse-only)
-- `graph-type`: Graph type - `"standard"` or `"fixed-degree"`
+- `graph-type`: Graph type - `"standard"`, `"fixed-degree"`, `"permuted"`, or `"streamvbyte"`. `"permuted"` reorders the graph for faster queries at the same size; `"streamvbyte"` also compresses it, requires `m <= 128`, and roughly halves the graph portion of the index. All produce identical results. See [GraphCompression.md](GraphCompression.md)
+
+`graph-type` may also be set **per query subsection**, overriding the top-level value. Because
+graph compression is applied at build time and must match at search time, the runner builds one
+index per distinct graph type used in the file and points each subsection at the matching index.
+This lets a single experiment compare compressed and uncompressed graphs side by side:
+
+```toml
+graph-type = "standard"   # default for subsections that do not override it
+
+[query]
+    [query.recall_90_standard]
+    ef-search = 11
+    graph-type = "standard"
+
+    [query.recall_90_streamvbyte]
+    ef-search = 11
+    graph-type = "streamvbyte"
+```
+
+See `experiments/compressed_graph/dense_sift1m.toml` for a complete example.
 
 ### Sections
 - `[indexing_parameters]`: Traditional HNSW parameters (`m`, `ef-construction`, `metric`)
-- `[pq_parameters]`: PQ-specific parameters (`pq-subspaces`, `nbits`, `sample-size`) when using PQ encoder. Supported `pq-subspaces` values are `4, 8, 16, 32, 64, 96, 128`. `nbits` and `sample-size` are accepted for compatibility but ignored by the current vectorium PQ implementation.
+- `[pq_parameters]`: PQ-specific parameters (`pq-subspaces`, `nbits`, `sample-size`) when using PQ encoder. Supported `pq-subspaces` values are `4, 8, 16, 32, 48, 64, 96, 128, 192`, and the value must divide the vector dimensionality. `nbits` and `sample-size` are accepted for compatibility but ignored by the current vectorium PQ implementation.
 - `[folder]`: Directory paths for data, indexes, and experiments
 - `[filename]`: Filenames for dataset, queries, groundtruth, etc.
 - `[settings]`: Runtime settings (k, NUMA, build flag, evaluation metric)
@@ -143,8 +164,14 @@ sample-size = 100000
 ``` 
 
 ### Getting the Results
-The script creates a folder named `sift_hnsw_XXX`, where `XXX` encodes the datetime at which the script was executed. This ensures that each run creates a unique directory.
+The script creates a folder named `<name>_<timestamp>`, where `<name>` is the top-level `name` field of the TOML and `<timestamp>` is `YYYY-MM-DD_HH:MM:SS`. This ensures that each run creates a unique directory. It is written under `[folder].experiment`, which defaults to the repository root in the shipped configs.
+
+These directories are untracked scratch output and are **not** in `.gitignore`, so `git status` will be full of them. Never use `git add -A` or `git commit -a` in this repository; stage files explicitly.
 
 Inside the folder, you can find the data collected during the experiment.
 
-The most important file is `report.tsv`, which reports *query time* and *accuracy*.
+The most important file is `report.tsv`, with one row per query subsection and, in column order:
+*query time*, *bits/edge*, *accuracy*, the optional `metric` column, *memory usage* and *building
+time*. The building time reported is that
+of the index the subsection actually searched, so subsections using different graph types show
+their own build cost. Build logs are written to one `building_<graph-type>.output` file per index.

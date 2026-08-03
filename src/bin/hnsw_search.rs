@@ -5,7 +5,8 @@ use clap::{Parser, ValueEnum};
 use half::f16;
 use std::fs::File;
 
-use kannolo::graph::{Graph, GraphFixedDegree, GraphTrait, GrowableGraph};
+use kannolo::graph::graph::{Graph, GraphFixedDegree, GraphTrait};
+use kannolo::graph::neighbors::{PlainNeighbors, StreamVByteNeighbors};
 use kannolo::hnsw::{EarlyTerminationStrategy, HNSW, HNSWSearchConfiguration};
 use vectorium::IndexSerializer;
 use vectorium::core::index::Index;
@@ -73,8 +74,15 @@ impl std::fmt::Display for EncoderType {
 
 #[derive(Debug, Clone, ValueEnum)]
 enum GraphType {
+    /// Plain neighbor storage, original (insertion) node order.
     Standard,
+    /// Fixed-degree (padded) neighbor storage, original node order.
     FixedDegree,
+    /// Plain neighbor storage, nodes reordered by Enhanced Graph Bisection (EGB). Loads as the
+    /// same Rust type as `standard`: the permutation lives in the serialized index data.
+    Permuted,
+    /// EGB-reordered nodes, neighbor lists delta-encoded and compressed with StreamVByte.
+    Streamvbyte,
 }
 
 #[derive(Debug, Clone, ValueEnum, Default)]
@@ -96,9 +104,8 @@ enum DistanceKind {
     DotProduct,
 }
 
-trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph> {}
-impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> + From<GrowableGraph>
-{}
+trait GraphBound: GraphTrait + for<'de> serde::Deserialize<'de> {}
+impl<T> GraphBound for T where T: GraphTrait + for<'de> serde::Deserialize<'de> {}
 
 fn parse_metric(metric: &str) -> DistanceKind {
     match metric {
@@ -157,7 +164,8 @@ struct Args {
     #[arg(default_value_t = EncoderType::Plain)]
     encoder: EncoderType,
 
-    /// The graph type (standard or fixed-degree).
+    /// The graph type: `standard`, `fixed-degree`, `permuted`, or `streamvbyte`.
+    /// Must match the `--graph-type` used at build time.
     #[clap(long, value_enum)]
     #[arg(default_value_t = GraphType::Standard)]
     graph_type: GraphType,
@@ -241,43 +249,83 @@ fn main() {
         &args.graph_type,
     ) {
         // Dense plain f32
-        (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F32, GraphType::Standard) => {
-            search_dense_plain_f32::<Graph>(&args, metric);
+        (
+            DatasetType::Dense,
+            EncoderType::Plain,
+            ValueTypeArg::F32,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_dense_plain_f32::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F32, GraphType::FixedDegree) => {
             search_dense_plain_f32::<GraphFixedDegree>(&args, metric);
         }
+        (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F32, GraphType::Streamvbyte) => {
+            search_dense_plain_f32::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Dense plain f16
-        (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F16, GraphType::Standard) => {
-            search_dense_plain_f16::<Graph>(&args, metric);
+        (
+            DatasetType::Dense,
+            EncoderType::Plain,
+            ValueTypeArg::F16,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_dense_plain_f16::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F16, GraphType::FixedDegree) => {
             search_dense_plain_f16::<GraphFixedDegree>(&args, metric);
         }
+        (DatasetType::Dense, EncoderType::Plain, ValueTypeArg::F16, GraphType::Streamvbyte) => {
+            search_dense_plain_f16::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Dense PQ (value-type ignored)
-        (DatasetType::Dense, EncoderType::Pq, _, GraphType::Standard) => {
-            search_dense_pq::<Graph>(&args, metric);
+        (DatasetType::Dense, EncoderType::Pq, _, GraphType::Standard | GraphType::Permuted) => {
+            search_dense_pq::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Dense, EncoderType::Pq, _, GraphType::FixedDegree) => {
             search_dense_pq::<GraphFixedDegree>(&args, metric);
         }
+        (DatasetType::Dense, EncoderType::Pq, _, GraphType::Streamvbyte) => {
+            search_dense_pq::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Sparse plain f16
-        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F16, GraphType::Standard) => {
-            search_sparse_plain_f16::<Graph>(&args, metric);
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::F16,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_sparse_plain_f16::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F16, GraphType::FixedDegree) => {
             search_sparse_plain_f16::<GraphFixedDegree>(&args, metric);
         }
+        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F16, GraphType::Streamvbyte) => {
+            search_sparse_plain_f16::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Sparse plain f32
-        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F32, GraphType::Standard) => {
-            search_sparse_plain_f32::<Graph>(&args, metric);
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::F32,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_sparse_plain_f32::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F32, GraphType::FixedDegree) => {
             search_sparse_plain_f32::<GraphFixedDegree>(&args, metric);
         }
+        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F32, GraphType::Streamvbyte) => {
+            search_sparse_plain_f32::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Sparse plain fixedu8
-        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::Fixedu8, GraphType::Standard) => {
-            search_sparse_scalar::<FixedU8Q, Graph>(&args, metric);
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu8,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_sparse_scalar::<FixedU8Q, Graph<PlainNeighbors>>(&args, metric);
         }
         (
             DatasetType::Sparse,
@@ -287,9 +335,22 @@ fn main() {
         ) => {
             search_sparse_scalar::<FixedU8Q, GraphFixedDegree>(&args, metric);
         }
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu8,
+            GraphType::Streamvbyte,
+        ) => {
+            search_sparse_scalar::<FixedU8Q, Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Sparse plain fixedu16
-        (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::Fixedu16, GraphType::Standard) => {
-            search_sparse_scalar::<FixedU16Q, Graph>(&args, metric);
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu16,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_sparse_scalar::<FixedU16Q, Graph<PlainNeighbors>>(&args, metric);
         }
         (
             DatasetType::Sparse,
@@ -299,12 +360,28 @@ fn main() {
         ) => {
             search_sparse_scalar::<FixedU16Q, GraphFixedDegree>(&args, metric);
         }
+        (
+            DatasetType::Sparse,
+            EncoderType::Plain,
+            ValueTypeArg::Fixedu16,
+            GraphType::Streamvbyte,
+        ) => {
+            search_sparse_scalar::<FixedU16Q, Graph<StreamVByteNeighbors>>(&args, metric);
+        }
         // Sparse dotvbyte (value-type ignored)
-        (DatasetType::Sparse, EncoderType::Dotvbyte, _, GraphType::Standard) => {
-            search_sparse_dotvbyte::<Graph>(&args, metric);
+        (
+            DatasetType::Sparse,
+            EncoderType::Dotvbyte,
+            _,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_sparse_dotvbyte::<Graph<PlainNeighbors>>(&args, metric);
         }
         (DatasetType::Sparse, EncoderType::Dotvbyte, _, GraphType::FixedDegree) => {
             search_sparse_dotvbyte::<GraphFixedDegree>(&args, metric);
+        }
+        (DatasetType::Sparse, EncoderType::Dotvbyte, _, GraphType::Streamvbyte) => {
+            search_sparse_dotvbyte::<Graph<StreamVByteNeighbors>>(&args, metric);
         }
         // Unreachable: caught by earlier validation
         (DatasetType::Dense, EncoderType::Dotvbyte, _, _)

@@ -6,7 +6,10 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::graph::graph::Graph;
+use crate::graph::neighbors::{NeighborData, Neighbors};
 use crate::graph::{GraphTrait, GrowableGraph};
+use crate::utils::CompactArray;
 use vectorium::IndexSerializer;
 use vectorium::core::dataset::{ConvertFrom, ConvertInto, ScoredItemGeneric};
 use vectorium::core::index::Index;
@@ -32,14 +35,15 @@ use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
 pub struct AcornGammaNeighbors {
     /// `neighbors[v]` holds local node IDs of v's expanded neighborhood,
     /// sorted by ascending distance to v.
-    neighbors: Box<[Box<[usize]>]>,
+    neighbors: Box<[Box<[u32]>]>,
     gamma_m: usize,
 }
 
 impl GraphTrait for AcornGammaNeighbors {
+    /// Hands out the stored list; `scratch` is left untouched.
     #[inline]
-    fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
-        self.neighbors[u].iter().copied()
+    fn neighbors<'a>(&'a self, u: usize, _scratch: &'a mut Vec<u32>) -> &'a [u32] {
+        &self.neighbors[u]
     }
 
     #[inline]
@@ -66,7 +70,7 @@ impl GraphTrait for AcornGammaNeighbors {
     fn get_space_usage_bytes(&self) -> usize {
         self.neighbors
             .iter()
-            .map(|n| n.len() * std::mem::size_of::<usize>())
+            .map(|n| n.len() * std::mem::size_of::<u32>())
             .sum()
     }
 }
@@ -91,6 +95,11 @@ pub struct HNSW<D, G> {
     /// global IDs in the ground level (level 0). This is used to find an efficient
     /// entry point for the search on the ground level.
     level1_to_level0_mapping: Box<[usize]>,
+
+    /// Maps each ground-level local ID back to its original external ID: the inverse of the
+    /// EGB reordering applied by the `permuted`/`streamvbyte` graph types. `None` when the
+    /// index was not built with a permuted dataset.
+    original_ids: Option<CompactArray>,
 
     /// The dataset (dense or sparse) that the graph index is built upon.
     /// This holds the original vectors for distance calculations.
@@ -220,7 +229,7 @@ impl Default for HNSWSearchConfiguration {
 impl<D, G> HNSW<D, G>
 where
     D: Dataset,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     /// Return the maximum level of the HNSW graph (0-based).
     #[must_use]
@@ -238,12 +247,30 @@ where
     pub fn nodes_per_level(&self) -> Vec<usize> {
         self.levels.iter().map(|g| g.n_nodes()).collect()
     }
+
+    /// Maps a ground-level local ID to its original external ID.
+    /// When the index was built with a co-permuted dataset, applies the stored inverse
+    /// permutation; otherwise returns the local ID unchanged.
+    #[must_use]
+    #[inline]
+    pub fn get_original_id(&self, local_id: usize) -> usize {
+        self.original_ids
+            .as_ref()
+            .map_or(local_id, |inv| inv.get(local_id))
+    }
+
+    /// Returns the ground level graph (densest layer, contains every node).
+    #[must_use]
+    #[inline]
+    pub fn get_ground_level(&self) -> &G {
+        &self.levels[self.levels.len() - 1]
+    }
 }
 
 impl<D, G> HNSW<D, G>
 where
     D: Dataset,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     /// Converts an `HNSW` index from a different dataset type, preserving the graph structure.
     ///
@@ -257,6 +284,7 @@ where
         let HNSW {
             levels,
             level1_to_level0_mapping,
+            original_ids,
             dataset,
             num_neighbors_per_vec,
             entry_point,
@@ -265,6 +293,7 @@ where
         Self {
             levels,
             level1_to_level0_mapping,
+            original_ids,
             dataset: ConvertInto::<D>::convert_into(dataset),
             num_neighbors_per_vec,
             entry_point,
@@ -300,6 +329,7 @@ where
         let HNSW {
             levels,
             level1_to_level0_mapping,
+            original_ids,
             dataset,
             num_neighbors_per_vec,
             entry_point,
@@ -308,8 +338,78 @@ where
         HNSW {
             levels,
             level1_to_level0_mapping,
+            original_ids,
             dataset: T::convert_from(&dataset),
             num_neighbors_per_vec,
+            entry_point,
+        }
+    }
+}
+
+impl<D, Nsrc> HNSW<D, Graph<Nsrc>>
+where
+    D: Dataset,
+    Nsrc: Neighbors,
+{
+    /// Used by the `permuted`/`streamvbyte` graph types: computes an Enhanced Graph Bisection
+    /// permutation (`old_id -> new_id`) from the ground level, reorders every level's node IDs
+    /// accordingly, and rebuilds each level's adjacency lists into a fresh `Ndst` backend. The
+    /// dataset is co-permuted through [`Dataset::permute`] so node IDs and dataset row indices
+    /// stay in agreement.
+    ///
+    /// Only the ground level is reordered. Upper levels keep their local order and are merely
+    /// relabelled and re-encoded (see [`Graph::permute_level`]), so the nested
+    /// prefix relationship between levels — which the descent in [`HNSW::search`] relies on to
+    /// carry a local ID from one level to the next — holds without any extra work.
+    ///
+    /// Ground-level local IDs then become permuted-dataset row indices, so the returned index
+    /// stores the inverse permutation and translates results back to the original external IDs
+    /// (see [`HNSW::get_original_id`]).
+    pub fn permute_and_encode<Ndst>(&self) -> HNSW<D::Owned, Graph<Ndst>>
+    where
+        Nsrc: Sync,
+        Ndst: Neighbors + From<NeighborData>,
+    {
+        let last = self.levels.len() - 1;
+        let permutation = crate::graph::egb::compute_permutation(&self.levels[last]);
+        let permutation = permutation.as_slice();
+
+        let mut new_levels = Vec::with_capacity(self.levels.len());
+
+        let mut level1_to_level0_mapping = Box::<[usize]>::from([]);
+        let mut entry_point = self.entry_point;
+        let mut ground_inv: Vec<usize> = Vec::new();
+
+        for (i, level) in self.levels.iter().enumerate() {
+            let (new_level, inv): (Graph<Ndst>, Option<Vec<usize>>) =
+                level.permute_level::<Ndst>(permutation);
+
+            if i == last {
+                ground_inv = inv.expect(
+                    "the ground level carries no id mapping, so it must have been reordered",
+                );
+            } else if i + 1 == last {
+                level1_to_level0_mapping = (0..new_level.n_nodes())
+                    .map(|id| new_level.get_external_id(id))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+            }
+
+            new_levels.push(new_level);
+        }
+
+        // Upper levels keep their local order, so a multi-level entry point does not move. With a
+        // single level the entry point is a ground local ID, which the permutation does move.
+        if self.levels.len() == 1 {
+            entry_point = permutation[self.entry_point];
+        }
+
+        HNSW {
+            levels: new_levels.into_boxed_slice(),
+            level1_to_level0_mapping,
+            original_ids: Some(CompactArray::from(ground_inv)),
+            dataset: self.dataset.permute(permutation),
+            num_neighbors_per_vec: self.num_neighbors_per_vec,
             entry_point,
         }
     }
@@ -319,7 +419,7 @@ impl<D, G> HNSW<D, G>
 where
     D: Dataset + Sync,
     <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     /// Performs ACORN-1 filtered approximate nearest-neighbor search.
     ///
@@ -385,6 +485,7 @@ where
 
         let ef = search_params.ef_search.max(k);
         let lambda = search_params.early_termination.lambda();
+        let mapped_predicate = |local_id: usize| predicate(self.get_original_id(local_id));
         let top_heap = ground_graph.acorn_search_candidates_filtered(
             &self.dataset,
             ground_entry_node,
@@ -392,7 +493,7 @@ where
             ef,
             k,
             lambda,
-            &predicate,
+            &mapped_predicate,
         );
 
         let mut topk = top_heap.into_sorted_vec();
@@ -400,7 +501,7 @@ where
         topk.drain(..)
             .map(|candidate| vectorium::dataset::ScoredVector {
                 distance: candidate.distance,
-                vector: candidate.vector as VectorId,
+                vector: self.get_original_id(candidate.vector) as VectorId,
             })
             .collect()
     }
@@ -410,7 +511,7 @@ impl<D, G> HNSW<D, G>
 where
     D: Dataset + Sync,
     <D::Encoder as VectorEncoder>::Distance: Distance,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     /// Build pre-expanded neighbor lists for ACORN-γ filtered search.
     ///
@@ -430,7 +531,10 @@ where
         let gamma_m = (gamma * m).max(1);
         let ground_graph = &self.levels[self.levels.len() - 1];
 
-        let mut expanded: Vec<Box<[usize]>> = Vec::with_capacity(n);
+        let mut expanded: Vec<Box<[u32]>> = Vec::with_capacity(n);
+        // Two scratches: the outer list stays alive while the inner one is produced.
+        let mut outer_scratch: Vec<u32> = Vec::new();
+        let mut inner_scratch: Vec<u32> = Vec::new();
 
         for v in 0..n {
             // Collect the two-hop neighborhood, excluding v itself.
@@ -438,13 +542,16 @@ where
             seen.insert(v);
             let mut candidates: Vec<usize> = Vec::new();
 
-            for u in ground_graph.neighbors(v) {
+            outer_scratch.clear();
+            outer_scratch.extend_from_slice(ground_graph.neighbors(v, &mut inner_scratch));
+            for i in 0..outer_scratch.len() {
+                let u = outer_scratch[i] as usize;
                 if seen.insert(u) {
                     candidates.push(u);
                 }
-                for w in ground_graph.neighbors(u) {
-                    if seen.insert(w) {
-                        candidates.push(w);
+                for &w in ground_graph.neighbors(u, &mut inner_scratch) {
+                    if seen.insert(w as usize) {
+                        candidates.push(w as usize);
                     }
                 }
             }
@@ -468,7 +575,7 @@ where
             expanded.push(
                 scored
                     .into_iter()
-                    .map(|(_, u)| u)
+                    .map(|(_, u)| u as u32)
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             );
@@ -541,6 +648,7 @@ where
 
         let ef = search_params.ef_search.max(k);
         let lambda = search_params.early_termination.lambda();
+        let mapped_predicate = |local_id: usize| predicate(self.get_original_id(local_id));
         let top_heap = acorn_gamma.acorn_gamma_search_filtered(
             &self.dataset,
             ground_entry_node,
@@ -548,7 +656,7 @@ where
             ef,
             k,
             lambda,
-            &predicate,
+            &mapped_predicate,
         );
 
         let mut topk = top_heap.into_sorted_vec();
@@ -556,7 +664,7 @@ where
         topk.drain(..)
             .map(|candidate| vectorium::dataset::ScoredVector {
                 distance: candidate.distance,
-                vector: candidate.vector as VectorId,
+                vector: self.get_original_id(candidate.vector) as VectorId,
             })
             .collect()
     }
@@ -565,7 +673,7 @@ where
 impl<D, G> vectorium::IndexStats for HNSW<D, G>
 where
     D: Dataset + Sync + SpaceUsage,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     #[inline]
     fn n_elements(&self) -> usize {
@@ -585,15 +693,26 @@ where
 {
     pub fn print_space_usage_bytes(&self) {
         let dataset_size = self.dataset.space_usage_bytes();
+        let inv_perm_size = self
+            .original_ids
+            .as_ref()
+            .map_or(0, CompactArray::space_usage_bytes);
         let index_size = self
             .levels
             .iter()
             .map(|g| g.get_space_usage_bytes())
-            .sum::<usize>();
+            .sum::<usize>()
+            + inv_perm_size;
 
         let total_size = dataset_size + index_size;
         println!(
             "[######] Space usage: Dataset: {dataset_size} bytes, Index: {index_size} bytes, Total: {total_size} bytes"
+        );
+
+        let total_edges: usize = self.levels.iter().map(|g| g.n_edges()).sum();
+        println!(
+            "[######] {:.2} bits/edge ({total_edges} edges)",
+            (index_size * 8) as f64 / total_edges as f64
         );
     }
 }
@@ -602,7 +721,7 @@ impl<D, G> Index for HNSW<D, G>
 where
     D: Dataset + Sync + SpaceUsage,
     <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
-    G: GraphTrait + From<GrowableGraph>,
+    G: GraphTrait,
 {
     type Query<'q> = <D::Encoder as VectorEncoder>::QueryVector<'q>;
     type Distance = <D::Encoder as VectorEncoder>::Distance;
@@ -673,7 +792,7 @@ where
         topk.drain(..)
             .map(|candidate| vectorium::dataset::ScoredVector {
                 distance: candidate.distance,
-                vector: candidate.vector as VectorId,
+                vector: self.get_original_id(candidate.vector) as VectorId,
             })
             .collect()
     }
@@ -796,6 +915,7 @@ where
         Self {
             levels: final_levels.into_boxed_slice(),
             level1_to_level0_mapping: level1_to_level0_mapping.into_boxed_slice(),
+            original_ids: None,
             dataset,
             num_neighbors_per_vec: m,
             entry_point: entry_point_local_id,
@@ -813,8 +933,12 @@ where
     /// Total space used by the dataset and all graph levels, in bytes.
     pub fn space_usage_bytes(&self) -> usize {
         let dataset_size = self.dataset.space_usage_bytes();
+        let inv_perm_size = self
+            .original_ids
+            .as_ref()
+            .map_or(0, CompactArray::space_usage_bytes);
         let graph_size: usize = self.levels.iter().map(|g| g.get_space_usage_bytes()).sum();
-        dataset_size + graph_size
+        dataset_size + graph_size + inv_perm_size
     }
 }
 
@@ -1279,15 +1403,11 @@ where
                     let next_size = current_batch_size.min(total_nodes - next_start);
                     let next_batch = &nodes_to_insert_slice[next_start..next_start + next_size];
 
-                    // Reborrow as shared ref so both closures can hold it simultaneously.
-                    // Safety: write_links uses AtomicU32 stores (interior
-                    // mutability); concurrent Phase 1 reads are safe: GrowableGraph: Sync.
-                    let shared = &*growable_levels;
-
-                    let (next_data, ()) = rayon::join(
-                        || run_phase1(next_batch, next_start, shared),
-                        || apply_phase2(cur_data, batch_start, shared),
-                    );
+                    // Sequential on purpose: running the two phases concurrently would let
+                    // Phase 1 read links while Phase 2 still writes them, making the resulting
+                    // graph depend on thread timing.
+                    apply_phase2(cur_data, batch_start, growable_levels);
+                    let next_data = run_phase1(next_batch, next_start, growable_levels);
 
                     pending_data = next_data;
                     pending_start = next_start;
@@ -1459,6 +1579,210 @@ mod convert_dataset_tests {
 }
 
 #[cfg(test)]
+mod permute_compress_tests {
+    use super::*;
+    use crate::graph::egb;
+    use crate::graph::neighbors::{PlainNeighbors, StreamVByteNeighbors};
+    use vectorium::DenseDataset;
+    use vectorium::core::vector::DenseVectorView;
+    use vectorium::distances::SquaredEuclideanDistance;
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+
+    type PlainHnsw = HNSW<
+        DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
+        Graph<PlainNeighbors>,
+    >;
+
+    fn build_test_hnsw(n: usize, dim: usize) -> PlainHnsw {
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
+        // Deterministic pseudo-random values, no external RNG dependency needed.
+        let flat: Vec<f32> = (0..n * dim)
+            .map(|i| (((i * 2654435761u64 as usize) % 1000) as f32) / 1000.0)
+            .collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(40);
+
+        HNSW::build_index(dataset, &config)
+    }
+
+    /// Runs a fixed set of queries and returns their `(distance, external_id)` pairs, so
+    /// different graph representations can be compared directly.
+    fn run_queries<G>(
+        hnsw: &HNSW<DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>, G>,
+        dim: usize,
+        k: usize,
+    ) -> Vec<Vec<(SquaredEuclideanDistance, usize)>>
+    where
+        G: GraphTrait,
+    {
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(50);
+        (0..10)
+            .map(|q| {
+                let query_val: Vec<f32> = (0..dim)
+                    .map(|j| (((q * 97 + j * 13) % 1000) as f32) / 1000.0)
+                    .collect();
+                let query = DenseVectorView::new(&query_val);
+                // Sort by (distance, id): heap order is not stable among exact ties, but the
+                // set of results must match regardless of node ordering or compression.
+                let mut results: Vec<(SquaredEuclideanDistance, usize)> = hnsw
+                    .search(query, k, &search_config)
+                    .into_iter()
+                    .map(|sv| (sv.distance, sv.vector as usize))
+                    .collect();
+                results.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                results
+            })
+            .collect()
+    }
+
+    /// The `permuted` graph type must return exactly the same results as the baseline:
+    /// reordering changes the internal node order, never the answer.
+    #[test]
+    fn permuted_graph_matches_baseline_search_results() {
+        let n = 200;
+        let dim = 8;
+        let plain = build_test_hnsw(n, dim);
+        let baseline = run_queries(&plain, dim, 5);
+
+        let permuted: HNSW<
+            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
+            Graph<PlainNeighbors>,
+        > = plain.permute_and_encode::<PlainNeighbors>();
+
+        let permuted_results = run_queries(&permuted, dim, 5);
+        assert_eq!(baseline, permuted_results);
+    }
+
+    /// The original-ID mapping must stay bit-packed: one `usize` per node silently
+    /// inflates the index and the reported bits/edge (~1.4 bits/edge on SIFT1M).
+    #[test]
+    fn original_ids_are_bit_packed() {
+        let n = 4000;
+        let dim = 8;
+        let plain = build_test_hnsw(n, dim);
+
+        let permuted: HNSW<
+            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
+            Graph<PlainNeighbors>,
+        > = plain.permute_and_encode::<PlainNeighbors>();
+
+        let inv = permuted
+            .original_ids
+            .as_ref()
+            .expect("a permuted index must carry an inverse permutation");
+
+        // Read through the packed representation, the mapping is still a permutation.
+        let mut seen: Vec<usize> = (0..n)
+            .map(|local| permuted.get_original_id(local))
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..n).collect::<Vec<_>>());
+
+        // 4000 IDs need 12 bits each, so the packed form must be far below 8 bytes/entry.
+        let unpacked = n * std::mem::size_of::<usize>();
+        assert!(
+            inv.space_usage_bytes() < unpacked / 3,
+            "inverse permutation not packed: {} bytes vs {} unpacked",
+            inv.space_usage_bytes(),
+            unpacked
+        );
+    }
+
+    /// Same as above for the `streamvbyte` graph type: compression must be lossless
+    /// with respect to the search output.
+    #[test]
+    fn streamvbyte_graph_matches_baseline_search_results() {
+        let n = 200;
+        let dim = 8;
+        let plain = build_test_hnsw(n, dim);
+        let baseline = run_queries(&plain, dim, 5);
+
+        let compressed: HNSW<
+            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
+            Graph<StreamVByteNeighbors>,
+        > = plain.permute_and_encode::<StreamVByteNeighbors>();
+
+        let compressed_results = run_queries(&compressed, dim, 5);
+        assert_eq!(baseline, compressed_results);
+
+        // Sanity: the backend is engaged and the permutation did reorder some nodes.
+        // Recomputed here because `permute_and_encode` runs EGB internally and does not return it.
+        assert!(compressed.space_usage_bytes() > 0);
+        let perm = egb::compute_permutation(plain.get_ground_level());
+        let identity_count = perm.iter().enumerate().filter(|&(i, &p)| i == p).count();
+        assert!(
+            identity_count < n,
+            "EGB permutation should reorder at least some nodes"
+        );
+    }
+
+    /// A permuted index must carry the *same* encoded dataset as the unpermuted one, only in a
+    /// different row order. Encoders that are fitted to the data must therefore be trained
+    /// before the permutation, never after — which is why `build_permuted_and_save` in
+    /// `src/bin/hnsw_build.rs` runs `convert` before `permute_and_encode`.
+    ///
+    /// This test cannot fail on its own: vectorium's DotVByte conversion trains its component
+    /// mapping on a prefix sample only above 1M rows (below that, `len / SAMPLE_RATE < 50_000`
+    /// falls back to the whole dataset), far more than a unit test can afford to build. It locks
+    /// the contract for the future; the regression it guards was found by comparing the reported
+    /// dataset sizes of the `standard` and `permuted` indexes on the real 8.8M-document
+    /// collection, where they differed by 47.8 MB.
+    #[test]
+    fn permuting_preserves_the_encoded_dotvbyte_dataset() {
+        use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
+        use vectorium::{
+            DatasetGrowable, DotProduct, PackedSparseDataset, PlainSparseDataset,
+            PlainSparseDatasetGrowable, PlainSparseQuantizer, SparseVectorView,
+        };
+
+        let n = 200;
+        let dim = 64;
+
+        let quantizer = PlainSparseQuantizer::<u16, f32, DotProduct>::new(dim, dim);
+        let mut growable = PlainSparseDatasetGrowable::<u16, f32, DotProduct>::new(quantizer);
+        for i in 0..n {
+            // Deterministic and strictly increasing: the j*5 offsets stay distinct modulo 64.
+            let mut components: Vec<u16> = (0..8).map(|j| ((i * 7 + j * 5) % dim) as u16).collect();
+            components.sort_unstable();
+            let values: Vec<f32> = (0..components.len())
+                .map(|j| (((i + j) % 97) as f32) / 97.0 + 0.01)
+                .collect();
+            growable.push(SparseVectorView::new(&components, &values));
+        }
+        let dataset: PlainSparseDataset<u16, f32, DotProduct> = growable.into();
+
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(40);
+        let plain: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph<PlainNeighbors>> =
+            HNSW::build_index(dataset, &config);
+
+        // Same order as `build_permuted_and_save`: encode first, permute second.
+        let standard: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph<PlainNeighbors>> =
+            plain.convert_dataset_into();
+        let permuted = standard.permute_and_encode::<PlainNeighbors>();
+
+        assert_eq!(
+            permuted.dataset.space_usage_bytes(),
+            standard.dataset.space_usage_bytes(),
+            "permuting rows must not change the encoded dataset size"
+        );
+
+        for new_id in 0..n {
+            let old_id = permuted.get_original_id(new_id);
+            assert_eq!(
+                permuted.dataset.get(new_id as VectorId).data(),
+                standard.dataset.get(old_id as VectorId).data(),
+                "row {new_id} (originally {old_id}) was re-encoded instead of copied"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod acorn_search_tests {
     use super::*;
     use crate::graph::Graph;
@@ -1625,8 +1949,10 @@ mod acorn_gamma_search_tests {
 
         let ground = &hnsw.levels[hnsw.levels.len() - 1];
         for v in 0..n {
-            let orig_deg = ground.neighbors(v).count();
-            let expanded_deg = acorn_gamma.neighbors(v).count();
+            let mut scratch = Vec::new();
+            let orig_deg = ground.neighbors(v, &mut scratch).len();
+            let mut gamma_scratch = Vec::new();
+            let expanded_deg = acorn_gamma.neighbors(v, &mut gamma_scratch).len();
             // Two-hop union is at least as large as one-hop.
             assert!(
                 expanded_deg >= orig_deg,

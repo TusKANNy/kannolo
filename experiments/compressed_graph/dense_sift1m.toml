@@ -1,0 +1,82 @@
+name =          "dense_sift1m_cikm2026"
+title =         "Search dense HNSW on SIFT1M with graph compression"
+description =   "CIKM 2026 dense HNSW experiment on SIFT1M: uncompressed vs EGB + StreamVByte"
+dataset =       "SIFT1M"
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+dataset-type = "dense"    # Dataset type: "dense" or "sparse"
+value-type = "f16"        # Value type: "f32" for full-value-type, "f16" for half-value-type (Note: PQ always uses f32)
+encoder       = "plain"   # Encoder: "plain" for no compression, "pq" for Product Quantization (dense only)
+graph-type = "standard"   # Default graph type; each [query.*] subsection may override it
+
+[settings]
+k =             10
+num-runs       =        1       # Number of runs. PLEASE think carefully how increasing
+                        # this may influence your query time
+NUMA =          "numactl --physcpubind='0' --localalloc"    # Is the machine NUMA and need to prepend "numactl ..." to query command? Otherwise comment this!
+build =         true   # Need to build the index or the index is already built?
+metric =        "" # ir_measures metric (e.g. RR)
+
+[folder]
+data =          "/data2/knn_datasets/dense_datasets/sift_1M" # data base path
+index =         "/data2/fbenocci/knn_indexes/sift_1M" # index input path
+qrels_path =    ""
+experiment =    "."     # stdout and stderr of running the experiment is saved here, in a specific subfolder for the current execution
+
+[filename]
+dataset =       "dataset.npy" # dataset input file name
+queries =       "queries.npy" # queries input file name
+groundtruth =   "groundtruth.npy" # ground truth input file
+doc_ids =       ""
+query_ids =     ""
+index =         "cikm_2026_sift_1M" # index file name
+
+[indexing_parameters]
+m =             32
+ef-construction = 200
+metric =        "euclidean" # distance/similarity metric of the index, either "euclidean" or "dotproduct"
+
+# Graph compression is decided at BUILD time via --graph-type and must match at search time,
+# so each graph type needs its own index. The runner builds one index per distinct graph-type
+# found below and points each subsection at the matching one.
+#
+#   standard    -> uncompressed, original node order (the old "compression = none")
+#   streamvbyte -> EGB-reordered nodes + StreamVByte-compressed neighbour lists
+#                  (the old "compression = stream-v-byte" with "permute = true")
+[query]
+    [query.recall_90_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.06
+    graph-type = "standard"
+
+    [query.recall_90_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 11
+    lambda = 0.06
+    graph-type = "streamvbyte"
+
+    [query.recall_94_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.1
+    graph-type = "standard"
+
+    [query.recall_94_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.1
+    graph-type = "streamvbyte"
+
+    [query.recall_98_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 15
+    lambda = 0.12
+    graph-type = "standard"
+
+    [query.recall_98_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 15
+    lambda = 0.12
+    graph-type = "streamvbyte"

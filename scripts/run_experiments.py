@@ -86,7 +86,14 @@ def compile_rust_code(configs, experiment_dir):
     print()
     print(colored("Compiling the Rust code", "green"))
     
-    compile_command = configs.get("compile-command", "RUSTFLAGS='-C target-cpu=native' cargo build --release")
+    # The binaries are behind the `cli` feature; hnsw_rerank_search also needs `multivec`.
+    features = "cli"
+    if "rerank" in configs.get("query-command", ""):
+        features = "cli,multivec"
+    default_compile_command = (
+        f"RUSTFLAGS='-C target-cpu=native' cargo build --release --features {features}"
+    )
+    compile_command = configs.get("compile-command", default_compile_command)
 
     compilation_output_file = os.path.join(experiment_dir, "compiler.output")
 
@@ -112,19 +119,47 @@ def compile_rust_code(configs, experiment_dir):
         sys.exit(1)
 
 
-def get_index_filename(base_filename, configs):
+DEFAULT_GRAPH_TYPE = "standard"
+
+
+def get_graph_type(configs, query_config=None):
+    """Resolve the graph type of a query subsection, falling back to the top-level value."""
+    default = configs.get("graph-type", DEFAULT_GRAPH_TYPE)
+    if query_config is None:
+        return default
+    return query_config.get("graph-type", default)
+
+
+def collect_graph_types(configs):
+    """Every graph type the experiment needs an index for, in first-seen order."""
+    if "query" not in configs:
+        return [get_graph_type(configs)]
+
+    graph_types = []
+    for query_config in configs["query"].values():
+        graph_type = get_graph_type(configs, query_config)
+        if graph_type not in graph_types:
+            graph_types.append(graph_type)
+    return graph_types or [get_graph_type(configs)]
+
+
+def get_index_filename(base_filename, configs, graph_type=None):
     """Generate the index filename based on the provided parameters."""
     name = []
-    
+
     name.append(base_filename)
 
     # Check if pq_parameters and pq-subspaces exist
     if "pq_parameters" in configs and "pq-subspaces" in configs["pq_parameters"]:
         name.append(f"pq-subspaces_{configs['pq_parameters']['pq-subspaces']}")
-    
+
     # Append indexing parameters
     name += sorted(f"{k}_{v}" for k, v in configs["indexing_parameters"].items())
-    
+
+    # Only non-default graph types go in the name, so "standard" indexes keep their filename.
+    if graph_type is not None and graph_type != DEFAULT_GRAPH_TYPE:
+        name.append(f"graph-type_{graph_type}")
+
     return "_".join(str(l) for l in name)
 
 
@@ -170,15 +205,22 @@ def _build_ivf_params(configs, input_file, output_file):
     return params
 
 
-def build_index(configs, experiment_dir):
+# hnsw_build prints two different build-time lines, so match on their shared shape.
+BUILD_TIME_PATTERN = re.compile(r"^Time to build\b.*?:\s*(\d+)\s*s \(before serializing\)\s*$")
+
+
+def build_index(configs, experiment_dir, graph_type=None):
     """Build the index using the provided configuration."""
     if configs.get("dataset-type") == "multivector":
         raise ValueError("multivector support was removed; update the experiment config to use dense or sparse vectors.")
     input_file =  os.path.join(configs["folder"]["data"], configs["filename"]["dataset"])
     index_folder = configs["folder"]["index"]
 
+    if graph_type is None:
+        graph_type = get_graph_type(configs)
+
     os.makedirs(index_folder, exist_ok=True)
-    output_file = os.path.join(index_folder, get_index_filename(configs["filename"]["index"], configs))
+    output_file = os.path.join(index_folder, get_index_filename(configs["filename"]["index"], configs, graph_type))
 
     print()
     print(colored(f"Dataset filename:", "blue"), input_file)
@@ -228,8 +270,7 @@ def build_index(configs, experiment_dir):
             command_and_params.append(f"--component-type {configs['component-type']}")
         if "encoder" in configs:
             command_and_params.append(f"--encoder {configs['encoder']}")
-        if "graph-type" in configs:
-            command_and_params.append(f"--graph-type {configs['graph-type']}")
+        command_and_params.append(f"--graph-type {graph_type}")
         # If there is a section [pq_parameters] in the configuration file, add the parameters to the command
         if "pq_parameters" in configs:
             for k, v in configs["pq_parameters"].items():
@@ -239,24 +280,25 @@ def build_index(configs, experiment_dir):
 
     # Print the command that will be executed
     print()
-    print(colored(f"Indexing", "green"))
+    print(colored(f"Indexing (graph-type: {graph_type})", "green"))
     print(colored(f"Indexing command:", "blue"), command)
 
-    building_output_file = os.path.join(experiment_dir, "building.output")
+    building_output_file = os.path.join(experiment_dir, f"building_{graph_type}.output")
 
     # Build the index and display output in real-time
     print(colored("Building index...", "yellow"))
     building_time = 0
-    
+
     with open(building_output_file, "w") as build_output:
         build_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         for line in iter(build_process.stdout.readline, b''):
             decoded_line = line.decode()
             print(decoded_line, end='')  # Print each line as it is produced
             build_output.write(decoded_line)  # Write each line to the output file
-            if decoded_line.startswith("Time to build:") and decoded_line.strip().endswith("s (before serializing)"):
-                building_time = int(decoded_line.split()[3])
-                
+            match = BUILD_TIME_PATTERN.match(decoded_line.strip())
+            if match:
+                building_time = int(match.group(1))
+
         build_process.stdout.close()
         build_process.wait()
 
@@ -383,8 +425,13 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
     if not query_command:
         raise ValueError("Query command must be specified!!!")
 
-    index_file = os.path.join(configs["folder"]["index"], get_index_filename(configs["filename"]["index"], configs))
-    print("Searching index at:", index_file)
+    # The graph type selects which index this subsection searches.
+    graph_type = get_graph_type(configs, query_config)
+    index_file = os.path.join(
+        configs["folder"]["index"],
+        get_index_filename(configs["filename"]["index"], configs, graph_type),
+    )
+    print(f"Searching index at: {index_file} (graph-type: {graph_type})")
 
     query_file = os.path.join(configs["folder"]["data"], configs["filename"]["queries"])
     output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
@@ -454,8 +501,9 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
             command_and_params.append(f"--component-type {configs['component-type']}")
         if "encoder" in configs:
             command_and_params.append(f"--encoder {configs['encoder']}")
-        if "graph-type" in configs:
-            command_and_params.append(f"--graph-type {configs['graph-type']}")
+        command_and_params.append(f"--graph-type {graph_type}")
+        if "num-runs" in configs["settings"]:
+            command_and_params.append(f"--num-runs {configs['settings']['num-runs']}")
 
         # Add early termination parameters if specified
         early_termination = query_config.get("early-termination", "none")
@@ -517,8 +565,12 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
     output_file = os.path.join(experiment_dir, f"results_{subsection_name}")
 
     pattern = r"Total: (\d+) bytes"  # Pattern to match the total memory usage
+    bits_per_edge_pattern = r"\[######\] ([\d.]+) bits/edge"
 
     query_time = 0
+    # Keep the last value seen: resetting inside the loop would clear it on the next line.
+    memory_usage = 0
+    bits_per_edge = 0.0
     # Run the query and display output in real-time
     if subsection_index is not None and total_subsections is not None:
         print(f"Running query for subsection: {subsection_name} out of {total_subsections}...")
@@ -536,13 +588,16 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
             match = re.search(pattern, decoded_line)
             if match:
                 memory_usage = int(match.group(1))
-            else:
-                memory_usage = 0
+
+            match = re.search(bits_per_edge_pattern, decoded_line)
+            if match:
+                bits_per_edge = float(match.group(1))
+
             print(decoded_line, end='')  # Print each line as it is produced
             log.write(decoded_line)  # Write each line to the output file
         query_process.stdout.close()
         query_process.wait()
-    
+
     if query_process.returncode != 0:
         print(f"Query execution for subsection '{subsection_name}' failed.")
         sys.exit(1)
@@ -551,7 +606,17 @@ def query_execution(configs, query_config, experiment_dir, subsection_name, subs
 
     gt_file = os.path.join(configs['folder']['data'], configs['filename']['groundtruth'])
     metric = configs['settings']['metric']
-    return query_time, compute_accuracy(output_file, gt_file), compute_metric(configs, output_file, gt_file, metric), memory_usage
+    accuracy = compute_accuracy(output_file, gt_file)
+    metric_value = compute_metric(configs, output_file, gt_file, metric)
+
+    # Accuracy is computed after the search process exits, so append it to the log by hand.
+    print(f"Accuracy: {accuracy}")
+    with open(log_output_file, "a") as log:
+        log.write(f"Accuracy: {accuracy}\n")
+        if metric_value is not None:
+            log.write(f"Metric ({metric}): {metric_value}\n")
+
+    return query_time, accuracy, metric_value, memory_usage, bits_per_edge, graph_type
 
 
 def get_machine_info(configs, experiment_folder):
@@ -676,29 +741,35 @@ def run_experiment(config_data):
     
     compile_rust_code(config_data, experiment_folder)
 
-    building_time = 0
+    # Graph type is a build-time property: an experiment mixing them needs one index each.
+    graph_types = collect_graph_types(config_data)
+    building_times = {}
     if config_data['settings']['build']:
-        building_time = build_index(config_data, experiment_folder)
+        if len(graph_types) > 1:
+            print(f"Building {len(graph_types)} indexes, one per graph type: {', '.join(graph_types)}")
+        for graph_type in graph_types:
+            building_times[graph_type] = build_index(config_data, experiment_folder, graph_type)
     else:
         print("Index is already built!")
 
     metric = config_data['settings']['metric']
     print(f"Evaluation runs with metric {metric}")
-    
+
     # Execute queries for each subsection under [query]
     with open(os.path.join(experiment_folder, "report.tsv"), 'w') as report_file:
-        if metric != "":
-            # Concatenate \t{metric} 
-            metric = f"\t{metric}"
-        report_file.write(f"Subsection\tQuery Time (microsecs)\tAccuracy{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
+        # Column order matches the reference CIKM 2026 reports.
+        metric_header = f"\t{metric}" if metric != "" else ""
+        report_file.write(f"Subsection\tQuery Time (microsecs)\tBits/Edge\tAccuracy{metric_header}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
         if 'query' in config_data:
             total_subsections = len(config_data['query'])
             for subsection_index, (subsection, query_config) in enumerate(config_data['query'].items(), start=1):
-                query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection, subsection_index, total_subsections)
-                if metric is not None:
-                    report_file.write(f"{subsection}\t{query_time}\t{recall}\t{metric}\t{memory_usage}\t{building_time}\n")
+                query_time, recall, metric_value, memory_usage, bits_per_edge, graph_type = query_execution(config_data, query_config, experiment_folder, subsection, subsection_index, total_subsections)
+                # Report the build time of the index this subsection actually searched.
+                building_time = building_times.get(graph_type, 0)
+                if metric_value is not None:
+                    report_file.write(f"{subsection}\t{query_time}\t{bits_per_edge}\t{recall}\t{metric_value}\t{memory_usage}\t{building_time}\n")
                 else:
-                    report_file.write(f"{subsection}\t{query_time}\t{recall}\t{memory_usage}\t{building_time}\n")
+                    report_file.write(f"{subsection}\t{query_time}\t{bits_per_edge}\t{recall}\t{memory_usage}\t{building_time}\n")
 
 def main(experiment_config_filename):
     config_data = parse_toml(experiment_config_filename)

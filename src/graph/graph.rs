@@ -9,7 +9,9 @@ use vectorium::distances::Distance;
 use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
+use crate::graph::neighbors::{NeighborData, Neighbors, PlainNeighbors};
 use crate::hnsw_utils::from_max_heap_to_min_heap;
+use crate::utils::{CompactArray, invert_mapping, validate_permutation};
 use crate::visited_set::create_visited_set;
 
 /// A trait that defines the common interface for different graph implementations.
@@ -17,8 +19,13 @@ use crate::visited_set::create_visited_set;
 /// This allows graph indexes to be generic over the specific graph storage strategy.
 /// Graph construction is handled through concrete type constructors and `Default`.
 pub trait GraphTrait {
-    /// Returns an iterator over the local IDs of the neighbors of node `u`.
-    fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a;
+    /// Returns the local IDs of the neighbors of node `u`.
+    ///
+    /// `scratch` is a work buffer: graphs that can hand out their storage directly ignore it,
+    /// the others fill it. **Callers must read only the returned slice**, never `scratch`, whose
+    /// length and contents afterwards are unspecified. Returning a slice rather than an iterator
+    /// lets callers walk a node's neighbors more than once without paying to produce them twice.
+    fn neighbors<'a>(&'a self, u: usize, scratch: &'a mut Vec<u32>) -> &'a [u32];
 
     /// Returns the number of nodes in the graph.
     #[must_use]
@@ -73,10 +80,13 @@ pub trait GraphTrait {
         let mut nearest_distance = entry_point.distance;
         let mut updated = true;
 
+        let mut scratch: Vec<u32> = Vec::new();
+
         while updated {
             updated = false;
 
-            for neighbor in self.neighbors(nearest_id) {
+            for &neighbor in self.neighbors(nearest_id, &mut scratch) {
+                let neighbor = neighbor as usize;
                 let external_id = self.get_external_id(neighbor);
                 let distance_neighbor =
                     query_evaluator.compute_distance(dataset.get(external_id as VectorId));
@@ -212,6 +222,11 @@ pub trait GraphTrait {
 
         let mut visited_table = create_visited_set(ef, lambda, self.n_nodes());
 
+        // Scratch for `neighbors`, reused for every expanded node. The slice it backs is walked
+        // twice, to prefetch and to score: producing the list twice would make the compressed
+        // backend decode the StreamVByte block again, interleaved with the dataset accesses.
+        let mut neighbors_buf: Vec<u32> = Vec::new();
+
         top_candidates.push(entry_node);
         candidates.push(Reverse(entry_node));
 
@@ -234,9 +249,11 @@ pub trait GraphTrait {
             // dataset.range_from_id(id) needs to do a random access to the offsets vector to get the
             // start and end of the vector. It would be better to store the offsets of the neighbors in
             // the graph structure to allow for more efficient prefetching.
-            for neighbor_local_id in self.neighbors(id_candidate) {
-                let range =
-                    dataset.range_from_id(self.get_external_id(neighbor_local_id) as VectorId);
+            let neighbors = self.neighbors(id_candidate, &mut neighbors_buf);
+
+            for &neighbor_local_id in neighbors {
+                let range = dataset
+                    .range_from_id(self.get_external_id(neighbor_local_id as usize) as VectorId);
                 dataset.prefetch_with_range(range);
             }
 
@@ -269,7 +286,8 @@ pub trait GraphTrait {
                 }
             };
 
-            for neighbor_local_id in self.neighbors(id_candidate) {
+            for &neighbor_local_id in neighbors {
+                let neighbor_local_id = neighbor_local_id as usize;
                 if visited_table.insert(neighbor_local_id) {
                     buf_local[count] = neighbor_local_id;
                     buf_ext[count] = self.get_external_id(neighbor_local_id) as VectorId;
@@ -355,6 +373,8 @@ pub trait GraphTrait {
         // Reusable buffer for non-predicate direct neighbors used in the two-hop phase;
         // allocated once and cleared per iteration to avoid repeated heap allocations.
         let mut non_pred_direct: Vec<usize> = Vec::new();
+        // Scratch for `neighbors`, shared by both phases.
+        let mut scratch: Vec<u32> = Vec::new();
 
         while let Some(Reverse(node)) = candidates.pop() {
             // Standard HNSW termination: stop when the best remaining candidate
@@ -371,7 +391,8 @@ pub trait GraphTrait {
             // --- Phase 1: direct neighbors ---
             // Predicate-satisfying neighbors are admitted to the candidate/result heaps.
             // Non-predicate neighbors are collected for the two-hop phase below.
-            for neighbor_local in self.neighbors(node.vector) {
+            for &neighbor_local in self.neighbors(node.vector, &mut scratch) {
+                let neighbor_local = neighbor_local as usize;
                 if !visited.insert(neighbor_local) {
                     continue;
                 }
@@ -405,8 +426,11 @@ pub trait GraphTrait {
             // --- Phase 2: two-hop expansion (ACORN-1 core) ---
             // For each non-predicate direct neighbor, inspect its neighbors.
             // This compensates for sparse connectivity in the predicate sub-graph.
-            for &mid_local in &non_pred_direct {
-                for neighbor_local in self.neighbors(mid_local) {
+            // The phase-1 slice is dead by now, so the same scratch can be reused.
+            for i in 0..non_pred_direct.len() {
+                let mid_local = non_pred_direct[i];
+                for &neighbor_local in self.neighbors(mid_local, &mut scratch) {
+                    let neighbor_local = neighbor_local as usize;
                     if !visited.insert(neighbor_local) {
                         continue;
                     }
@@ -484,6 +508,8 @@ pub trait GraphTrait {
             top_candidates.push(entry_node);
         }
 
+        let mut scratch: Vec<u32> = Vec::new();
+
         while let Some(Reverse(node)) = candidates.pop() {
             if top_candidates.len() >= ef.max(k) {
                 let worst_top = top_candidates.peek().unwrap().distance;
@@ -492,7 +518,8 @@ pub trait GraphTrait {
                 }
             }
 
-            for neighbor_local in self.neighbors(node.vector) {
+            for &neighbor_local in self.neighbors(node.vector, &mut scratch) {
+                let neighbor_local = neighbor_local as usize;
                 if !visited.insert(neighbor_local) {
                     continue;
                 }
@@ -886,32 +913,26 @@ mod acorn_gamma_tests {
     }
 }
 
-/// A representation of a graph where the adjacency lists of the nodes are stored spanning a variable length
-/// portion of a vector.
-/// A vector of offsets is used to indicate the start of each node's neighbors in the neighbors node.
-/// Node ids are represented as `u32` but they are returned as usize ones.
+/// A representation of a graph whose adjacency lists are stored through a pluggable
+/// [`Neighbors`] backend (e.g. plain `u32`s, or delta+StreamVByte compressed).
+/// Node ids are represented as `u32` internally but returned as `usize`.
 ///
 /// # Fields
-/// - `neighbors`: A list of all neighbors for nodes in the graph. The neighbors for each node
-///   are stored in a contiguous block.
-/// - `offsets`: An index mapping each node ID to its starting position in the `neighbors` list.
-///   The `offsets[node_id]` provides the starting index in `neighbors` where the neighbors of
-///   the vector with `node_id` begin.
-///
+/// - `neighbors`: The backend holding every node's adjacency list.
+/// - `ids_mapping`: Optional local-id -> external-id mapping, used when the graph's node
+///   order has been permuted relative to the dataset it was built from.
 #[derive(Serialize, Deserialize)]
-pub struct Graph {
-    neighbors: Box<[u32]>, // Compact array of neighbor node IDs
-    offsets: Box<[usize]>,
-    ids_mapping: Option<Box<[usize]>>, // This is used to map the internal IDs to external IDs
+pub struct Graph<N: Neighbors> {
+    neighbors: N,
+    ids_mapping: Option<CompactArray>,
     max_degree: usize,
     n_nodes: usize,
 }
 
-impl Default for Graph {
+impl<N: Neighbors + Default> Default for Graph<N> {
     fn default() -> Self {
         Graph {
-            neighbors: Box::new([]),
-            offsets: Box::new([]),
+            neighbors: N::default(),
             ids_mapping: None,
             max_degree: 0,
             n_nodes: 0,
@@ -919,12 +940,10 @@ impl Default for Graph {
     }
 }
 
-impl GraphTrait for Graph {
+impl<N: Neighbors> GraphTrait for Graph<N> {
     #[inline]
-    fn neighbors<'a>(&'a self, id: usize) -> impl Iterator<Item = usize> + 'a {
-        let start = self.offsets[id];
-        let end = self.offsets[id + 1];
-        self.neighbors[start..end].iter().map(|&u| u as usize)
+    fn neighbors<'a>(&'a self, id: usize, scratch: &'a mut Vec<u32>) -> &'a [u32] {
+        self.neighbors.get(id, scratch)
     }
 
     #[inline]
@@ -948,26 +967,27 @@ impl GraphTrait for Graph {
             if id >= mapping.len() {
                 panic!("ID out of bounds: {}", id);
             }
-            mapping[id]
+            mapping.get(id)
         } else {
             id
         }
     }
 
     fn get_space_usage_bytes(&self) -> usize {
-        let neighbors_size = self.neighbors.len() * std::mem::size_of::<u32>();
-        let offsets_size = self.offsets.len() * std::mem::size_of::<usize>();
+        let neighbors_size = self.neighbors.space_usage_bytes();
         let ids_mapping_size = self
             .ids_mapping
             .as_ref()
-            .map_or(0, |mapping| mapping.len() * std::mem::size_of::<usize>());
+            .map_or(0, CompactArray::space_usage_bytes);
 
-        neighbors_size + offsets_size + ids_mapping_size
+        neighbors_size + ids_mapping_size
     }
 }
 
-impl From<GrowableGraph> for Graph {
-    /// Converts a `GrowableGraph` into a compact `Graph` by removing padding.
+impl From<GrowableGraph> for Graph<PlainNeighbors> {
+    /// Converts a `GrowableGraph` into a compact plain `Graph` by removing padding.
+    /// Neighbor order within each node is left untouched, so the `standard` build path keeps
+    /// producing exactly the same graph as before the backend became pluggable.
     fn from(growable_graph: GrowableGraph) -> Self {
         let n_nodes = growable_graph.n_nodes();
         let max_degree = growable_graph.max_degree();
@@ -988,17 +1008,115 @@ impl From<GrowableGraph> for Graph {
             offsets.push(neighbors.len());
         }
 
-        let final_mapping = growable_graph
-            .ids_mapping
-            .map(|mapping| mapping.into_boxed_slice());
+        let final_mapping = growable_graph.ids_mapping.map(CompactArray::from);
 
         Graph {
-            neighbors: neighbors.into_boxed_slice(),
-            offsets: offsets.into_boxed_slice(),
+            neighbors: PlainNeighbors::from(NeighborData {
+                data: neighbors.into_boxed_slice(),
+                offsets: offsets.into_boxed_slice(),
+            }),
             ids_mapping: final_mapping,
             max_degree,
             n_nodes,
         }
+    }
+}
+
+impl<Nsrc> Graph<Nsrc>
+where
+    Nsrc: Neighbors,
+{
+    /// Applies `mapping` (`old_external_id -> new_external_id`, e.g. from
+    /// [`crate::graph::egb::permute_graph_bisection_from_graph`]) to one level, rebuilding its
+    /// adjacency lists into a fresh `Ndst` backend.
+    ///
+    /// How the relabelling lands depends on how the level stores its external IDs:
+    ///
+    /// - **With an `ids_mapping`** (the upper levels): only that array is rewritten, so every node
+    ///   keeps the local slot it already occupies. Local IDs are independent of the dataset, so
+    ///   leaving them alone keeps the neighbor lists — which hold local IDs — valid untouched, and
+    ///   preserves the nested-prefix relationship between levels for free.
+    /// - **Without one** (the ground level): local IDs *are* external IDs, so the same relabelling
+    ///   can only be expressed by reordering the nodes and remapping every neighbor value. Only
+    ///   then is the inverse permutation (`new_id -> old_id`) meaningful, and only then is it
+    ///   returned — the caller stores it to translate search results back to original dataset IDs.
+    pub fn permute_level<Ndst>(&self, mapping: &[usize]) -> (Graph<Ndst>, Option<Vec<usize>>)
+    where
+        Ndst: Neighbors + From<NeighborData>,
+    {
+        validate_permutation(mapping).unwrap_or_else(|e| panic!("{e}"));
+
+        let n = self.n_nodes;
+
+        // `inv` being `Some` is what marks this level as the reordered one, for the loop below and
+        // for the caller alike.
+        let inv = if self.ids_mapping.is_none() {
+            assert_eq!(
+                mapping.len(),
+                n,
+                "invalid graph permutation length: expected {}, got {}",
+                n,
+                mapping.len()
+            );
+            Some(invert_mapping(mapping))
+        } else {
+            None
+        };
+
+        let mut all_neighbors = Vec::with_capacity(self.n_edges());
+        let mut new_offsets = Vec::with_capacity(n + 1);
+        let mut new_external_ids = Vec::with_capacity(if inv.is_some() { 0 } else { n });
+        let mut neigh = Vec::new();
+        let mut scratch: Vec<u32> = Vec::new();
+        new_offsets.push(0);
+
+        for new_local in 0..n {
+            neigh.clear();
+
+            match &inv {
+                // Reordered: slot `new_local` takes over the node that used to sit at `inv[..]`,
+                // and its neighbor values are local IDs that the reorder moves too, so each one
+                // goes through `mapping`.
+                Some(inv) => neigh.extend(
+                    self.neighbors(inv[new_local], &mut scratch)
+                        .iter()
+                        .map(|&v| mapping[v as usize] as u32),
+                ),
+                // Left in place: the neighbor values stay valid as they are, and only the node's
+                // external ID is relabelled so it points at the co-permuted dataset.
+                None => {
+                    neigh.extend_from_slice(self.neighbors(new_local, &mut scratch));
+
+                    let old_global = self.get_external_id(new_local);
+                    assert!(
+                        old_global < mapping.len(),
+                        "invalid upper-level external id {} for global permutation length {}",
+                        old_global,
+                        mapping.len()
+                    );
+                    new_external_ids.push(mapping[old_global]);
+                }
+            }
+
+            // Ascending order is a prerequisite of delta coding, not a preference: the decoder
+            // reconstructs by prefix sum. The build emits each list in arbitrary order.
+            neigh.sort_unstable();
+            neigh.dedup();
+
+            all_neighbors.extend_from_slice(&neigh);
+            new_offsets.push(all_neighbors.len());
+        }
+
+        let graph = Graph {
+            neighbors: Ndst::from(NeighborData {
+                data: all_neighbors.into_boxed_slice(),
+                offsets: new_offsets.into_boxed_slice(),
+            }),
+            ids_mapping: inv.is_none().then(|| CompactArray::from(new_external_ids)),
+            max_degree: self.max_degree,
+            n_nodes: n,
+        };
+        (graph, inv)
     }
 }
 
@@ -1039,13 +1157,17 @@ impl Default for GraphFixedDegree {
 
 impl GraphTrait for GraphFixedDegree {
     #[inline]
-    fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
+    fn neighbors<'a>(&'a self, u: usize, scratch: &'a mut Vec<u32>) -> &'a [u32] {
         let start = u * self.max_degree;
         let end = start + self.max_degree;
-        self.neighbors[start..end]
-            .iter()
-            .take_while(|&opt| opt.is_some())
-            .map(|opt| opt.unwrap() as usize)
+        scratch.clear();
+        scratch.extend(
+            self.neighbors[start..end]
+                .iter()
+                .take_while(|&opt| opt.is_some())
+                .map(|opt| opt.unwrap()),
+        );
+        scratch
     }
 
     #[inline]
@@ -1124,14 +1246,17 @@ pub struct GrowableGraph {
 
 impl GraphTrait for GrowableGraph {
     #[inline]
-    fn neighbors<'a>(&'a self, u: usize) -> impl Iterator<Item = usize> + 'a {
+    fn neighbors<'a>(&'a self, u: usize, scratch: &'a mut Vec<u32>) -> &'a [u32] {
         let start = u * self.max_degree;
         let end = start + self.max_degree;
-        self.neighbors[start..end]
-            .iter()
-            .map(|a| a.load(Ordering::Relaxed))
-            .take_while(|&val| val != u32::MAX)
-            .map(|val| val as usize)
+        scratch.clear();
+        scratch.extend(
+            self.neighbors[start..end]
+                .iter()
+                .map(|a| a.load(Ordering::Relaxed))
+                .take_while(|&val| val != u32::MAX),
+        );
+        scratch
     }
 
     #[inline]
@@ -1172,30 +1297,28 @@ impl GraphTrait for GrowableGraph {
     }
 }
 
-impl From<Graph> for GrowableGraph {
-    fn from(graph: Graph) -> Self {
+impl<N: Neighbors> From<Graph<N>> for GrowableGraph {
+    fn from(graph: Graph<N>) -> Self {
         let max_degree = graph.max_degree;
         let n_nodes = graph.n_nodes;
+        let n_edges = graph.neighbors.len();
         let mut neighbors: Vec<AtomicU32> = Vec::with_capacity(n_nodes * max_degree);
 
+        let mut scratch: Vec<u32> = Vec::new();
         for v in 0..n_nodes {
-            let start = graph.offsets[v];
-            let end = graph.offsets[v + 1];
-            let slice = &graph.neighbors[start..end];
-            for &nbr in slice {
-                neighbors.push(AtomicU32::new(nbr));
-            }
-            let pad = max_degree.saturating_sub(slice.len());
+            let list = graph.neighbors.get(v, &mut scratch);
+            neighbors.extend(list.iter().map(|&nbr| AtomicU32::new(nbr)));
+            let pad = max_degree.saturating_sub(list.len());
             neighbors.extend((0..pad).map(|_| AtomicU32::new(u32::MAX)));
         }
 
-        let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
+        let ids_mapping = graph.ids_mapping.map(|mapping| mapping.to_vec());
 
         GrowableGraph {
             neighbors,
             ids_mapping,
             max_degree,
-            n_edges: graph.neighbors.len(),
+            n_edges,
             n_nodes,
             inserted_nodes: n_nodes,
         }
@@ -1385,6 +1508,7 @@ impl GrowableGraph {
         D: Dataset + Sync,
     {
         let mut reverse_links_data = Vec::with_capacity(forward_neighbors.len());
+        let mut scratch: Vec<u32> = Vec::new();
 
         for &neighbor_local_id in forward_neighbors {
             let neighbor_external_id = self.get_external_id(neighbor_local_id) as VectorId;
@@ -1396,7 +1520,8 @@ impl GrowableGraph {
             >::new();
 
             // Add its current neighbors
-            for local_id in self.neighbors(neighbor_local_id) {
+            for &local_id in self.neighbors(neighbor_local_id, &mut scratch) {
+                let local_id = local_id as usize;
                 let external_id = self.get_external_id(local_id) as VectorId;
                 let dist = dataset.encoder().compute_distance_between(
                     dataset.get(neighbor_external_id),

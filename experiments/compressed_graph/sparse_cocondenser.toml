@@ -1,0 +1,115 @@
+name =          "sparse_cocondenser_cikm2026"
+title =         "Search sparse HNSW on MSMARCO Cocondenser with graph compression"
+description =   "CIKM 2026 sparse HNSW experiment on MSMARCO Cocondenser: uncompressed vs EGB + StreamVByte"
+dataset =       "Splade cocondenser on MS-MARCO"
+# compile-command = "cargo build" # Compile in debug mode? default is release mode
+build-command = "./target/release/hnsw_build"  # Unified build binary
+query-command = "./target/release/hnsw_search" # Unified search binary
+dataset-type = "sparse"   # Dataset type: "dense" or "sparse"
+component-type = "u16"    # DotVByte supports only u16
+value-type = "fixedu8"    # Ignored by the dotvbyte encoder, kept for consistency
+encoder       = "dotvbyte" # Encoder: "plain" for no compression, "dotvbyte" (sparse only)
+graph-type = "standard"   # Default graph type; each [query.*] subsection may override it
+
+[settings]
+k =             10
+num-runs       =        1       # Number of runs. PLEASE think carefully how increasing
+                        # this may influence your query time
+NUMA =          "numactl --physcpubind='0' --localalloc"    # Is the machine NUMA and need to prepend "numactl ..." to query command? Otherwise comment this!
+build =         false   # Need to build the index or the index is already built?
+metric =        "" # ir_measures metric (e.g. RR)
+
+[folder]
+data =          "/data2/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data" # data base path
+index =         "/data2/fbenocci/knn_indexes/sparse_datasets/msmarco_v1_passage/cocondenser" # index output path
+qrels_path =    ""
+experiment =    "."     # stdout and stderr of running the experiment is saved here, in a specific subfolder for the current execution
+
+[filename]
+dataset =       "documents.bin" # dataset input file name
+queries =       "queries.bin" # queries input file name
+groundtruth =   "groundtruth.tsv" # ground truth input file
+doc_ids =       "doc_ids.npy"
+query_ids =     "queries_ids.npy"
+index =         "cikm_2026_cocondenser" # index file name
+
+[indexing_parameters]
+m =             32
+ef-construction = 2000
+metric =        "dotproduct" # DotVByte supports only dotproduct
+
+# Graph compression is decided at BUILD time via --graph-type and must match at search time,
+# so each graph type needs its own index. The runner builds one index per distinct graph-type
+# found below and points each subsection at the matching one.
+#
+#   standard    -> uncompressed, original node order (the old "compression = none")
+#   permuted    -> EGB-reordered nodes, uncompressed neighbour lists
+#   streamvbyte -> EGB-reordered nodes + StreamVByte-compressed neighbour lists
+#                  (the old "compression = stream-v-byte" with "permute = true")
+#
+# The three arms are run at every operating point so that the two effects bundled into
+# `streamvbyte` can be separated:
+#   standard -> permuted     isolates the locality gain from EGB reordering
+#   permuted -> streamvbyte  isolates the cost of decoding compressed adjacency lists
+#
+# Note: the EGB permutation is applied to the plain sparse dataset and the DotVByte encoding
+# happens afterwards, so no packed row is re-encoded — but the *encoding is still not
+# order-invariant*. DotVByteFixedU8Encoder derives its component permutation with a recursive
+# bisection whose input is the set of document IDs each component occurs in, so reordering
+# documents changes the component mapping. Measured on this dataset, the EGB order made the
+# encoded dataset 2.1% larger (2,528,063,302 -> 2,582,051,822 bytes). Both `permuted` and
+# `streamvbyte` pay that, so the two share a dataset and their difference stays clean.
+[query]
+    [query.recall_90_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.03
+    graph-type = "standard"
+
+    [query.recall_90_permuted]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.03
+    graph-type = "permuted"
+
+    [query.recall_90_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 10
+    lambda = 0.03
+    graph-type = "streamvbyte"
+
+    [query.recall_94_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.05
+    graph-type = "standard"
+
+    [query.recall_94_permuted]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.05
+    graph-type = "permuted"
+
+    [query.recall_94_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 12
+    lambda = 0.05
+    graph-type = "streamvbyte"
+
+    [query.recall_98_standard]
+    early-termination = "distance-adaptive"
+    ef-search = 16
+    lambda = 0.12
+    graph-type = "standard"
+
+    [query.recall_98_permuted]
+    early-termination = "distance-adaptive"
+    ef-search = 16
+    lambda = 0.12
+    graph-type = "permuted"
+
+    [query.recall_98_streamvbyte]
+    early-termination = "distance-adaptive"
+    ef-search = 16
+    lambda = 0.12
+    graph-type = "streamvbyte"

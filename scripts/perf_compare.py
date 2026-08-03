@@ -26,13 +26,37 @@ MEMORY_TOLERANCE_PCT = 0.0    # any change → WARN
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
 
-def parse_tsv_rows(lines):
-    """Parse TSV data lines into a dict keyed by subsection name.
+# Column name prefixes, as written by run_experiments.py. Matched by prefix so the unit
+# suffixes ("(microsecs)", "(Bytes)", …) do not have to be repeated here.
+COLUMN_PREFIXES = {
+    'query_time': 'Query Time',
+    'accuracy':   'Accuracy',
+    'memory':     'Memory Usage',
+    'build_time': 'Building Time',
+}
 
-    Columns are positional:
-      [0] Subsection  [1] Query Time  [2] Accuracy  [-2] Memory  [-1] Building Time
-    This works whether or not an extra metric column is present.
+
+def column_indices(header_line):
+    """Map each field name to its column index, resolved from the header row.
+
+    Resolved by name rather than by position: run_experiments.py writes an optional metric
+    column and a Bits/Edge column whose placement is not fixed, so a positional parser
+    silently reads the wrong column when the report format changes.
     """
+    columns = [c.strip() for c in header_line.strip().split('\t')]
+    indices = {}
+    for field, prefix in COLUMN_PREFIXES.items():
+        matches = [i for i, c in enumerate(columns) if c.startswith(prefix)]
+        if not matches:
+            print(f"ERROR: column '{prefix}' not found in header: {columns}", file=sys.stderr)
+            sys.exit(1)
+        indices[field] = matches[0]
+    return indices
+
+
+def parse_tsv_rows(header_line, lines):
+    """Parse TSV data lines into a dict keyed by subsection name (column 0)."""
+    idx = column_indices(header_line)
     data = {}
     for line in lines:
         line = line.strip()
@@ -44,10 +68,10 @@ def parse_tsv_rows(lines):
         name = parts[0]
         try:
             data[name] = {
-                'query_time': int(parts[1]),
-                'accuracy':   float(parts[2]),
-                'memory':     int(parts[-2]),
-                'build_time': int(parts[-1]),
+                'query_time': int(parts[idx['query_time']]),
+                'accuracy':   float(parts[idx['accuracy']]),
+                'memory':     int(parts[idx['memory']]),
+                'build_time': int(parts[idx['build_time']]),
             }
         except (ValueError, IndexError):
             continue
@@ -81,27 +105,31 @@ def parse_performance_md(filepath, experiment):
     last = subsections[-1]
     sub_name = last.split('\n', 1)[0].strip()
 
-    # Collect data lines (skip header row, stop at non-data lines).
+    # Collect the header row and the data lines that follow it (stop at non-data lines).
+    header_line = None
     data_lines = []
-    header_seen = False
     for line in last.split('\n')[1:]:
         if line.startswith('Subsection'):
-            header_seen = True
+            header_line = line
             continue
-        if header_seen and line.strip():
+        if header_line is not None and line.strip():
             parts = line.strip().split('\t')
             if len(parts) >= 4 and parts[0].startswith('efs_'):
                 data_lines.append(line)
             else:
                 break
 
-    return sub_name, parse_tsv_rows(data_lines)
+    if header_line is None:
+        print(f"ERROR: no header row found for '{experiment}' in {filepath}", file=sys.stderr)
+        sys.exit(1)
+
+    return sub_name, parse_tsv_rows(header_line, data_lines)
 
 
 def parse_report_tsv(filepath):
     """Return (raw_lines_including_header, data_dict) from a report.tsv."""
     raw = Path(filepath).read_text().strip().split('\n')
-    return raw, parse_tsv_rows(raw[1:])   # first line is header
+    return raw, parse_tsv_rows(raw[0], raw[1:])
 
 
 # ── Comparison ────────────────────────────────────────────────────────────────

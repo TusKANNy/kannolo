@@ -20,8 +20,8 @@ build =         false   # Need to build the index or the index is already built?
 metric =        "" # ir_measures metric (e.g. RR)
 
 [folder]
-data =          "/data2/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data" # data base path
-index =         "/data2/fbenocci/knn_indexes/sparse_datasets/msmarco_v1_passage/cocondenser" # index output path
+data =          "~/knn_datasets/sparse_datasets/msmarco_v1_passage/cocondenser/data/" # data base path
+index =         "~/knn_indexes/sparse_datasets/msmarco_v1_passage/cocondenser/" # index output path
 qrels_path =    ""
 experiment =    "."     # stdout and stderr of running the experiment is saved here, in a specific subfolder for the current execution
 
@@ -31,7 +31,7 @@ queries =       "queries.bin" # queries input file name
 groundtruth =   "groundtruth.tsv" # ground truth input file
 doc_ids =       "doc_ids.npy"
 query_ids =     "queries_ids.npy"
-index =         "cikm_2026_cocondenser" # index file name
+index =         "index_cocondenser" # index file name
 
 [indexing_parameters]
 m =             32

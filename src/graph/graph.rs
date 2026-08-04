@@ -1,6 +1,5 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use optional::Optioned;
 use serde::{Deserialize, Serialize};
@@ -427,8 +426,7 @@ pub trait GraphTrait {
             // For each non-predicate direct neighbor, inspect its neighbors.
             // This compensates for sparse connectivity in the predicate sub-graph.
             // The phase-1 slice is dead by now, so the same scratch can be reused.
-            for i in 0..non_pred_direct.len() {
-                let mid_local = non_pred_direct[i];
+            for &mid_local in &non_pred_direct {
                 for &neighbor_local in self.neighbors(mid_local, &mut scratch) {
                     let neighbor_local = neighbor_local as usize;
                     if !visited.insert(neighbor_local) {
@@ -585,6 +583,83 @@ mod tests {
             g.push_with_precomputed_reverse_links(None, &nbrs, i, &[]);
         }
         g
+    }
+
+    /// Build a graph on `n` nodes where node `v` has exactly `nbrs` as neighbors.
+    fn build_graph_with(n: usize, max_degree: usize, v: usize, nbrs: &[usize]) -> GrowableGraph {
+        let mut g = GrowableGraph::with_max_degree(max_degree);
+        g.reserve(n);
+        g.advance_inserted_nodes(n);
+        g.push_with_precomputed_reverse_links(None, nbrs, v, &[]);
+        g
+    }
+
+    fn line_dataset(n: usize) -> DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>> {
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(1);
+        let flat: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder)
+    }
+
+    /// When the target has room, every incoming reverse edge is appended and the list is
+    /// not rewritten.
+    #[test]
+    fn merge_reverse_links_appends_all_incoming_when_there_is_room() {
+        let dataset = line_dataset(20);
+        let mut graph = build_graph_with(20, 8, 5, &[4, 6]);
+
+        let incoming = [(5u32, 1u32), (5u32, 2u32)];
+        let (old_degree, replacement) = graph.merge_reverse_links(&dataset, 5, &incoming);
+
+        assert_eq!(old_degree, 2);
+        assert!(
+            replacement.is_none(),
+            "2 existing + 2 incoming fits in max_degree 8, so it must append"
+        );
+
+        graph.append_links(5, old_degree, incoming.iter().map(|&(_, u)| u));
+        let mut scratch: Vec<u32> = Vec::new();
+        let neighbors: Vec<usize> = graph
+            .neighbors(5, &mut scratch)
+            .iter()
+            .map(|&n| n as usize)
+            .collect();
+        assert_eq!(
+            neighbors,
+            vec![4, 6, 1, 2],
+            "both incoming edges must survive the merge"
+        );
+    }
+
+    /// When the target is full, every incoming edge is still present in the single prune.
+    #[test]
+    fn merge_reverse_links_prunes_once_with_every_incoming_edge_present() {
+        let dataset = line_dataset(20);
+        // Node 5's current neighbors are all far away; the two incoming nodes are its
+        // nearest possible neighbors, so a correct merge must retain both.
+        let mut graph = build_graph_with(20, 4, 5, &[15, 16, 17]);
+
+        let incoming = [(5u32, 4u32), (5u32, 6u32)];
+        let (old_degree, replacement) = graph.merge_reverse_links(&dataset, 5, &incoming);
+
+        assert_eq!(old_degree, 3);
+        let replacement =
+            replacement.expect("3 existing + 2 incoming exceeds max_degree 4, so it must prune");
+        assert!(replacement.len() <= 4);
+        assert!(
+            replacement.contains(&4) && replacement.contains(&6),
+            "both incoming edges were in the prune input and are the closest \
+             candidates, so both must be kept; got {replacement:?}"
+        );
+
+        graph.replace_links(5, &replacement, old_degree);
+        let mut scratch: Vec<u32> = Vec::new();
+        let neighbors: Vec<usize> = graph
+            .neighbors(5, &mut scratch)
+            .iter()
+            .map(|&n| n as usize)
+            .collect();
+        assert!(neighbors.contains(&4) && neighbors.contains(&6));
+        assert!(neighbors.len() <= 4);
     }
 
     /// Regression test for the 2026-03-06 early-termination bug.
@@ -999,12 +1074,12 @@ impl From<GrowableGraph> for Graph<PlainNeighbors> {
         for v in 0..n_nodes {
             let start = v * max_degree;
             let end = start + max_degree;
-            neighbors.extend(
-                growable_graph.neighbors[start..end]
-                    .iter()
-                    .map(|a| a.load(Ordering::Relaxed))
-                    .take_while(|&val| val != u32::MAX),
-            );
+            let slots = &growable_graph.neighbors[start..end];
+            let len = slots
+                .iter()
+                .position(|&v| v == u32::MAX)
+                .unwrap_or(max_degree);
+            neighbors.extend_from_slice(&slots[..len]);
             offsets.push(neighbors.len());
         }
 
@@ -1215,16 +1290,20 @@ impl From<GrowableGraph> for GraphFixedDegree {
             .ids_mapping
             .map(|mapping| mapping.into_boxed_slice());
 
-        // Safety: Optioned<u32> is #[repr(transparent)] over u32, and AtomicU32 has the same
-        // size/alignment as u32, with u32::MAX used as the None sentinel in both types.
-        let neighbors: Box<[Optioned<u32>]> = unsafe {
-            let boxed: Box<[AtomicU32]> = growable_graph.neighbors.into_boxed_slice();
-            let raw = Box::into_raw(boxed) as *mut [Optioned<u32>];
-            Box::from_raw(raw)
-        };
-
         GraphFixedDegree {
-            neighbors,
+            // GraphFixedDegree is serialized, so it keeps the `Optioned<u32>` representation;
+            // this one-off remap is cold compared to the build it follows.
+            neighbors: growable_graph
+                .neighbors
+                .iter()
+                .map(|&v| {
+                    if v == u32::MAX {
+                        Optioned::none()
+                    } else {
+                        Optioned::some(v)
+                    }
+                })
+                .collect(),
             ids_mapping,
             max_degree: growable_graph.max_degree,
             n_edges: growable_graph.n_edges,
@@ -1233,10 +1312,14 @@ impl From<GrowableGraph> for GraphFixedDegree {
     }
 }
 
-// AtomicU32 is not Serialize/Deserialize; GrowableGraph is build-only and never serialized.
+// GrowableGraph is build-only and never serialized.
 #[derive(Default)]
 pub struct GrowableGraph {
-    neighbors: Vec<AtomicU32>, // u32::MAX = no neighbor (None sentinel, same as Optioned<u32>)
+    // `u32::MAX` marks an empty slot — the same sentinel `Optioned<u32>` uses for `None`.
+    // Storing plain `u32` rather than `Optioned<u32>` is what lets `neighbors` hand out a
+    // subslice of this buffer instead of copying into the caller's scratch on every node
+    // expansion, which the construction search does tens of millions of times.
+    neighbors: Vec<u32>,
     ids_mapping: Option<Vec<usize>>,
     max_degree: usize,
     n_edges: usize,
@@ -1245,18 +1328,19 @@ pub struct GrowableGraph {
 }
 
 impl GraphTrait for GrowableGraph {
+    /// Hands out a subslice of the stored buffer; `scratch` is left untouched, as the
+    /// [`Neighbors`] contract allows for backends that can return their storage directly.
     #[inline]
-    fn neighbors<'a>(&'a self, u: usize, scratch: &'a mut Vec<u32>) -> &'a [u32] {
+    fn neighbors<'a>(&'a self, u: usize, _scratch: &'a mut Vec<u32>) -> &'a [u32] {
         let start = u * self.max_degree;
         let end = start + self.max_degree;
-        scratch.clear();
-        scratch.extend(
-            self.neighbors[start..end]
-                .iter()
-                .map(|a| a.load(Ordering::Relaxed))
-                .take_while(|&val| val != u32::MAX),
-        );
-        scratch
+        let slots = &self.neighbors[start..end];
+        // Neighbors occupy a contiguous prefix; the first sentinel ends the list.
+        let len = slots
+            .iter()
+            .position(|&v| v == u32::MAX)
+            .unwrap_or(self.max_degree);
+        &slots[..len]
     }
 
     #[inline]
@@ -1287,7 +1371,7 @@ impl GraphTrait for GrowableGraph {
     }
 
     fn get_space_usage_bytes(&self) -> usize {
-        let neighbors_size = self.neighbors.len() * std::mem::size_of::<AtomicU32>();
+        let neighbors_size = self.neighbors.len() * std::mem::size_of::<u32>();
         let ids_mapping_size = self
             .ids_mapping
             .as_ref()
@@ -1302,14 +1386,14 @@ impl<N: Neighbors> From<Graph<N>> for GrowableGraph {
         let max_degree = graph.max_degree;
         let n_nodes = graph.n_nodes;
         let n_edges = graph.neighbors.len();
-        let mut neighbors: Vec<AtomicU32> = Vec::with_capacity(n_nodes * max_degree);
+        let mut neighbors: Vec<u32> = Vec::with_capacity(n_nodes * max_degree);
 
         let mut scratch: Vec<u32> = Vec::new();
         for v in 0..n_nodes {
             let list = graph.neighbors.get(v, &mut scratch);
-            neighbors.extend(list.iter().map(|&nbr| AtomicU32::new(nbr)));
+            neighbors.extend_from_slice(list);
             let pad = max_degree.saturating_sub(list.len());
-            neighbors.extend((0..pad).map(|_| AtomicU32::new(u32::MAX)));
+            neighbors.extend((0..pad).map(|_| u32::MAX));
         }
 
         let ids_mapping = graph.ids_mapping.map(|mapping| mapping.to_vec());
@@ -1328,19 +1412,18 @@ impl<N: Neighbors> From<Graph<N>> for GrowableGraph {
 impl From<GraphFixedDegree> for GrowableGraph {
     fn from(graph: GraphFixedDegree) -> Self {
         let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
-        // Safety: Optioned<u32> is #[repr(transparent)] over u32, and AtomicU32 has the same
-        // size/alignment as u32, with u32::MAX used as the None sentinel in both types.
-        let neighbors = unsafe {
-            let mut vec = std::mem::ManuallyDrop::new(graph.neighbors.into_vec());
-            Vec::from_raw_parts(
-                vec.as_mut_ptr() as *mut AtomicU32,
-                vec.len(),
-                vec.capacity(),
-            )
-        };
-
         GrowableGraph {
-            neighbors,
+            neighbors: graph
+                .neighbors
+                .iter()
+                .map(|opt| {
+                    if opt.is_some() {
+                        opt.unwrap()
+                    } else {
+                        u32::MAX
+                    }
+                })
+                .collect(),
             ids_mapping,
             max_degree: graph.max_degree,
             n_edges: graph.n_edges,
@@ -1379,9 +1462,7 @@ impl GrowableGraph {
 
     /// Pre-allocates space for a fixed number of nodes.
     pub fn reserve(&mut self, n_expected_nodes: usize) {
-        self.neighbors = (0..n_expected_nodes * self.max_degree)
-            .map(|_| AtomicU32::new(u32::MAX))
-            .collect();
+        self.neighbors = vec![u32::MAX; n_expected_nodes * self.max_degree];
         self.n_nodes = n_expected_nodes;
         self.ids_mapping = None;
     }
@@ -1416,7 +1497,7 @@ impl GrowableGraph {
         // Add forward links
         let start = new_node_local_id * self.max_degree;
         for (i, &neighbor) in neighbors.iter().enumerate() {
-            self.neighbors[start + i].store(neighbor as u32, Ordering::Relaxed);
+            self.neighbors[start + i] = neighbor as u32;
         }
         self.n_edges += neighbors.len();
 
@@ -1451,48 +1532,66 @@ impl GrowableGraph {
         for (neighbor_id, new_neighbor_list) in reverse_links {
             let start = *neighbor_id * self.max_degree;
             for (i, &n) in new_neighbor_list.iter().enumerate() {
-                self.neighbors[start + i].store(n as u32, Ordering::Relaxed);
+                self.neighbors[start + i] = n as u32;
             }
             for i in new_neighbor_list.len()..self.max_degree {
-                self.neighbors[start + i].store(u32::MAX, Ordering::Relaxed);
+                self.neighbors[start + i] = u32::MAX;
             }
         }
     }
 
-    /// Write forward and reverse links via interior mutability (`&self`).
+    /// Write the forward links of one newly inserted node.
     /// Does NOT update `n_edges` or `ids_mapping` — the caller handles those separately.
-    pub fn write_links(
-        &self,
-        forward: &[usize],
-        local_id: usize,
-        reverse_links: &[(usize, Vec<usize>)],
-    ) {
+    pub fn write_links(&mut self, forward: &[usize], local_id: usize) {
         let start = local_id * self.max_degree;
         for (i, &nbr) in forward.iter().enumerate() {
-            self.neighbors[start + i].store(nbr as u32, Ordering::Relaxed);
+            self.neighbors[start + i] = nbr as u32;
         }
-        // Forward-link slots beyond forward.len() stay u32::MAX (set by reserve()), no padding needed.
+        // Forward-link slots beyond forward.len() stay None (set by reserve()), no padding needed.
+    }
 
-        for (neighbor_id, new_list) in reverse_links {
-            let start = *neighbor_id * self.max_degree;
-            for (i, &n) in new_list.iter().enumerate() {
-                self.neighbors[start + i].store(n as u32, Ordering::Relaxed);
-            }
-            for i in new_list.len()..self.max_degree {
-                self.neighbors[start + i].store(u32::MAX, Ordering::Relaxed);
-            }
+    /// Number of neighbors currently stored for node `u`.
+    #[must_use]
+    #[inline]
+    pub fn degree(&self, u: usize) -> usize {
+        let start = u * self.max_degree;
+        self.neighbors[start..start + self.max_degree]
+            .iter()
+            .take_while(|&&v| v != u32::MAX)
+            .count()
+    }
+
+    /// Append `ids` to `node`'s neighbor list, starting at slot `at`.
+    /// The caller guarantees `at` is the node's current degree and that the
+    /// appended entries fit within `max_degree`.
+    pub fn append_links(&mut self, node: usize, at: usize, ids: impl Iterator<Item = u32>) {
+        let start = node * self.max_degree + at;
+        for (i, id) in ids.enumerate() {
+            self.neighbors[start + i] = id;
         }
     }
 
-    /// Write a single ids_mapping entry. Called sequentially before the pipelined join so
-    /// that Phase 1 of the next batch can safely resolve external IDs of nodes being committed.
+    /// Replace `node`'s neighbor list with `ids`, clearing the tail left over
+    /// from the previous list of length `old_degree`.
+    pub fn replace_links(&mut self, node: usize, ids: &[usize], old_degree: usize) {
+        let start = node * self.max_degree;
+        for (i, &id) in ids.iter().enumerate() {
+            self.neighbors[start + i] = id as u32;
+        }
+        for i in ids.len()..old_degree {
+            self.neighbors[start + i] = u32::MAX;
+        }
+    }
+
+    /// Write a single ids_mapping entry. Called before the batch's links are committed, so
+    /// that reverse-link writes can resolve external IDs of nodes being inserted.
     pub fn write_id_mapping(&mut self, local_id: usize, external_id: Option<usize>) {
         if let Some(mapping) = self.ids_mapping.as_mut() {
             mapping[local_id] = external_id.unwrap_or(local_id);
         }
     }
 
-    /// Add to the edge count after a pipelined batch completes.
+    /// Add to the edge count after a batch completes.
     pub fn add_n_edges(&mut self, count: usize) {
         self.n_edges += count;
     }
@@ -1552,6 +1651,69 @@ impl GrowableGraph {
             reverse_links_data.push((neighbor_local_id, new_neighbor_list));
         }
         reverse_links_data
+    }
+
+    /// Merge one batch's incoming reverse edges into `target`'s neighbor list.
+    ///
+    /// `incoming` is the contiguous run of `(target, new_node)` pairs that selected
+    /// `target` as a forward neighbor, sorted by the caller. Every incoming edge is
+    /// present in the prune input, so nothing is silently discarded, and the sort is what
+    /// makes that input a canonical sequence for a given batch — independent of thread
+    /// scheduling, hence deterministic.
+    ///
+    /// The new nodes of a batch are never neighbors of an already-inserted `target`
+    /// (they are not in the graph the batch searched), so `incoming` never duplicates
+    /// an existing entry.
+    ///
+    /// Returns `target`'s degree before the merge, and either the pruned replacement for
+    /// the whole list or `None` when every incoming edge fits and can just be appended
+    /// at that degree.
+    #[must_use]
+    pub fn merge_reverse_links<D>(
+        &self,
+        dataset: &D,
+        target: usize,
+        incoming: &[(u32, u32)],
+    ) -> (usize, Option<Vec<usize>>)
+    where
+        D: Dataset + Sync,
+    {
+        let old_degree = self.degree(target);
+
+        // `shrink_neighbor_list` returns its input unchanged when it already fits, so
+        // when there is room for every incoming edge the merged list is exactly
+        // `neighbors(target) ++ incoming`. Appending it avoids both the distance
+        // computations and the full-list rewrite.
+        if old_degree + incoming.len() <= self.max_degree {
+            return (old_degree, None);
+        }
+
+        let target_external = self.get_external_id(target) as VectorId;
+        let mut closest_vectors =
+            BinaryHeap::<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>::new();
+
+        let mut scratch: Vec<u32> = Vec::new();
+        let existing = self.neighbors(target, &mut scratch);
+
+        for local_id in existing
+            .iter()
+            .map(|&n| n as usize)
+            .chain(incoming.iter().map(|&(_, u)| u as usize))
+        {
+            let external_id = self.get_external_id(local_id) as VectorId;
+            let dist = dataset
+                .encoder()
+                .compute_distance_between(dataset.get(target_external), dataset.get(external_id));
+            closest_vectors.push(ScoredItemGeneric {
+                distance: dist,
+                vector: local_id,
+            });
+        }
+
+        (
+            old_degree,
+            Some(self.shrink_neighbor_list(dataset, &mut closest_vectors, self.max_degree)),
+        )
     }
 
     pub fn shrink_neighbor_list<D>(
@@ -1637,6 +1799,40 @@ impl GrowableGraph {
         D: Dataset + Sync,
         <D::Encoder as VectorEncoder>::Distance: Distance,
     {
+        let (forward_neighbors, new_entry_node) =
+            self.search_and_prune_forward(dataset, query_evaluator, entry_node, ef_construction, m);
+
+        // 3. Compute reverse links with the PRUNED list
+        let reverse_links =
+            self.precompute_reverse_links(dataset, future_local_id, &forward_neighbors);
+
+        (forward_neighbors, reverse_links, new_entry_node)
+    }
+
+    /// Searches the graph for a new node's neighbors and prunes them to `m`.
+    ///
+    /// The batched builder collects reverse edges across the whole
+    /// batch and merges them per target instead.
+    ///
+    /// # Returns
+    /// - `Vec<usize>`: the pruned forward neighbors for the new node.
+    /// - `ScoredItemGeneric`: the entry point for the next lower level.
+    #[must_use]
+    pub fn search_and_prune_forward<'e, D>(
+        &self,
+        dataset: &'e D,
+        query_evaluator: &<D::Encoder as VectorEncoder>::Evaluator<'e>,
+        entry_node: ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+        ef_construction: usize,
+        m: usize,
+    ) -> (
+        Vec<usize>,
+        ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>,
+    )
+    where
+        D: Dataset + Sync,
+        <D::Encoder as VectorEncoder>::Distance: Distance,
+    {
         // 1. Get candidate neighbors
         let mut neighbors_nodes = self.search_candidates_for_insert(
             dataset,
@@ -1651,10 +1847,6 @@ impl GrowableGraph {
         // 2. Prune with heuristic
         let forward_neighbors = self.shrink_neighbor_list(dataset, &mut neighbors_nodes, m);
 
-        // 3. Compute reverse links with the PRUNED list
-        let reverse_links =
-            self.precompute_reverse_links(dataset, future_local_id, &forward_neighbors);
-
-        (forward_neighbors, reverse_links, new_entry_node)
+        (forward_neighbors, new_entry_node)
     }
 }

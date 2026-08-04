@@ -2,7 +2,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -112,16 +113,29 @@ pub struct HNSW<D, G> {
     entry_point: usize,
 }
 
-// Batch scheduling constants for the pipelined HNSW build.
+// Batch scheduling constants for the batched HNSW build.
 const BUILD_BATCH_INITIAL: usize = 4; // Starting size; doubles each iteration
-const BUILD_BATCH_MIN: usize = 320; // Floor once adaptive scaling kicks in
-const BUILD_BATCH_MAX: usize = 32_768; // Hard ceiling regardless of dataset size
-const BUILD_BATCH_DIVISOR: usize = 1_000; // Adaptive cap = N / divisor (keeps B/N ≈ 0.1%)
-const BUILD_PARALLEL_THRESHOLD: usize = 512; // Min level size to use pipelined processing
+const BUILD_BATCH_DIVISOR: usize = 200; // Adaptive cap = N / divisor (keeps B/N ≈ 0.5%)
+const BUILD_BATCH_TASKS_PER_THREAD: usize = 5; // Floor = this many tasks per worker thread
+const BUILD_BATCH_RATIO_CAP_DIVISOR: usize = 20; // Batch never exceeds N / this (5% of the graph)
+const BUILD_PARALLEL_THRESHOLD: usize = 512; // Min level size to use batched parallel processing
 
+/// Largest batch permitted once `inserted_nodes` are in the graph.
+///
+/// Three rules, in priority order:
+/// 1. Aim for `N / BUILD_BATCH_DIVISOR` (0.5% of the graph). Nodes in a batch cannot see
+///    each other, so quality damage scales with the batch-to-graph *ratio*.
+/// 2. Never go below a floor of `BUILD_BATCH_TASKS_PER_THREAD` tasks per worker thread,
+///    or short batches leave threads idle waiting on the slowest task.
+/// 3. Never exceed `N / BUILD_BATCH_RATIO_CAP_DIVISOR`.
+///
 #[inline]
 fn effective_batch_max(inserted_nodes: usize) -> usize {
-    (inserted_nodes / BUILD_BATCH_DIVISOR).clamp(BUILD_BATCH_MIN, BUILD_BATCH_MAX)
+    let floor = BUILD_BATCH_TASKS_PER_THREAD * rayon::current_num_threads();
+    let ratio_cap = (inserted_nodes / BUILD_BATCH_RATIO_CAP_DIVISOR).max(BUILD_BATCH_INITIAL);
+    (inserted_nodes / BUILD_BATCH_DIVISOR)
+        .max(floor)
+        .min(ratio_cap)
 }
 
 /// Configuration for building the HNSW index.
@@ -1248,27 +1262,24 @@ where
         <D::Encoder as VectorEncoder>::Distance: vectorium::distances::Distance,
         D: Sync,
     {
-        // (global_id, upper_level_data[(forward, reverse)], ground_data(forward, reverse))
-        type InsertionEntry = (
-            usize,
-            Vec<(Vec<usize>, Vec<(usize, Vec<usize>)>)>,
-            (Vec<usize>, Vec<(usize, Vec<usize>)>),
-        );
+        // (global_id, forward links per upper level, ground forward links).
+        // The upper-level entry `j` is HNSW level `level - j` (levels are visited
+        // top-down), matching the order they are pushed in below.
+        type InsertionEntry = (usize, Vec<Vec<usize>>, Vec<usize>);
 
         let level_start_local_ids: Vec<usize> =
             growable_levels.iter().map(|g| g.inserted_nodes()).collect();
         let total_nodes = nodes_to_insert_slice.len();
         let entry_point_global_id = ids_sorted_by_level[0];
-        // ── Phase 1 (shared by both variants) ───────────────────────────────────────
-        // Parallel graph search for a batch, returning precomputed forward + reverse links.
-        let run_phase1 = |batch: &[usize],
-                          batch_start: usize,
-                          shared: &[GrowableGraph]|
-         -> Vec<InsertionEntry> {
+        // ── Phase 1 ─────────────────────────────────────────────────────────────────
+        // Parallel graph search against the frozen graph, returning pruned forward links.
+        // Reverse links are not computed here: they are grouped by target and merged in
+        // Phase 2, so that a target hit by several nodes of the batch is pruned once with
+        // all of its incoming edges present.
+        let run_phase1 = |batch: &[usize], shared: &[GrowableGraph]| -> Vec<InsertionEntry> {
             batch
                 .par_iter()
-                .enumerate()
-                .map(|(i, &global_id)| {
+                .map(|&global_id| {
                     let query_eval = source_dataset
                         .encoder()
                         .vector_evaluator(source_dataset.get(global_id as VectorId));
@@ -1291,17 +1302,14 @@ where
                         }
                         for current_level in (1..=level).rev() {
                             let graph_idx = max_level as usize - current_level as usize;
-                            let local_id = level_start_local_ids[graph_idx] + batch_start + i;
-                            let (forward, reverse, new_entry) = shared[graph_idx]
-                                .find_and_prune_neighbors(
-                                    source_dataset,
-                                    &query_eval,
-                                    entry_node,
-                                    build_params.ef_construction,
-                                    m,
-                                    local_id,
-                                );
-                            upper_level_data.push((forward, reverse));
+                            let (forward, new_entry) = shared[graph_idx].search_and_prune_forward(
+                                source_dataset,
+                                &query_eval,
+                                entry_node,
+                                build_params.ef_construction,
+                                m,
+                            );
+                            upper_level_data.push(forward);
                             entry_node = new_entry;
                         }
                     }
@@ -1317,61 +1325,145 @@ where
                         distance: dist,
                         vector: ground_entry_global_id,
                     };
-                    let (ground_neighbors, ground_reverse_links, _) = shared[max_level as usize]
-                        .find_and_prune_neighbors(
+                    let (ground_neighbors, _) = shared[max_level as usize]
+                        .search_and_prune_forward(
                             source_dataset,
                             &query_eval,
                             ground_entry_node,
                             build_params.ef_construction,
                             2 * m,
-                            global_id,
                         );
 
-                    (
-                        global_id,
-                        upper_level_data,
-                        (ground_neighbors, ground_reverse_links),
-                    )
+                    (global_id, upper_level_data, ground_neighbors)
                 })
                 .collect()
         };
 
         {
-            // Writes precomputed links via AtomicU32 interior mutability (&[GrowableGraph]).
-            // ids_mapping and n_edges are handled outside (before / after this call).
-            let apply_phase2 = |data: Vec<InsertionEntry>,
+            // The local id of batch entry `i` in the level graph `graph_idx`, and the
+            // forward list it computed there. Ground-level local ids are global ids.
+            fn entry_in_graph<'a>(
+                entry: &'a InsertionEntry,
+                i: usize,
+                batch_start: usize,
+                graph_idx: usize,
+                max_level: usize,
+                level: usize,
+                level_start_local_ids: &[usize],
+            ) -> (usize, &'a [usize]) {
+                let hnsw_level = max_level - graph_idx;
+                if hnsw_level == 0 {
+                    (entry.0, &entry.2)
+                } else {
+                    (
+                        level_start_local_ids[graph_idx] + batch_start + i,
+                        &entry.1[level - hnsw_level],
+                    )
+                }
+            }
+
+            // ── Phase 2: grouped reverse-edge merge, then forward links ─────────────
+            //
+            // 2a. Collect this batch's `(target, new_node)` reverse pairs and sort them,
+            //     which groups each target's incoming edges into one contiguous run.
+            // 2b. Merge in parallel, one prune per distinct target with all of its
+            //     incoming edges present. Targets are distinct across tasks and are
+            //     always already-inserted nodes, so no task can observe another's work.
+            // 2c. Commit: the merges are pure reads, so all writes happen afterwards.
+            let apply_phase2 = |data: &[InsertionEntry],
                                 batch_start: usize,
-                                shared: &[GrowableGraph]| {
-                for (i, (global_id, upper_level_data, ground_data)) in data.into_iter().enumerate()
-                {
-                    for (level_idx, (forward, reverse)) in
-                        upper_level_data.into_iter().rev().enumerate()
-                    {
-                        let hnsw_level = level_idx + 1;
-                        let graph_idx = max_level as usize - hnsw_level;
-                        let local_id = level_start_local_ids[graph_idx] + batch_start + i;
-                        shared[graph_idx].write_links(&forward, local_id, &reverse);
+                                levels: &mut [GrowableGraph]| {
+                let mut pairs: Vec<(u32, u32)> = Vec::new();
+                let mut groups: Vec<(usize, usize)> = Vec::new();
+
+                // The index is needed for `level_start_local_ids` and to derive the HNSW
+                // level, and the merge borrows the graph immutably then mutably, so an
+                // iterator over `levels` does not fit.
+                #[allow(clippy::needless_range_loop)]
+                for graph_idx in (max_level as usize - level as usize)..=max_level as usize {
+                    // 2a — group.
+                    pairs.clear();
+                    for (i, entry) in data.iter().enumerate() {
+                        let (local_id, forward) = entry_in_graph(
+                            entry,
+                            i,
+                            batch_start,
+                            graph_idx,
+                            max_level as usize,
+                            level as usize,
+                            &level_start_local_ids,
+                        );
+                        pairs.extend(forward.iter().map(|&v| (v as u32, local_id as u32)));
                     }
-                    let (forward, reverse) = ground_data;
-                    shared[max_level as usize].write_links(&forward, global_id, &reverse);
+                    pairs.par_sort_unstable();
+
+                    groups.clear();
+                    let mut start = 0;
+                    while start < pairs.len() {
+                        let mut end = start + 1;
+                        while end < pairs.len() && pairs[end].0 == pairs[start].0 {
+                            end += 1;
+                        }
+                        groups.push((start, end - start));
+                        start = end;
+                    }
+
+                    // 2b — merge, in parallel over distinct targets.
+                    let graph = &levels[graph_idx];
+                    let merges: Vec<_> = groups
+                        .par_iter()
+                        .map(|&(start, len)| {
+                            let run = &pairs[start..start + len];
+                            graph.merge_reverse_links(source_dataset, run[0].0 as usize, run)
+                        })
+                        .collect();
+
+                    // 2c — commit the merges.
+                    let graph = &mut levels[graph_idx];
+                    for (&(start, len), (old_degree, replacement)) in groups.iter().zip(merges) {
+                        let run = &pairs[start..start + len];
+                        let target = run[0].0 as usize;
+                        match replacement {
+                            None => {
+                                graph.append_links(target, old_degree, run.iter().map(|&(_, u)| u))
+                            }
+                            Some(list) => graph.replace_links(target, &list, old_degree),
+                        }
+                    }
+                }
+
+                // Forward links: each new node writes its own slots, disjoint by
+                // construction from every reverse target (which is always an
+                // already-inserted node).
+                for (i, entry) in data.iter().enumerate() {
+                    #[allow(clippy::needless_range_loop)] // see the merge loop above
+                    for graph_idx in (max_level as usize - level as usize)..=max_level as usize {
+                        let (local_id, forward) = entry_in_graph(
+                            entry,
+                            i,
+                            batch_start,
+                            graph_idx,
+                            max_level as usize,
+                            level as usize,
+                            &level_start_local_ids,
+                        );
+                        levels[graph_idx].write_links(forward, local_id);
+                    }
                 }
             };
 
             let mut current_batch_size = BUILD_BATCH_INITIAL;
-            let first_size = current_batch_size.min(total_nodes);
-            let mut pending_data =
-                run_phase1(&nodes_to_insert_slice[..first_size], 0, growable_levels);
-            let mut pending_start = 0usize;
-            let mut pending_size = first_size;
+            let mut batch_start = 0usize;
 
-            loop {
-                let batch_start = pending_start;
-                let batch_size = pending_size;
-                let cur_data = pending_data;
+            while batch_start < total_nodes {
+                let batch_size = current_batch_size.min(total_nodes - batch_start);
+                let batch = &nodes_to_insert_slice[batch_start..batch_start + batch_size];
 
-                // Pre-write ids_mapping (sequential, &mut) so Phase 1 of the next batch
-                // can safely resolve external IDs of nodes about to be committed.
-                for (i, (global_id, _, _)) in cur_data.iter().enumerate() {
+                // Phase 1: parallel search against the frozen graph.
+                let data = run_phase1(batch, growable_levels);
+
+                // ids_mapping needs &mut, so it is written before the &self link writes.
+                for (i, (global_id, _, _)) in data.iter().enumerate() {
                     for level_idx in 0..level as usize {
                         let hnsw_level = level_idx + 1;
                         let graph_idx = max_level as usize - hnsw_level;
@@ -1381,51 +1473,19 @@ where
                     growable_levels[max_level as usize].write_id_mapping(*global_id, None);
                 }
 
-                // Pre-count edges (cur_data is about to be moved into the join closure).
+                // Forward-edge counts.
                 let upper_edge_counts: Vec<usize> = (0..level as usize)
                     .map(|level_idx| {
                         let upper_data_idx = level as usize - 1 - level_idx;
-                        cur_data
-                            .iter()
-                            .map(|(_, upper, _)| upper[upper_data_idx].0.len())
+                        data.iter()
+                            .map(|(_, upper, _)| upper[upper_data_idx].len())
                             .sum()
                     })
                     .collect();
-                let ground_edge_count: usize = cur_data.iter().map(|(_, _, (f, _))| f.len()).sum();
+                let ground_edge_count: usize = data.iter().map(|(_, _, f)| f.len()).sum();
 
-                let next_start = batch_start + batch_size;
-
-                if next_start < total_nodes {
-                    let effective_max = effective_batch_max(next_start);
-                    if current_batch_size < effective_max {
-                        current_batch_size = (current_batch_size * 2).min(effective_max);
-                    }
-                    let next_size = current_batch_size.min(total_nodes - next_start);
-                    let next_batch = &nodes_to_insert_slice[next_start..next_start + next_size];
-
-                    // Sequential on purpose: running the two phases concurrently would let
-                    // Phase 1 read links while Phase 2 still writes them, making the resulting
-                    // graph depend on thread timing.
-                    apply_phase2(cur_data, batch_start, growable_levels);
-                    let next_data = run_phase1(next_batch, next_start, growable_levels);
-
-                    pending_data = next_data;
-                    pending_start = next_start;
-                    pending_size = next_size;
-                } else {
-                    apply_phase2(cur_data, batch_start, growable_levels);
-
-                    Self::finish_batch(
-                        growable_levels,
-                        level,
-                        max_level,
-                        batch_size,
-                        upper_edge_counts,
-                        ground_edge_count,
-                    );
-                    pb.inc(batch_size as u64);
-                    break;
-                }
+                // Phase 2: grouped reverse merge + forward commit.
+                apply_phase2(&data, batch_start, growable_levels);
 
                 Self::finish_batch(
                     growable_levels,
@@ -1436,11 +1496,17 @@ where
                     ground_edge_count,
                 );
                 pb.inc(batch_size as u64);
+
+                batch_start += batch_size;
+                let effective_max = effective_batch_max(batch_start);
+                if current_batch_size < effective_max {
+                    current_batch_size = (current_batch_size * 2).min(effective_max);
+                }
             }
         }
     }
 
-    /// Update n_edges and advance inserted-node counters after a pipelined batch completes.
+    /// Update n_edges and advance inserted-node counters after a batch completes.
     fn finish_batch(
         growable_levels: &mut [GrowableGraph],
         level: u8,

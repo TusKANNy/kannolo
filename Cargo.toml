@@ -1,6 +1,6 @@
 [package]
 name = "kannolo"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 license = "MIT"
 description = "kANNolo is designed for easy prototyping of ANN Search algorithms while ensuring high effectiveness and efficiency over both dense and sparse vectors."
@@ -21,14 +21,11 @@ bincode     = "2.0.1"
 rustc-hash  = "2.1.0"
 tantivy-bitpacker = "0.8.0"
 optional    = { version = "0.5.0", features = ["serde"] }
-vectorium   = { git = "https://github.com/TusKANNy/vectorium.git", tag = "v0.5.0" }
+vectorium   = { git = "https://github.com/TusKANNy/vectorium.git", tag = "v0.5.1" }
 indicatif   = { version = "0.18.3", features = ["rayon"] }
 postcard    = { version = "1", features = ["alloc"] }
 rgb         = { package = "rgbisect", version = "0.1.0" }
-# Temporary fork: adds a portable scalar fallback for StreamVByte decode, without which
-# the `streamvbyte` feature cannot build on non-x86_64 targets (e.g. Apple Silicon).
-# Repoint at rossanoventurini/toolkit once the fallback is merged upstream.
-toolkit     = { git = "https://github.com/TusKANNy/toolkit.git", rev = "2e5a3f9d6cbeaeb658f126b042e140c174a8e941", features = ["streamvbyte"] }
+toolkit     = { git = "https://github.com/rossanoventurini/toolkit.git", rev = "b26cb3aadfb6dffd4825f2f60e23ec722e24cdbb", features = ["streamvbyte"] }
 clap        = { version = "4.3.19", features = ["derive"], optional = true }
 pyo3        = { version = "0.29.0", features = ["extension-module"], optional = true }
 numpy       = { version = "0.29.0", optional = true }

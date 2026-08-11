@@ -92,14 +92,14 @@ fn main() {
     if args.residuals && args.m_pq.is_none() {
         eprintln!("Warning: --residuals gives no benefit without --m-pq.");
     }
-    if let Some(m) = args.m_pq {
-        if !PQ_SUPPORTED_SUBSPACES.contains(&m) {
-            eprintln!(
-                "Error: unsupported --m-pq {m}. Supported: {:?}",
-                PQ_SUPPORTED_SUBSPACES
-            );
-            process::exit(1);
-        }
+    if let Some(m) = args.m_pq
+        && !PQ_SUPPORTED_SUBSPACES.contains(&m)
+    {
+        eprintln!(
+            "Error: unsupported --m-pq {m}. Supported: {:?}",
+            PQ_SUPPORTED_SUBSPACES
+        );
+        process::exit(1);
     }
 
     let raw: DRaw = read_npy_f32(&args.data_file).unwrap_or_else(|e| {
@@ -269,6 +269,11 @@ fn save<I: vectorium::IndexSerializer + serde::Serialize>(index: &I, path: &str)
 
 /// Assemble the final IVF from parts and serialise it. `residual` and
 /// `correction_terms` are runtime, so one helper covers every configuration.
+///
+/// The parts are passed individually rather than bundled: each comes from a different
+/// stage of the build and bundling them would only move the argument list into a struct
+/// used exactly once.
+#[allow(clippy::too_many_arguments)]
 fn assemble_and_save<DQ, DC, CI>(
     q: CI,
     cluster: DC,
@@ -364,9 +369,10 @@ fn save_pq_se<const M: usize, CI: Index + Serialize>(
     args: &Args,
     build_start: Instant,
 ) where
-    DenseDataset<ProductQuantizer<M, DotProduct>>: Dataset<Encoder = ProductQuantizer<M, DotProduct>>
-        + VConvertFrom<PlainDenseDataset<f32, DotProduct>>
-        + Serialize,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>> + Serialize,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        VConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>
         + VectorEncoder<Distance = DotProduct>,
 {
@@ -395,9 +401,10 @@ fn save_pq_dp<const M: usize, CI: Index + Serialize>(
     args: &Args,
     build_start: Instant,
 ) where
-    DenseDataset<ProductQuantizer<M, DotProduct>>: Dataset<Encoder = ProductQuantizer<M, DotProduct>>
-        + VConvertFrom<PlainDenseDataset<f32, DotProduct>>
-        + Serialize,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>> + Serialize,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        VConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>
         + VectorEncoder<Distance = DotProduct>,
 {

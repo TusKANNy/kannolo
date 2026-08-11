@@ -143,13 +143,19 @@ where
 }
 
 /// Search parameters for [`IVF`].
-pub struct IVFSearchParams<CI>
+///
+/// `P` is the cluster dataset encoder's [`VectorEncoder::QueryParams`], defaulting to `()`
+/// for the encoders that take no query-side configuration.
+pub struct IVFSearchParams<CI, P = ()>
 where
     CI: Index,
 {
     /// Number of nearest centroids to probe.
     pub nprobe: usize,
     pub centroid_search_params: CI::SearchParams,
+    /// Query-side parameters for the cluster dataset's encoder, forwarded to
+    /// [`VectorEncoder::query_evaluator`].
+    pub cluster_query_params: P,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +215,7 @@ where
         &self,
         query: <DQ::Encoder as VectorEncoder>::QueryVector<'q>,
         k: usize,
-        params: &IVFSearchParams<CI>,
+        params: &IVFSearchParams<CI, <D::Encoder as VectorEncoder>::QueryParams>,
     ) -> Vec<ScoredVector<<DQ::Encoder as VectorEncoder>::Distance>>
     where
         <DQ::Encoder as VectorEncoder>::QueryVector<'q>:
@@ -219,7 +225,10 @@ where
             self.centroid_index
                 .search(query, params.nprobe, &params.centroid_search_params);
 
-        let evaluator = self.dataset.encoder().query_evaluator(query.into());
+        let evaluator = self
+            .dataset
+            .encoder()
+            .query_evaluator(query.into(), &params.cluster_query_params);
         let correction: &[f32] = self.correction_terms.as_deref().unwrap_or(&[]);
         let residual = self.residual;
         let uses_correction = <Reported<DQ> as ReportedMetric>::USES_CORRECTION;
@@ -546,8 +555,10 @@ pub fn pq_dp_cluster<const M: usize>(
     artifacts: &DenseBuildArtifacts,
 ) -> DenseDataset<ProductQuantizer<M, DotProduct>>
 where
-    DenseDataset<ProductQuantizer<M, DotProduct>>: Dataset<Encoder = ProductQuantizer<M, DotProduct>>
-        + ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
 {
     let n = artifacts.reordered_dataset.len();
@@ -561,7 +572,7 @@ where
         n,
         ScalarDenseQuantizer::new(dim),
     );
-    ConvertFrom::convert_from(raw_dp)
+    ConvertFrom::convert_from(&raw_dp, ())
 }
 
 /// Per-vector L2 correction from the *stored* (reconstructed) cluster vector ŵ:
@@ -739,7 +750,7 @@ where
 {
     type Query<'q> = <DQ::Encoder as VectorEncoder>::QueryVector<'q>;
     type Distance = <DQ::Encoder as VectorEncoder>::Distance;
-    type SearchParams = IVFSearchParams<CI>;
+    type SearchParams = IVFSearchParams<CI, <D::Encoder as VectorEncoder>::QueryParams>;
 
     fn search<'q>(
         &self,
@@ -842,8 +853,10 @@ impl<V: Float + FromF32 + ValueType> ClusterEncoding for PlainDenseDataset<V, Do
 
 impl<const M: usize> ClusterEncoding for DenseDataset<ProductQuantizer<M, DotProduct>>
 where
-    DenseDataset<ProductQuantizer<M, DotProduct>>: Dataset<Encoder = ProductQuantizer<M, DotProduct>>
-        + ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    DenseDataset<ProductQuantizer<M, DotProduct>>:
+        Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
 {
     fn encode(artifacts: &DenseBuildArtifacts) -> Self {
         pq_dp_cluster::<M>(artifacts)
@@ -891,7 +904,7 @@ mod tests {
         // residual: ⟨q,c⟩ + ⟨q,r⟩   (centroid = ⟨q,c⟩)
         assert_eq!(DotProduct::combine(0.0, 0.0, 3.0), DotProduct::from(3.0));
         assert_eq!(DotProduct::combine(2.0, 0.0, 3.0), DotProduct::from(5.0));
-        assert!(!DotProduct::USES_CORRECTION);
+        const { assert!(!DotProduct::USES_CORRECTION) };
     }
 
     #[test]
@@ -908,7 +921,7 @@ mod tests {
             SquaredEuclideanDistance::combine(4.0, 10.0, 3.0),
             SquaredEuclideanDistance::from(8.0)
         );
-        assert!(SquaredEuclideanDistance::USES_CORRECTION);
+        const { assert!(SquaredEuclideanDistance::USES_CORRECTION) };
     }
 
     #[test]
@@ -954,6 +967,7 @@ mod tests {
             let sp = IVFSearchParams {
                 nprobe: 2, // probe both clusters => exact
                 centroid_search_params: (),
+                cluster_query_params: (),
             };
             let query = DenseVectorView::new(&[10.05f32, 10.0]);
             let res = <Ivf as Index>::search(&index, query, 1, &sp);
@@ -1004,6 +1018,7 @@ mod tests {
         let sp = IVFSearchParams {
             nprobe: 2,
             centroid_search_params: (),
+            cluster_query_params: (),
         };
         let res = <IvfF16 as Index>::search(&idx, DenseVectorView::new(&[10.05f32, 10.0]), 1, &sp);
         assert_eq!(res[0].vector, 3); // L2 nearest
@@ -1019,6 +1034,7 @@ mod tests {
         let sp = IVFSearchParams {
             nprobe: 2,
             centroid_search_params: (),
+            cluster_query_params: (),
         };
         let res = <IvfDp as Index>::search(&idx, DenseVectorView::new(&[10.05f32, 10.0]), 1, &sp);
         // Max ⟨q, v⟩ is id 5 = (9.9, 10.2): 10.05·9.9 + 10·10.2 = 201.5.

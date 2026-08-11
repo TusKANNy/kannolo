@@ -21,7 +21,8 @@ use vectorium::readers::{read_npy_f32, read_seismic_format};
 use vectorium::vector_encoder::{DenseVectorEncoder, VectorEncoder};
 use vectorium::{
     Dataset, DenseDataset, FixedU8Q, FixedU16Q, Float, FromF32, PackedSparseDataset,
-    PlainDenseDataset, PlainSparseDataset, ScalarSparseDataset, SpaceUsage, ValueType,
+    PlainDenseDataset, PlainSparseDataset, RabitqConfig, RabitqExtConfig, RabitqExtQuantizer,
+    RabitqQuantizer, RabitqSupportedDistance, ScalarSparseDataset, SpaceUsage, ValueType,
 };
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -55,7 +56,7 @@ impl std::fmt::Display for ValueTypeArg {
 }
 
 /// Encoder type.
-/// Dense: `plain`, `pq`.
+/// Dense: `plain`, `pq`, `rabitq`, `rabitq-ext`.
 /// Sparse: `plain`, `dotvbyte`.
 #[derive(Debug, Clone, ValueEnum, Default)]
 enum EncoderType {
@@ -63,6 +64,10 @@ enum EncoderType {
     Plain,
     Pq,
     Dotvbyte,
+    /// RaBitQ: 1-bit-per-component document codes.
+    Rabitq,
+    /// Extended RaBitQ: `--rabitq-total-bits` per component (2, 4 or 8).
+    RabitqExt,
 }
 
 impl std::fmt::Display for EncoderType {
@@ -71,6 +76,8 @@ impl std::fmt::Display for EncoderType {
             EncoderType::Plain => write!(f, "plain"),
             EncoderType::Pq => write!(f, "pq"),
             EncoderType::Dotvbyte => write!(f, "dotvbyte"),
+            EncoderType::Rabitq => write!(f, "rabitq"),
+            EncoderType::RabitqExt => write!(f, "rabitq-ext"),
         }
     }
 }
@@ -121,7 +128,7 @@ struct Args {
     #[arg(default_value_t = ComponentTypeArg::U16)]
     component_type: ComponentTypeArg,
 
-    /// Encoder type. Dense: plain, pq. Sparse: plain, dotvbyte.
+    /// Encoder type. Dense: plain, pq, rabitq, rabitq-ext. Sparse: plain, dotvbyte.
     #[clap(long, value_enum)]
     #[arg(default_value_t = EncoderType::Plain)]
     encoder: EncoderType,
@@ -161,6 +168,59 @@ struct Args {
     #[clap(long, value_parser)]
     #[arg(default_value_t = 100_000)]
     sample_size: usize,
+
+    /// Seed for RaBitQ's random orthogonal rotation (rabitq, rabitq-ext).
+    #[clap(long, value_parser)]
+    #[arg(default_value_t = 42)]
+    rabitq_seed: u64,
+
+    /// Skip RaBitQ's random orthogonal rotation. Faster to encode and to query, but the codes
+    /// lose the information-spreading guarantee, so recall on real data is expected to drop.
+    #[clap(long, action)]
+    rabitq_no_rotate: bool,
+
+    /// Bits per component of the RaBitQ-ext document code: 2, 4 or 8 (rabitq-ext only).
+    #[clap(long, value_parser)]
+    #[arg(default_value_t = 4)]
+    rabitq_total_bits: u32,
+
+    /// Quantize each RaBitQ-ext document with an exact per-vector rescale search instead of the
+    /// constant factor estimated at training time. Slower to encode; buys least at large `d`.
+    #[clap(long, action)]
+    rabitq_exact_quant: bool,
+}
+
+/// RaBitQ packs document codes into 64-bit words, so the vector dimension must be a
+/// multiple of 64. Checked here rather than inside the encoder, which would only fire
+/// after the whole plain HNSW has been built.
+fn check_rabitq_dim(dim: usize) {
+    if !dim.is_multiple_of(64) {
+        eprintln!("Error: RaBitQ requires a vector dimension that is a multiple of 64, got {dim}.");
+        process::exit(1);
+    }
+}
+
+fn rabitq_config(args: &Args) -> RabitqConfig {
+    RabitqConfig {
+        seed: args.rabitq_seed,
+        rotate: !args.rabitq_no_rotate,
+    }
+}
+
+fn rabitq_ext_config(args: &Args) -> RabitqExtConfig {
+    if !matches!(args.rabitq_total_bits, 2 | 4 | 8) {
+        eprintln!(
+            "Error: --rabitq-total-bits must be 2, 4 or 8, got {}. Use --encoder rabitq for 1 bit.",
+            args.rabitq_total_bits
+        );
+        process::exit(1);
+    }
+    RabitqExtConfig {
+        total_bits: args.rabitq_total_bits,
+        seed: args.rabitq_seed,
+        rotate: !args.rabitq_no_rotate,
+        faster_quant: !args.rabitq_exact_quant,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -217,6 +277,10 @@ fn main() {
     match (&args.dataset_type, &args.encoder) {
         (DatasetType::Sparse, EncoderType::Pq) => {
             eprintln!("Error: PQ encoder is only available for dense vectors.");
+            process::exit(1);
+        }
+        (DatasetType::Sparse, EncoderType::Rabitq | EncoderType::RabitqExt) => {
+            eprintln!("Error: RaBitQ encoders are only available for dense vectors.");
             process::exit(1);
         }
         (DatasetType::Dense, EncoderType::Dotvbyte) => {
@@ -321,6 +385,32 @@ fn main() {
         (DatasetType::Dense, EncoderType::Pq, _, GraphType::Streamvbyte) => {
             build_dense_pq_permuted::<StreamVByteNeighbors>(&args, distance, &config);
         }
+        // Dense RaBitQ (value-type ignored)
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::Standard) => {
+            build_dense_rabitq::<Graph<PlainNeighbors>>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::FixedDegree) => {
+            build_dense_rabitq::<GraphFixedDegree>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::Permuted) => {
+            build_dense_rabitq_permuted::<PlainNeighbors>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::Streamvbyte) => {
+            build_dense_rabitq_permuted::<StreamVByteNeighbors>(&args, distance, &config);
+        }
+        // Dense RaBitQ-ext (value-type ignored)
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::Standard) => {
+            build_dense_rabitq_ext::<Graph<PlainNeighbors>>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::FixedDegree) => {
+            build_dense_rabitq_ext::<GraphFixedDegree>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::Permuted) => {
+            build_dense_rabitq_ext_permuted::<PlainNeighbors>(&args, distance, &config);
+        }
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::Streamvbyte) => {
+            build_dense_rabitq_ext_permuted::<StreamVByteNeighbors>(&args, distance, &config);
+        }
         // Sparse plain f32
         (DatasetType::Sparse, EncoderType::Plain, ValueTypeArg::F32, GraphType::Standard) => {
             build_sparse_plain::<f32, Graph<PlainNeighbors>>(&args, distance, &config);
@@ -413,6 +503,7 @@ fn main() {
         // Unreachable: caught by earlier validation
         (DatasetType::Dense, EncoderType::Dotvbyte, _, _)
         | (DatasetType::Sparse, EncoderType::Pq, _, _)
+        | (DatasetType::Sparse, EncoderType::Rabitq | EncoderType::RabitqExt, _, _)
         | (
             DatasetType::Dense,
             EncoderType::Plain,
@@ -740,7 +831,7 @@ where
         dataset,
         config,
         &args.output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into(()),
     );
 }
 
@@ -773,7 +864,7 @@ where
         dataset,
         config,
         &args.output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into(()),
     );
 }
 
@@ -817,7 +908,7 @@ where
     V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
     D: ScalarSparseSupportedDistance,
     G: GraphBound,
-    ScalarSparseDataset<C, f32, V, D>: ConvertFrom<PlainSparseDataset<C, f32, D>>,
+    ScalarSparseDataset<C, f32, V, D>: ConvertFrom<PlainSparseDataset<C, f32, D>, Config = ()>,
 {
     let dataset: PlainSparseDataset<C, f32, D> = read_seismic_format::<C, f32, D>(&args.data_file)
         .unwrap_or_else(|e| {
@@ -828,7 +919,7 @@ where
         dataset,
         config,
         &args.output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into(()),
     );
 }
 
@@ -879,7 +970,7 @@ fn build_sparse_scalar_permuted_with_distance<C, V, D, Ndst>(
     V: ValueType + Float + FromF32 + SpaceUsage + Serialize,
     D: ScalarSparseSupportedDistance,
     Ndst: NeighborsBound,
-    ScalarSparseDataset<C, f32, V, D>: ConvertFrom<PlainSparseDataset<C, f32, D>>,
+    ScalarSparseDataset<C, f32, V, D>: ConvertFrom<PlainSparseDataset<C, f32, D>, Config = ()>,
     ScalarSparseDataset<C, f32, V, D>: Dataset<Owned = ScalarSparseDataset<C, f32, V, D>>,
 {
     let dataset: PlainSparseDataset<C, f32, D> = read_seismic_format::<C, f32, D>(&args.data_file)
@@ -891,7 +982,7 @@ fn build_sparse_scalar_permuted_with_distance<C, V, D, Ndst>(
         dataset,
         config,
         &args.output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into(()),
     );
 }
 
@@ -903,8 +994,8 @@ fn build_dense_pq_with_m_l2<const M: usize, G>(
     G: GraphBound,
     DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
         Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
-    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
-        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    for<'a> DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, SquaredEuclideanDistance>, Config = ()>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
         DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
@@ -916,7 +1007,7 @@ fn build_dense_pq_with_m_l2<const M: usize, G>(
         dataset,
         config,
         output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into_ref(()),
     );
 }
 
@@ -928,7 +1019,8 @@ fn build_dense_pq_with_m_ip<const M: usize, G>(
     G: GraphBound,
     DenseDataset<ProductQuantizer<M, DotProduct>>:
         Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
-    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
     <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
@@ -937,7 +1029,7 @@ fn build_dense_pq_with_m_ip<const M: usize, G>(
         dataset,
         config,
         output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into_ref(()),
     );
 }
 
@@ -951,8 +1043,8 @@ fn build_dense_pq_with_m_l2_permuted<const M: usize, Ndst>(
             Encoder = ProductQuantizer<M, SquaredEuclideanDistance>,
             Owned = DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>,
         >,
-    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
-        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    for<'a> DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, SquaredEuclideanDistance>, Config = ()>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
         DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
@@ -964,7 +1056,7 @@ fn build_dense_pq_with_m_l2_permuted<const M: usize, Ndst>(
         dataset,
         config,
         output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into_ref(()),
     );
 }
 
@@ -978,7 +1070,8 @@ fn build_dense_pq_with_m_ip_permuted<const M: usize, Ndst>(
             Encoder = ProductQuantizer<M, DotProduct>,
             Owned = DenseDataset<ProductQuantizer<M, DotProduct>>,
         >,
-    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
     <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
@@ -987,7 +1080,146 @@ fn build_dense_pq_with_m_ip_permuted<const M: usize, Ndst>(
         dataset,
         config,
         output_file,
-        |i| i.convert_dataset_into(),
+        |i| i.convert_dataset_into_ref(()),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RaBitQ
+// ---------------------------------------------------------------------------
+//
+// Same shape as the PQ path: build the graph over the *plain* f32 vectors, so the
+// neighbor lists come from exact distances, then re-encode the dataset in place and
+// keep the graph. The encoder trains on the source, hence `convert_dataset_into_ref`.
+//
+// Unlike PQ there is no const-generic fan-out — the code width is a runtime field of
+// `RabitqExtConfig`, not a type parameter — so one function per (metric, graph kind).
+
+fn build_dense_rabitq<G>(args: &Args, distance: Distance, config: &HNSWBuildConfiguration)
+where
+    G: GraphBound,
+{
+    match distance {
+        Distance::Euclidean => {
+            build_dense_rabitq_with_distance::<SquaredEuclideanDistance, G>(args, config)
+        }
+        Distance::DotProduct => build_dense_rabitq_with_distance::<DotProduct, G>(args, config),
+    }
+}
+
+fn build_dense_rabitq_with_distance<D, G>(args: &Args, config: &HNSWBuildConfiguration)
+where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance,
+    G: GraphBound,
+{
+    let dataset: PlainDenseDataset<f32, D> = read_dense_plain_dataset::<D>(args);
+    check_rabitq_dim(dataset.input_dim());
+    let rabitq = rabitq_config(args);
+    build_and_save::<_, DenseDataset<RabitqQuantizer<D>>, G>(
+        dataset,
+        config,
+        &args.output_file,
+        |i| i.convert_dataset_into_ref(rabitq),
+    );
+}
+
+fn build_dense_rabitq_permuted<Ndst>(
+    args: &Args,
+    distance: Distance,
+    config: &HNSWBuildConfiguration,
+) where
+    Ndst: NeighborsBound,
+{
+    match distance {
+        Distance::Euclidean => build_dense_rabitq_permuted_with_distance::<
+            SquaredEuclideanDistance,
+            Ndst,
+        >(args, config),
+        Distance::DotProduct => {
+            build_dense_rabitq_permuted_with_distance::<DotProduct, Ndst>(args, config)
+        }
+    }
+}
+
+fn build_dense_rabitq_permuted_with_distance<D, Ndst>(args: &Args, config: &HNSWBuildConfiguration)
+where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance,
+    Ndst: NeighborsBound,
+{
+    let dataset: PlainDenseDataset<f32, D> = read_dense_plain_dataset::<D>(args);
+    check_rabitq_dim(dataset.input_dim());
+    let rabitq = rabitq_config(args);
+    // Quantize before permuting, never after — see `build_permuted_and_save`.
+    build_permuted_and_save::<_, DenseDataset<RabitqQuantizer<D>>, Ndst>(
+        dataset,
+        config,
+        &args.output_file,
+        |i| i.convert_dataset_into_ref(rabitq),
+    );
+}
+
+fn build_dense_rabitq_ext<G>(args: &Args, distance: Distance, config: &HNSWBuildConfiguration)
+where
+    G: GraphBound,
+{
+    match distance {
+        Distance::Euclidean => {
+            build_dense_rabitq_ext_with_distance::<SquaredEuclideanDistance, G>(args, config)
+        }
+        Distance::DotProduct => build_dense_rabitq_ext_with_distance::<DotProduct, G>(args, config),
+    }
+}
+
+fn build_dense_rabitq_ext_with_distance<D, G>(args: &Args, config: &HNSWBuildConfiguration)
+where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance,
+    G: GraphBound,
+{
+    let dataset: PlainDenseDataset<f32, D> = read_dense_plain_dataset::<D>(args);
+    check_rabitq_dim(dataset.input_dim());
+    let rabitq = rabitq_ext_config(args);
+    build_and_save::<_, DenseDataset<RabitqExtQuantizer<D>>, G>(
+        dataset,
+        config,
+        &args.output_file,
+        |i| i.convert_dataset_into_ref(rabitq),
+    );
+}
+
+fn build_dense_rabitq_ext_permuted<Ndst>(
+    args: &Args,
+    distance: Distance,
+    config: &HNSWBuildConfiguration,
+) where
+    Ndst: NeighborsBound,
+{
+    match distance {
+        Distance::Euclidean => build_dense_rabitq_ext_permuted_with_distance::<
+            SquaredEuclideanDistance,
+            Ndst,
+        >(args, config),
+        Distance::DotProduct => {
+            build_dense_rabitq_ext_permuted_with_distance::<DotProduct, Ndst>(args, config)
+        }
+    }
+}
+
+fn build_dense_rabitq_ext_permuted_with_distance<D, Ndst>(
+    args: &Args,
+    config: &HNSWBuildConfiguration,
+) where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance,
+    Ndst: NeighborsBound,
+{
+    let dataset: PlainDenseDataset<f32, D> = read_dense_plain_dataset::<D>(args);
+    check_rabitq_dim(dataset.input_dim());
+    let rabitq = rabitq_ext_config(args);
+    // Quantize before permuting, never after — see `build_permuted_and_save`.
+    build_permuted_and_save::<_, DenseDataset<RabitqExtQuantizer<D>>, Ndst>(
+        dataset,
+        config,
+        &args.output_file,
+        |i| i.convert_dataset_into_ref(rabitq),
     );
 }
 
@@ -1015,7 +1247,7 @@ impl<T> NeighborsBound for T where
 /// usage and serializes it to `output_file`.
 ///
 /// `convert` is the only per-encoder variation: identity (`|i| i`) when the built index is
-/// already final, or `|i| i.convert_dataset_into()` to re-encode the dataset (PQ, scalar,
+/// already final, or `|i| i.convert_dataset_into(())` to re-encode the dataset (PQ, scalar,
 /// DotVByte) while keeping the graph unchanged.
 fn build_and_save<Dsrc, Dfinal, G>(
     dataset: Dsrc,

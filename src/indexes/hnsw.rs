@@ -205,16 +205,29 @@ impl EarlyTerminationStrategy {
 
 /// Configuration for searching the HNSW index.
 /// Use the builder pattern: `HNSWSearchConfiguration::default().with_ef_search(200)`
-pub struct HNSWSearchConfiguration {
+///
+/// `P` is the query-side parameter type of the dataset encoder
+/// ([`VectorEncoder::QueryParams`]). It defaults to `()`, so `HNSWSearchConfiguration`
+/// written without a parameter still means "an encoder that takes no query configuration"
+/// (plain, scalar, PQ, DotVByte). Encoders that do take query configuration — RaBitQ's
+/// `query_bits`, for instance — pin it to their own type, and the graph search forwards
+/// [`query_params`](Self::query_params) verbatim when it builds the evaluator.
+pub struct HNSWSearchConfiguration<P = ()> {
     /// The size of the dynamic candidate list for searching the graph.
     /// Also known as `ef` or `efSearch` in the HNSW paper. A larger
     /// value leads to more accurate results at the cost of speed.
     pub ef_search: usize,
     /// Early termination strategy for search.
     pub early_termination: EarlyTerminationStrategy,
+    /// Query-side encoder parameters, handed straight to
+    /// [`VectorEncoder::query_evaluator`]. `()` when the encoder takes none.
+    ///
+    /// These describe the *query*, not the stored data, so one index serves every setting
+    /// concurrently — nothing here mutates the dataset.
+    pub query_params: P,
 }
 
-impl HNSWSearchConfiguration {
+impl<P> HNSWSearchConfiguration<P> {
     /// Sets the ef_search parameter. Returns self for chaining.
     #[must_use]
     pub fn with_ef_search(mut self, ef_search: usize) -> Self {
@@ -228,14 +241,22 @@ impl HNSWSearchConfiguration {
         self.early_termination = strategy;
         self
     }
+
+    /// Sets the encoder's query-side parameters. Returns self for chaining.
+    #[must_use]
+    pub fn with_query_params(mut self, query_params: P) -> Self {
+        self.query_params = query_params;
+        self
+    }
 }
 
-impl Default for HNSWSearchConfiguration {
+impl<P: Default> Default for HNSWSearchConfiguration<P> {
     /// Provides a default `ef_search` value.
     fn default() -> Self {
         Self {
             ef_search: 100,
             early_termination: EarlyTerminationStrategy::None,
+            query_params: P::default(),
         }
     }
 }
@@ -291,7 +312,15 @@ where
     /// Only the dataset is replaced; levels, entry point, level mappings, and neighbor counts
     /// are moved unchanged. The caller must ensure that the new dataset `D` has the same
     /// number of vectors and the same logical vector order as `T`.
-    pub fn convert_dataset_from<T: Dataset>(hnsw: HNSW<T, G>) -> Self
+    ///
+    /// `config` is the target dataset's own construction configuration
+    /// ([`ConvertFrom::Config`]) — `()` for encoders that learn everything from the source
+    /// data, `RabitqConfig` for RaBitQ, and so on. There is exactly one entry point, so a
+    /// caller never has to know which kind of encoder it is holding.
+    pub fn convert_dataset_from<T: Dataset>(
+        hnsw: HNSW<T, G>,
+        config: <D as ConvertFrom<T>>::Config,
+    ) -> Self
     where
         D: Dataset + ConvertFrom<T>,
     {
@@ -308,7 +337,7 @@ where
             levels,
             level1_to_level0_mapping,
             original_ids,
-            dataset: ConvertInto::<D>::convert_into(dataset),
+            dataset: ConvertInto::<D>::convert_into(dataset, config),
             num_neighbors_per_vec,
             entry_point,
         }
@@ -319,26 +348,54 @@ where
     /// This is the mirror of [`convert_dataset_from`]. Prefer this when you own the index
     /// and want to chain from a plain build:
     ///
-    /// ```rust,ignore
+    /// ```
+    /// # use kannolo::graph::Graph;
+    /// # use kannolo::hnsw::{HNSW, HNSWBuildConfiguration};
+    /// # use vectorium::distances::DotProduct;
+    /// # use vectorium::encoders::dotvbyte_fixedu8::DotVByteFixedU8Encoder;
+    /// # use vectorium::vector::SparseVectorView;
+    /// # use vectorium::{
+    /// #     DatasetGrowable, PackedSparseDataset, PlainSparseDataset,
+    /// #     PlainSparseDatasetGrowable, PlainSparseQuantizer,
+    /// # };
+    /// # let mut growable = PlainSparseDatasetGrowable::new(
+    /// #     PlainSparseQuantizer::<u16, f32, DotProduct>::new(8, 8),
+    /// # );
+    /// # for i in 0u16..16 {
+    /// #     let mut components = [i % 8, (i + 3) % 8];
+    /// #     components.sort_unstable();
+    /// #     growable.push(SparseVectorView::new(&components, &[0.5f32, 0.25]));
+    /// # }
+    /// # let dataset: PlainSparseDataset<u16, f32, DotProduct> = growable.into();
+    /// # let config = HNSWBuildConfiguration::default()
+    /// #     .with_num_neighbors(4)
+    /// #     .with_ef_construction(8);
     /// let plain: HNSW<PlainSparseDataset<u16, f32, DotProduct>, Graph> =
     ///     HNSW::build_index(dataset, &config);
+    /// // DotVByte learns everything from the source, so its `ConvertFrom::Config` is `()`.
     /// let compressed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-    ///     plain.convert_dataset_into();
+    ///     plain.convert_dataset_into(());
     /// ```
-    pub fn convert_dataset_into<T>(self) -> HNSW<T, G>
+    pub fn convert_dataset_into<T>(self, config: <T as ConvertFrom<D>>::Config) -> HNSW<T, G>
     where
         T: Dataset + ConvertFrom<D>,
     {
-        HNSW::<T, G>::convert_dataset_from(self)
+        HNSW::<T, G>::convert_dataset_from(self, config)
     }
 
     /// Converts this `HNSW` into one backed by a different dataset type using a borrowed source dataset.
     ///
-    /// Use this when the target dataset implements `ConvertFrom<&D>` instead of `ConvertFrom<D>`.
-    pub fn convert_dataset_into_ref<T>(self) -> HNSW<T, G>
+    /// Use this when the target dataset implements `ConvertFrom<&D>` instead of `ConvertFrom<D>`
+    /// — the quantizers that train on the source before encoding it (PQ, RaBitQ) all do, since
+    /// training and encoding are two passes over the same plain vectors.
+    ///
+    /// `Cfg` is named as its own parameter rather than written
+    /// `<T as ConvertFrom<&'a D>>::Config` because that projection would depend on the
+    /// higher-ranked `'a`, which cannot be named in the signature.
+    pub fn convert_dataset_into_ref<T, Cfg>(self, config: Cfg) -> HNSW<T, G>
     where
         T: Dataset,
-        for<'a> T: ConvertFrom<&'a D>,
+        for<'a> T: ConvertFrom<&'a D, Config = Cfg>,
     {
         let HNSW {
             levels,
@@ -353,7 +410,7 @@ where
             levels,
             level1_to_level0_mapping,
             original_ids,
-            dataset: T::convert_from(&dataset),
+            dataset: T::convert_from(&dataset, config),
             num_neighbors_per_vec,
             entry_point,
         }
@@ -457,13 +514,16 @@ where
         &'q self,
         query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
         k: usize,
-        search_params: &HNSWSearchConfiguration,
+        search_params: &HNSWSearchConfiguration<<D::Encoder as VectorEncoder>::QueryParams>,
         predicate: F,
     ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>>
     where
         F: Fn(usize) -> bool,
     {
-        let query_eval = self.dataset.encoder().query_evaluator(query);
+        let query_eval = self
+            .dataset
+            .encoder()
+            .query_evaluator(query, &search_params.query_params);
         let num_levels = self.levels.len();
 
         // --- Stage 1: upper levels (unfiltered greedy search, same as standard HNSW) ---
@@ -558,8 +618,8 @@ where
 
             outer_scratch.clear();
             outer_scratch.extend_from_slice(ground_graph.neighbors(v, &mut inner_scratch));
-            for i in 0..outer_scratch.len() {
-                let u = outer_scratch[i] as usize;
+            for &neighbor in outer_scratch.iter() {
+                let u = neighbor as usize;
                 if seen.insert(u) {
                     candidates.push(u);
                 }
@@ -620,14 +680,17 @@ where
         &'q self,
         query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
         k: usize,
-        search_params: &HNSWSearchConfiguration,
+        search_params: &HNSWSearchConfiguration<<D::Encoder as VectorEncoder>::QueryParams>,
         acorn_gamma: &AcornGammaNeighbors,
         predicate: F,
     ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>>
     where
         F: Fn(usize) -> bool,
     {
-        let query_eval = self.dataset.encoder().query_evaluator(query);
+        let query_eval = self
+            .dataset
+            .encoder()
+            .query_evaluator(query, &search_params.query_params);
         let num_levels = self.levels.len();
 
         // --- Stage 1: upper levels (unfiltered greedy search, same as ACORN-1) ---
@@ -739,7 +802,9 @@ where
 {
     type Query<'q> = <D::Encoder as VectorEncoder>::QueryVector<'q>;
     type Distance = <D::Encoder as VectorEncoder>::Distance;
-    type SearchParams = HNSWSearchConfiguration;
+    /// Graph-side knobs plus the encoder's own query parameters, forwarded to
+    /// [`VectorEncoder::query_evaluator`].
+    type SearchParams = HNSWSearchConfiguration<<D::Encoder as VectorEncoder>::QueryParams>;
 
     fn search<'q>(
         &self,
@@ -747,7 +812,10 @@ where
         k: usize,
         search_params: &Self::SearchParams,
     ) -> Vec<vectorium::dataset::ScoredVector<Self::Distance>> {
-        let query_eval = self.dataset.encoder().query_evaluator(query);
+        let query_eval = self
+            .dataset
+            .encoder()
+            .query_evaluator(query, &search_params.query_params);
         let num_levels = self.levels.len();
 
         // --- Stage 1: Search upper levels ---
@@ -1568,7 +1636,7 @@ mod convert_dataset_tests {
         let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-            plain_hnsw.convert_dataset_into();
+            plain_hnsw.convert_dataset_into(());
 
         assert_eq!(hnsw.n_elements(), n);
     }
@@ -1579,7 +1647,7 @@ mod convert_dataset_tests {
         let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
-            plain_hnsw.convert_dataset_into();
+            plain_hnsw.convert_dataset_into(());
 
         assert_eq!(hnsw.n_elements(), n);
     }
@@ -1590,7 +1658,7 @@ mod convert_dataset_tests {
         let n = plain_hnsw.n_elements();
 
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
-            plain_hnsw.convert_dataset_into();
+            plain_hnsw.convert_dataset_into(());
 
         assert_eq!(hnsw.n_elements(), n);
     }
@@ -1598,7 +1666,7 @@ mod convert_dataset_tests {
     #[test]
     fn test_dotvbyte_search_returns_results() {
         let hnsw: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-            build_test_hnsw().convert_dataset_into();
+            build_test_hnsw().convert_dataset_into(());
 
         let query_components: Vec<u16> = vec![0, 1, 2];
         let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
@@ -1614,7 +1682,7 @@ mod convert_dataset_tests {
     #[test]
     fn test_fixedu8_search_returns_results() {
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>, Graph> =
-            build_test_hnsw().convert_dataset_into();
+            build_test_hnsw().convert_dataset_into(());
 
         let query_components: Vec<u16> = vec![0, 1, 2];
         let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
@@ -1630,7 +1698,7 @@ mod convert_dataset_tests {
     #[test]
     fn test_fixedu16_search_returns_results() {
         let hnsw: HNSW<ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>, Graph> =
-            build_test_hnsw().convert_dataset_into();
+            build_test_hnsw().convert_dataset_into(());
 
         let query_components: Vec<u16> = vec![0, 1, 2];
         let query_values: Vec<f32> = vec![0.5, 0.3, 0.2];
@@ -1828,7 +1896,7 @@ mod permute_compress_tests {
 
         // Same order as `build_permuted_and_save`: encode first, permute second.
         let standard: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph<PlainNeighbors>> =
-            plain.convert_dataset_into();
+            plain.convert_dataset_into(());
         let permuted = standard.permute_and_encode::<PlainNeighbors>();
 
         assert_eq!(
@@ -2074,5 +2142,175 @@ mod acorn_gamma_search_tests {
 
         let results = hnsw.search_filtered_gamma(query, 5, &search_config, &acorn_gamma, |_| false);
         assert!(results.is_empty());
+    }
+}
+
+/// RaBitQ is the first encoder kANNolo uses that takes *query-side* parameters, so these
+/// tests cover the whole path: the graph is built over plain f32 vectors, the dataset is
+/// re-encoded into RaBitQ codes, and search forwards
+/// [`HNSWSearchConfiguration::query_params`] to the encoder.
+#[cfg(test)]
+mod rabitq_tests {
+    use super::*;
+    use crate::graph::Graph;
+    use vectorium::distances::{Distance, DotProduct, SquaredEuclideanDistance};
+    use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
+    use vectorium::vector::DenseVectorView;
+    use vectorium::{
+        DenseDataset, IndexStats, PlainDenseDataset, RabitqConfig, RabitqExtConfig,
+        RabitqExtQuantizer, RabitqQuantizer, RabitqQueryParams,
+    };
+
+    /// RaBitQ packs codes into 64-bit words, so the dimension must be a multiple of 64.
+    const DIM: usize = 64;
+    const N: usize = 256;
+
+    /// Deterministic pseudo-random vectors — a plain LCG, so the tests do not depend on
+    /// `rand`'s generator staying fixed across versions.
+    fn plain_dataset<D: vectorium::ScalarDenseSupportedDistance>() -> PlainDenseDataset<f32, D> {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut values = Vec::with_capacity(N * DIM);
+        for _ in 0..N * DIM {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // Top 24 bits, mapped to [-1, 1).
+            values.push(((state >> 40) as f32 / (1u32 << 23) as f32) - 1.0);
+        }
+        DenseDataset::from_raw(
+            values.into_boxed_slice(),
+            N,
+            PlainDenseQuantizer::<f32, D>::new(DIM),
+        )
+    }
+
+    fn build_plain<D>() -> HNSW<PlainDenseDataset<f32, D>, Graph>
+    where
+        D: vectorium::ScalarDenseSupportedDistance + Distance,
+    {
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(16)
+            .with_ef_construction(100);
+        HNSW::build_index(plain_dataset::<D>(), &config)
+    }
+
+    /// A dataset vector used verbatim as its own query: whatever the estimator's error,
+    /// the exact match should still land in the top-k.
+    fn query_vector<D: vectorium::ScalarDenseSupportedDistance>(id: usize) -> Vec<f32> {
+        plain_dataset::<D>().get(id as VectorId).values().to_vec()
+    }
+
+    #[test]
+    fn rabitq_conversion_preserves_element_count() {
+        let plain = build_plain::<SquaredEuclideanDistance>();
+        let n = plain.n_elements();
+
+        let hnsw: HNSW<DenseDataset<RabitqQuantizer<SquaredEuclideanDistance>>, Graph> =
+            plain.convert_dataset_into_ref(RabitqConfig::default());
+
+        assert_eq!(hnsw.n_elements(), n);
+    }
+
+    #[test]
+    fn rabitq_search_finds_the_exact_match() {
+        let hnsw: HNSW<DenseDataset<RabitqQuantizer<SquaredEuclideanDistance>>, Graph> =
+            build_plain::<SquaredEuclideanDistance>()
+                .convert_dataset_into_ref(RabitqConfig::default());
+
+        let query_values = query_vector::<SquaredEuclideanDistance>(37);
+        let query = DenseVectorView::new(&query_values);
+        let config = HNSWSearchConfiguration::default()
+            .with_ef_search(100)
+            .with_query_params(RabitqQueryParams::new(8));
+
+        let results = hnsw.search(query, 10, &config);
+
+        assert_eq!(results.len(), 10);
+        assert!(
+            results.iter().any(|r| r.vector == 37),
+            "the query is dataset vector 37 verbatim, but it is not in the top-10: {:?}",
+            results.iter().map(|r| r.vector).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rabitq_search_works_under_dot_product() {
+        let hnsw: HNSW<DenseDataset<RabitqQuantizer<DotProduct>>, Graph> =
+            build_plain::<DotProduct>().convert_dataset_into_ref(RabitqConfig::default());
+
+        let query_values = query_vector::<DotProduct>(101);
+        let query = DenseVectorView::new(&query_values);
+        let config = HNSWSearchConfiguration::default()
+            .with_ef_search(100)
+            .with_query_params(RabitqQueryParams::new(8));
+
+        let results = hnsw.search(query, 10, &config);
+        assert_eq!(results.len(), 10);
+    }
+
+    /// Every `query_bits` setting must be accepted by the same index: the parameter
+    /// describes the query, not the stored data.
+    #[test]
+    fn one_index_serves_every_query_bits_setting() {
+        let hnsw: HNSW<DenseDataset<RabitqQuantizer<SquaredEuclideanDistance>>, Graph> =
+            build_plain::<SquaredEuclideanDistance>()
+                .convert_dataset_into_ref(RabitqConfig::default());
+
+        let query_values = query_vector::<SquaredEuclideanDistance>(5);
+        let query = DenseVectorView::new(&query_values);
+
+        for query_bits in 1..=8 {
+            let config = HNSWSearchConfiguration::default()
+                .with_ef_search(64)
+                .with_query_params(RabitqQueryParams::new(query_bits));
+            let results = hnsw.search(query, 10, &config);
+            assert_eq!(results.len(), 10, "query_bits={query_bits}");
+        }
+    }
+
+    /// The sharp plumbing test: `query_bits` is validated inside
+    /// `RabitqQuantizer::query_evaluator`, so an out-of-range value can only panic if the
+    /// configuration actually reached the encoder. Built as a literal to bypass the same
+    /// check in `RabitqQueryParams::new`.
+    #[test]
+    #[should_panic(expected = "RaBitQ requires query_bits in 1..=8")]
+    fn query_params_reach_the_encoder() {
+        let hnsw: HNSW<DenseDataset<RabitqQuantizer<SquaredEuclideanDistance>>, Graph> =
+            build_plain::<SquaredEuclideanDistance>()
+                .convert_dataset_into_ref(RabitqConfig::default());
+
+        let query_values = query_vector::<SquaredEuclideanDistance>(0);
+        let query = DenseVectorView::new(&query_values);
+        let config = HNSWSearchConfiguration {
+            ef_search: 32,
+            early_termination: EarlyTerminationStrategy::None,
+            query_params: RabitqQueryParams { query_bits: 9 },
+        };
+
+        hnsw.search(query, 10, &config);
+    }
+
+    #[test]
+    fn rabitq_ext_search_finds_the_exact_match() {
+        let config = RabitqExtConfig {
+            total_bits: 4,
+            ..RabitqExtConfig::default()
+        };
+        let hnsw: HNSW<DenseDataset<RabitqExtQuantizer<SquaredEuclideanDistance>>, Graph> =
+            build_plain::<SquaredEuclideanDistance>().convert_dataset_into_ref(config);
+
+        let query_values = query_vector::<SquaredEuclideanDistance>(37);
+        let query = DenseVectorView::new(&query_values);
+        // RaBitQ-ext takes no query-side parameters, so the default `()` config is enough.
+        let search_config = HNSWSearchConfiguration::default().with_ef_search(100);
+
+        let results = hnsw.search(query, 10, &search_config);
+
+        assert_eq!(results.len(), 10);
+        assert!(
+            results.iter().any(|r| r.vector == 37),
+            "the query is dataset vector 37 verbatim, but it is not in the top-10: {:?}",
+            results.iter().map(|r| r.vector).collect::<Vec<_>>()
+        );
     }
 }

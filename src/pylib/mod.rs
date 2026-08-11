@@ -1,3 +1,16 @@
+//! Python bindings.
+//!
+//! Two clippy lints are allowed module-wide rather than at ~35 individual sites:
+//!
+//! * `too_many_arguments` — every `#[pyfunction]`/`#[pymethods]` signature here mirrors the
+//!   Python-facing keyword arguments one-for-one. Bundling them into a struct would change
+//!   the Python API to satisfy a Rust lint.
+//! * `type_complexity` — the binding layer names fully monomorphized index types
+//!   (`HNSW<DenseDataset<ProductQuantizer<M, D>>, GenericGraph<Ndst>>` and friends) in enum
+//!   variants covering every encoder/graph combination. The types are long because they are
+//!   explicit, which is the point of the enum dispatch.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use std::f32;
 
 use crate::graph::Graph;
@@ -1280,17 +1293,17 @@ fn build_sparse_dotvbyte_inner(
     match gt {
         GraphTypeKind::Standard => {
             let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-                plain_hnsw.convert_dataset_into();
+                plain_hnsw.convert_dataset_into(());
             SparseDotVByteHNSWEnum::Plain(packed)
         }
         GraphTypeKind::Permuted => {
             let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-                plain_hnsw.convert_dataset_into();
+                plain_hnsw.convert_dataset_into(());
             SparseDotVByteHNSWEnum::Plain(packed.permute_and_encode::<PlainNeighbors>())
         }
         GraphTypeKind::Compressed => {
             let packed: HNSW<PackedSparseDataset<DotVByteFixedU8Encoder>, Graph> =
-                plain_hnsw.convert_dataset_into();
+                plain_hnsw.convert_dataset_into(());
             SparseDotVByteHNSWEnum::StreamVByte(packed.permute_and_encode::<StreamVByteNeighbors>())
         }
     }
@@ -1621,13 +1634,13 @@ impl SparseFixedU8HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::Euclidean(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -1636,7 +1649,7 @@ impl SparseFixedU8HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::EuclideanStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -1654,13 +1667,13 @@ impl SparseFixedU8HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::DotProduct(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -1669,7 +1682,7 @@ impl SparseFixedU8HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::DotProductStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -1723,13 +1736,13 @@ impl SparseFixedU8HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                        SparseFixedU8HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::Euclidean(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -1738,7 +1751,7 @@ impl SparseFixedU8HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::EuclideanStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -1755,13 +1768,13 @@ impl SparseFixedU8HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                        SparseFixedU8HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::DotProduct(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -1770,7 +1783,7 @@ impl SparseFixedU8HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU8Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU8HNSWEnum::DotProductStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -2066,13 +2079,13 @@ impl SparseFixedU16HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::Euclidean(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -2081,7 +2094,7 @@ impl SparseFixedU16HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::EuclideanStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -2099,13 +2112,13 @@ impl SparseFixedU16HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::DotProduct(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -2114,7 +2127,7 @@ impl SparseFixedU16HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::DotProductStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -2168,13 +2181,13 @@ impl SparseFixedU16HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into())
+                        SparseFixedU16HNSWEnum::Euclidean(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::Euclidean(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -2183,7 +2196,7 @@ impl SparseFixedU16HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, SquaredEuclideanDistance>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::EuclideanStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -2200,13 +2213,13 @@ impl SparseFixedU16HNSW {
                 let plain_hnsw: HNSW<_, Graph> = HNSW::build_index(dataset, &config);
                 match gt {
                     GraphTypeKind::Standard => {
-                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into())
+                        SparseFixedU16HNSWEnum::DotProduct(plain_hnsw.convert_dataset_into(()))
                     }
                     GraphTypeKind::Permuted => {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::DotProduct(
                             converted.permute_and_encode::<PlainNeighbors>(),
                         )
@@ -2215,7 +2228,7 @@ impl SparseFixedU16HNSW {
                         let converted: HNSW<
                             ScalarSparseDataset<u16, f32, FixedU16Q, DotProduct>,
                             Graph,
-                        > = plain_hnsw.convert_dataset_into();
+                        > = plain_hnsw.convert_dataset_into(());
                         SparseFixedU16HNSWEnum::DotProductStreamVByte(
                             converted.permute_and_encode::<StreamVByteNeighbors>(),
                         )
@@ -2515,8 +2528,8 @@ fn build_pq_l2<const M: usize>(
 where
     DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
         Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
-    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
-        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    for<'a> DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, SquaredEuclideanDistance>, Config = ()>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
         DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, SquaredEuclideanDistance>:
@@ -2525,7 +2538,7 @@ where
         vectorium::distances::Distance,
 {
     let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-    plain_index.convert_dataset_into()
+    plain_index.convert_dataset_into_ref(())
 }
 
 /// Builds an EGB-permuted PQ-quantized dense HNSW, recompressed into `Ndst`
@@ -2538,8 +2551,8 @@ where
     Ndst: Neighbors + From<NeighborData>,
     DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
         Dataset<Encoder = ProductQuantizer<M, SquaredEuclideanDistance>>,
-    DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
-        ConvertFrom<PlainDenseDataset<f32, SquaredEuclideanDistance>>,
+    for<'a> DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, SquaredEuclideanDistance>, Config = ()>,
     // `permute_and_encode` hands the permuted dataset back as `Owned`; restated here because the
     // compiler cannot normalize `Owned = Self` through the generic parameter (see
     // `build_permuted_and_save` in `src/bin/hnsw_build.rs`).
@@ -2555,7 +2568,7 @@ where
     // Quantize before permuting, never after — see `build_permuted_and_save`.
     let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
     let converted: HNSW<DenseDataset<ProductQuantizer<M, SquaredEuclideanDistance>>, Graph> =
-        plain_index.convert_dataset_into();
+        plain_index.convert_dataset_into_ref(());
     converted.permute_and_encode::<Ndst>()
 }
 
@@ -2567,13 +2580,14 @@ fn build_pq_ip<const M: usize>(
 where
     DenseDataset<ProductQuantizer<M, DotProduct>>:
         Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
-    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>,
     ProductQuantizer<M, DotProduct>: VectorEncoder<Distance = DotProduct>,
     <ProductQuantizer<M, DotProduct> as VectorEncoder>::Distance: vectorium::distances::Distance,
 {
     let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
-    plain_index.convert_dataset_into()
+    plain_index.convert_dataset_into_ref(())
 }
 
 /// Builds an EGB-permuted PQ-quantized dense HNSW, recompressed into `Ndst`
@@ -2586,7 +2600,8 @@ where
     Ndst: Neighbors + From<NeighborData>,
     DenseDataset<ProductQuantizer<M, DotProduct>>:
         Dataset<Encoder = ProductQuantizer<M, DotProduct>>,
-    DenseDataset<ProductQuantizer<M, DotProduct>>: ConvertFrom<PlainDenseDataset<f32, DotProduct>>,
+    for<'a> DenseDataset<ProductQuantizer<M, DotProduct>>:
+        ConvertFrom<&'a PlainDenseDataset<f32, DotProduct>, Config = ()>,
     // `permute_and_encode` hands the permuted dataset back as `Owned`; restated here because the
     // compiler cannot normalize `Owned = Self` through the generic parameter (see
     // `build_permuted_and_save` in `src/bin/hnsw_build.rs`).
@@ -2599,7 +2614,7 @@ where
     // Quantize before permuting, never after — see `build_permuted_and_save`.
     let plain_index: HNSW<_, Graph> = HNSW::build_index(dataset, config);
     let converted: HNSW<DenseDataset<ProductQuantizer<M, DotProduct>>, Graph> =
-        plain_index.convert_dataset_into();
+        plain_index.convert_dataset_into_ref(());
     converted.permute_and_encode::<Ndst>()
 }
 
@@ -4054,6 +4069,7 @@ impl SparseMultivecRerankIndex {
             k_candidates,
             k,
             &search_config,
+            &(),
             alpha,
             beta,
         );
@@ -4146,6 +4162,7 @@ impl SparseMultivecRerankIndex {
                 k_candidates,
                 k,
                 &search_config,
+                &(),
                 alpha,
                 beta,
             );
@@ -4525,6 +4542,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 k_candidates,
                 k,
                 &search_config,
+                &(),
                 alpha,
                 beta,
             ),
@@ -4534,6 +4552,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 k_candidates,
                 k,
                 &search_config,
+                &(),
                 alpha,
                 beta,
             ),
@@ -4543,6 +4562,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 k_candidates,
                 k,
                 &search_config,
+                &(),
                 alpha,
                 beta,
             ),
@@ -4552,6 +4572,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 k_candidates,
                 k,
                 &search_config,
+                &(),
                 alpha,
                 beta,
             ),
@@ -4628,6 +4649,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     k_candidates,
                     k,
                     &search_config,
+                    &(),
                     alpha,
                     beta,
                 ),
@@ -4637,6 +4659,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     k_candidates,
                     k,
                     &search_config,
+                    &(),
                     alpha,
                     beta,
                 ),
@@ -4646,6 +4669,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     k_candidates,
                     k,
                     &search_config,
+                    &(),
                     alpha,
                     beta,
                 ),
@@ -4655,6 +4679,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     k_candidates,
                     k,
                     &search_config,
+                    &(),
                     alpha,
                     beta,
                 ),

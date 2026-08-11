@@ -95,6 +95,7 @@ impl MakeParams<DQ_SE> for FlatIndex<DQ_SE> {
         IVFSearchParams {
             nprobe,
             centroid_search_params: (),
+            cluster_query_params: (),
         }
     }
 }
@@ -113,6 +114,7 @@ impl MakeParams<DQ_SE> for HNSW<DQ_SE, Graph> {
         IVFSearchParams {
             nprobe,
             centroid_search_params: cfg,
+            cluster_query_params: (),
         }
     }
 }
@@ -121,6 +123,7 @@ impl MakeParams<DQ_DP> for FlatIndex<DQ_DP> {
         IVFSearchParams {
             nprobe,
             centroid_search_params: (),
+            cluster_query_params: (),
         }
     }
 }
@@ -139,6 +142,7 @@ impl MakeParams<DQ_DP> for HNSW<DQ_DP, Graph> {
         IVFSearchParams {
             nprobe,
             centroid_search_params: cfg,
+            cluster_query_params: (),
         }
     }
 }
@@ -229,7 +233,7 @@ where
     for<'q> CI: Index<Query<'q> = <DQ::Encoder as VectorEncoder>::QueryVector<'q>>,
     IVF<DQ, DC, CI>: IndexSerializer,
     <DQ::Encoder as VectorEncoder>::Distance: ReportedMetric,
-    DC::Encoder: VectorEncoder<Distance = DotProduct>,
+    DC::Encoder: VectorEncoder<Distance = DotProduct, QueryParams = ()>,
     for<'q> <DQ::Encoder as VectorEncoder>::QueryVector<'q>: From<DenseVectorView<'q, f32>>
         + Into<<DC::Encoder as VectorEncoder>::QueryVector<'q>>
         + Copy,
@@ -261,7 +265,7 @@ where
         + for<'de> serde::Deserialize<'de>,
     IVF<DQ, DenseDataset<ProductQuantizer<M, DotProduct>>, CI>: IndexSerializer,
     ProductQuantizer<M, DotProduct>: DenseVectorEncoder<InputValueType = f32, OutputValueType = u8>
-        + VectorEncoder<Distance = DotProduct>,
+        + VectorEncoder<Distance = DotProduct, QueryParams = ()>,
     for<'q> <DQ::Encoder as VectorEncoder>::QueryVector<'q>: From<DenseVectorView<'q, f32>>
         + Into<<ProductQuantizer<M, DotProduct> as VectorEncoder>::QueryVector<'q>>
         + Copy,
@@ -299,7 +303,7 @@ fn search_loop<DQ, DC, CI>(
     CI: Index,
     for<'q> CI: Index<Query<'q> = <DQ::Encoder as VectorEncoder>::QueryVector<'q>>,
     <DQ::Encoder as VectorEncoder>::Distance: ReportedMetric,
-    DC::Encoder: VectorEncoder<Distance = DotProduct>,
+    DC::Encoder: VectorEncoder<Distance = DotProduct, QueryParams = ()>,
     for<'q> <DQ::Encoder as VectorEncoder>::QueryVector<'q>: From<DenseVectorView<'q, f32>>
         + Into<<DC::Encoder as VectorEncoder>::QueryVector<'q>>
         + Copy,

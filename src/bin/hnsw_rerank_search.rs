@@ -548,7 +548,7 @@ fn create_search_config(args: &Args) -> HNSWSearchConfiguration {
             let lambda = args.lambda.unwrap_or(0.0);
             EarlyTerminationStrategy::DistanceAdaptive { lambda }
         }
-        "none" | _ => EarlyTerminationStrategy::None,
+        _ => EarlyTerminationStrategy::None,
     };
 
     HNSWSearchConfiguration::default()
@@ -715,6 +715,7 @@ where
                 args.k_candidates,
                 args.k,
                 &search_config,
+                &(),
                 args.alpha,
                 args.beta,
             );
@@ -785,6 +786,7 @@ where
                 args.k_candidates,
                 args.k,
                 &search_config,
+                &(),
                 args.alpha,
                 args.beta,
             );
@@ -849,6 +851,7 @@ where
                 args.k_candidates,
                 args.k,
                 &search_config,
+                &(),
                 args.alpha,
                 args.beta,
             );
@@ -919,6 +922,7 @@ where
                 args.k_candidates,
                 args.k,
                 &search_config,
+                &(),
                 args.alpha,
                 args.beta,
             );

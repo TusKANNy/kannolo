@@ -332,6 +332,7 @@ pub trait GraphTrait {
     /// * `lambda` – Relaxation parameter for adaptive early stopping (`0.0` = standard HNSW).
     /// * `predicate` – Called with the **external** vector ID; returns `true` for eligible vectors.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn acorn_search_candidates_filtered<'e, D, F>(
         &self,
         dataset: &'e D,
@@ -474,6 +475,7 @@ pub trait GraphTrait {
     /// # Arguments
     /// Same as [`acorn_search_candidates_filtered`].
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn acorn_gamma_search_filtered<'e, D, F>(
         &self,
         dataset: &'e D,
@@ -686,7 +688,7 @@ mod tests {
         // Query at 10.0 — true nearest neighbour is node 10 (distance 0).
         let query_val = [10.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(0));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
@@ -720,7 +722,7 @@ mod tests {
 
         let query_val = [5.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(0));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
@@ -759,14 +761,14 @@ mod tests {
 
         let query_val = [10.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(0));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
             vector: 0usize,
         };
 
-        let predicate = |id: usize| id % 2 == 0;
+        let predicate = |id: usize| id.is_multiple_of(2);
         let top_heap = graph
             .acorn_search_candidates_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
 
@@ -796,6 +798,7 @@ mod tests {
     /// Line graph [0 … 19].  Entry = node 0 (fails `id >= 2`).
     /// - Phase 1: neighbor 1 also fails → collected for two-hop.
     /// - Phase 2: neighbors of 1 are {0, 2}; 0 is already visited; 2 passes → admitted.
+    ///
     /// So the two-hop expansion must discover node 2 even though neither entry
     /// nor its direct neighbor satisfy the predicate.
     #[test]
@@ -814,7 +817,7 @@ mod tests {
         // Node 2 (two hops away) does satisfy it and must be found.
         let query_val = [3.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(0));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
@@ -853,7 +856,7 @@ mod tests {
 
         let query_val = [7.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(0));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
@@ -921,14 +924,14 @@ mod acorn_gamma_tests {
 
         let query_val = [10.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(10));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
             vector: 10usize,
         };
 
-        let predicate = |id: usize| id % 2 == 0;
+        let predicate = |id: usize| id.is_multiple_of(2);
         let top_heap =
             graph.acorn_gamma_search_filtered(&dataset, entry, &evaluator, ef, k, 0.0, &predicate);
 
@@ -965,7 +968,7 @@ mod acorn_gamma_tests {
 
         let query_val = [7.0f32];
         let query = DenseVectorView::new(&query_val);
-        let evaluator = dataset.encoder().query_evaluator(query);
+        let evaluator = dataset.encoder().query_evaluator(query, &());
         let entry_dist = evaluator.compute_distance(dataset.get(7));
         let entry = ScoredItemGeneric {
             distance: entry_dist,
@@ -1782,6 +1785,9 @@ impl GrowableGraph {
     /// - `Vec<(usize, Vec<usize>)>`: The pre-computed reverse links for existing neighbors.
     /// - `ScoredItemGeneric`: The best candidate found, to be used as the entry point for the next lower level.
     #[must_use]
+    // The three components are documented above; a single-use alias would only move the
+    // type away from the signature that explains it.
+    #[allow(clippy::type_complexity)]
     pub fn find_and_prune_neighbors<'e, D>(
         &self,
         dataset: &'e D,

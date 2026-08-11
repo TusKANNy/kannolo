@@ -18,7 +18,8 @@ use vectorium::encoders::sparse_scalar::ScalarSparseSupportedDistance;
 use vectorium::readers::{read_npy_f32, read_seismic_format};
 use vectorium::{
     Dataset, DenseDataset, FixedU8Q, FixedU16Q, PackedSparseDataset, PlainDenseDataset,
-    PlainSparseDataset, ScalarSparseDataset,
+    PlainSparseDataset, RabitqExtQuantizer, RabitqQuantizer, RabitqQueryParams,
+    RabitqSupportedDistance, ScalarSparseDataset,
 };
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -52,7 +53,7 @@ impl std::fmt::Display for ValueTypeArg {
 }
 
 /// Encoder type.
-/// Dense: `plain`, `pq`.
+/// Dense: `plain`, `pq`, `rabitq`, `rabitq-ext`.
 /// Sparse: `plain`, `dotvbyte`.
 #[derive(Debug, Clone, ValueEnum, Default)]
 enum EncoderType {
@@ -60,6 +61,10 @@ enum EncoderType {
     Plain,
     Pq,
     Dotvbyte,
+    /// RaBitQ: 1-bit-per-component document codes, `--query-bits` per query component.
+    Rabitq,
+    /// Extended RaBitQ: multi-bit document codes. The code width is stored in the index.
+    RabitqExt,
 }
 
 impl std::fmt::Display for EncoderType {
@@ -68,6 +73,8 @@ impl std::fmt::Display for EncoderType {
             EncoderType::Plain => write!(f, "plain"),
             EncoderType::Pq => write!(f, "pq"),
             EncoderType::Dotvbyte => write!(f, "dotvbyte"),
+            EncoderType::Rabitq => write!(f, "rabitq"),
+            EncoderType::RabitqExt => write!(f, "rabitq-ext"),
         }
     }
 }
@@ -159,7 +166,7 @@ struct Args {
     #[arg(default_value_t = ComponentTypeArg::U16)]
     component_type: ComponentTypeArg,
 
-    /// Encoder type. Dense: plain, pq. Sparse: plain, dotvbyte.
+    /// Encoder type. Dense: plain, pq, rabitq, rabitq-ext. Sparse: plain, dotvbyte.
     #[clap(long, value_enum)]
     #[arg(default_value_t = EncoderType::Plain)]
     encoder: EncoderType,
@@ -203,6 +210,14 @@ struct Args {
     #[clap(long, value_parser)]
     #[arg(default_value_t = 1)]
     num_runs: usize,
+
+    /// Bits per component used to scalar-quantize the *query* for `--encoder rabitq`
+    /// (1..=8; 1 is a plain sign query). This is a query-side knob only: it is not baked
+    /// into the index, so one index serves every setting. Ignored by other encoders,
+    /// including rabitq-ext, whose query width follows the stored code width.
+    #[clap(long, value_parser)]
+    #[arg(default_value_t = 1)]
+    query_bits: u32,
 }
 
 fn main() {
@@ -212,6 +227,10 @@ fn main() {
     match (&args.dataset_type, &args.encoder) {
         (DatasetType::Sparse, EncoderType::Pq) => {
             eprintln!("Error: PQ encoder is only available for dense vectors.");
+            std::process::exit(1);
+        }
+        (DatasetType::Sparse, EncoderType::Rabitq | EncoderType::RabitqExt) => {
+            eprintln!("Error: RaBitQ encoders are only available for dense vectors.");
             std::process::exit(1);
         }
         (DatasetType::Dense, EncoderType::Dotvbyte) => {
@@ -287,6 +306,31 @@ fn main() {
         }
         (DatasetType::Dense, EncoderType::Pq, _, GraphType::Streamvbyte) => {
             search_dense_pq::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
+        // Dense RaBitQ
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::Standard | GraphType::Permuted) => {
+            search_dense_rabitq::<Graph<PlainNeighbors>>(&args, metric);
+        }
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::FixedDegree) => {
+            search_dense_rabitq::<GraphFixedDegree>(&args, metric);
+        }
+        (DatasetType::Dense, EncoderType::Rabitq, _, GraphType::Streamvbyte) => {
+            search_dense_rabitq::<Graph<StreamVByteNeighbors>>(&args, metric);
+        }
+        // Dense RaBitQ-ext
+        (
+            DatasetType::Dense,
+            EncoderType::RabitqExt,
+            _,
+            GraphType::Standard | GraphType::Permuted,
+        ) => {
+            search_dense_rabitq_ext::<Graph<PlainNeighbors>>(&args, metric);
+        }
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::FixedDegree) => {
+            search_dense_rabitq_ext::<GraphFixedDegree>(&args, metric);
+        }
+        (DatasetType::Dense, EncoderType::RabitqExt, _, GraphType::Streamvbyte) => {
+            search_dense_rabitq_ext::<Graph<StreamVByteNeighbors>>(&args, metric);
         }
         // Sparse plain f16
         (
@@ -386,6 +430,7 @@ fn main() {
         // Unreachable: caught by earlier validation
         (DatasetType::Dense, EncoderType::Dotvbyte, _, _)
         | (DatasetType::Sparse, EncoderType::Pq, _, _)
+        | (DatasetType::Sparse, EncoderType::Rabitq | EncoderType::RabitqExt, _, _)
         | (
             DatasetType::Dense,
             EncoderType::Plain,
@@ -397,7 +442,132 @@ fn main() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RaBitQ
+// ---------------------------------------------------------------------------
+
+fn search_dense_rabitq<G>(args: &Args, metric: DistanceKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        DistanceKind::Euclidean => {
+            search_dense_rabitq_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
+        DistanceKind::DotProduct => search_dense_rabitq_with_distance::<DotProduct, G>(args),
+    }
+}
+
+/// The only search path that passes non-unit query parameters: `--query-bits` reaches
+/// `RabitqQuantizer::query_evaluator` through `HNSWSearchConfiguration::query_params`.
+fn search_dense_rabitq_with_distance<D, G>(args: &Args)
+where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    if !(1..=8).contains(&args.query_bits) {
+        eprintln!(
+            "Error: --query-bits must be in 1..=8, got {}.",
+            args.query_bits
+        );
+        std::process::exit(1);
+    }
+
+    let queries = read_npy_queries::<D>(&args.query_file);
+    let num_queries = queries.len();
+    let index: HNSW<DenseDataset<RabitqQuantizer<D>>, G> =
+        <HNSW<DenseDataset<RabitqQuantizer<D>>, G> as IndexSerializer>::load_index(
+            &args.index_file,
+        )
+        .unwrap();
+    let config = create_search_config_with_params(args, RabitqQueryParams::new(args.query_bits));
+
+    let mut total_time_search = 0u128;
+    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
+
+    for _ in 0..args.num_runs {
+        for query in queries.iter() {
+            let start_time = Instant::now();
+            let res = index.search(query, args.k, &config);
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
+            total_time_search += start_time.elapsed().as_micros();
+        }
+    }
+
+    let avg_time_search_per_query = total_time_search / (num_queries * args.num_runs) as u128;
+    println!("[######] Average Query Time: {avg_time_search_per_query} \u{3bc}s");
+
+    index.print_space_usage_bytes();
+
+    if let Some(output_path) = &args.output_path {
+        write_results_to_file(output_path, &results, args.k);
+    }
+}
+
+fn search_dense_rabitq_ext<G>(args: &Args, metric: DistanceKind)
+where
+    G: GraphBound,
+{
+    match metric {
+        DistanceKind::Euclidean => {
+            search_dense_rabitq_ext_with_distance::<SquaredEuclideanDistance, G>(args)
+        }
+        DistanceKind::DotProduct => search_dense_rabitq_ext_with_distance::<DotProduct, G>(args),
+    }
+}
+
+/// RaBitQ-ext takes no query-side parameters: the query width follows the document code
+/// width, which is baked into the stored encoder.
+fn search_dense_rabitq_ext_with_distance<D, G>(args: &Args)
+where
+    D: RabitqSupportedDistance + ScalarDenseSupportedDistance + Distance,
+    G: GraphBound,
+{
+    let queries = read_npy_queries::<D>(&args.query_file);
+    let num_queries = queries.len();
+    let index: HNSW<DenseDataset<RabitqExtQuantizer<D>>, G> =
+        <HNSW<DenseDataset<RabitqExtQuantizer<D>>, G> as IndexSerializer>::load_index(
+            &args.index_file,
+        )
+        .unwrap();
+    let config = create_search_config(args);
+
+    let mut total_time_search = 0u128;
+    let mut results = Vec::<(f32, usize)>::with_capacity(num_queries * args.k);
+
+    for _ in 0..args.num_runs {
+        for query in queries.iter() {
+            let start_time = Instant::now();
+            let res = index.search(query, args.k, &config);
+            results.extend(
+                res.into_iter()
+                    .map(|scored| (scored.distance.distance(), scored.vector as usize)),
+            );
+            total_time_search += start_time.elapsed().as_micros();
+        }
+    }
+
+    let avg_time_search_per_query = total_time_search / (num_queries * args.num_runs) as u128;
+    println!("[######] Average Query Time: {avg_time_search_per_query} \u{3bc}s");
+
+    index.print_space_usage_bytes();
+
+    if let Some(output_path) = &args.output_path {
+        write_results_to_file(output_path, &results, args.k);
+    }
+}
+
 fn create_search_config(args: &Args) -> HNSWSearchConfiguration {
+    create_search_config_with_params(args, ())
+}
+
+/// The same graph-side configuration, carrying `query_params` for encoders that take
+/// query-side configuration. The index's `SearchParams` pins `P` to its encoder's
+/// `QueryParams`, so a mismatched setting is a compile error rather than a silent no-op.
+fn create_search_config_with_params<P>(args: &Args, query_params: P) -> HNSWSearchConfiguration<P> {
     let early_termination = match args.early_termination {
         EarlyTerminationMethod::None => EarlyTerminationStrategy::None,
         EarlyTerminationMethod::DistanceAdaptive => EarlyTerminationStrategy::DistanceAdaptive {
@@ -405,9 +575,13 @@ fn create_search_config(args: &Args) -> HNSWSearchConfiguration {
         },
     };
 
-    HNSWSearchConfiguration::default()
-        .with_ef_search(args.ef_search)
-        .with_early_termination(early_termination)
+    // Built by hand rather than from `default()`: `P` is not known to be `Default` here,
+    // and `query_params` supplies it anyway.
+    HNSWSearchConfiguration {
+        ef_search: args.ef_search,
+        early_termination,
+        query_params,
+    }
 }
 
 fn search_dense_plain_f32<G>(args: &Args, metric: DistanceKind)

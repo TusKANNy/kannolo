@@ -642,8 +642,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], topk_query[i]);
+        for (i, want) in topk_query.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 
@@ -666,8 +666,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], expected[i]);
+        for (i, want) in expected.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 
@@ -697,8 +697,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], expected[i]);
+        for (i, want) in expected.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 
@@ -719,8 +719,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], topk_query[i]);
+        for (i, want) in topk_query.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 
@@ -743,8 +743,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], expected[i]);
+        for (i, want) in expected.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 
@@ -772,8 +772,8 @@ mod tests_insert_into_topk {
 
         let start_index = index * k;
 
-        for i in 0..k {
-            assert_eq!(topk.lock().unwrap()[i + start_index], topk_query[i]);
+        for (i, want) in topk_query.iter().enumerate().take(k) {
+            assert_eq!(&topk.lock().unwrap()[i + start_index], want);
         }
     }
 

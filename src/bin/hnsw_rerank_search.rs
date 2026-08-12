@@ -81,6 +81,12 @@ struct Args {
     #[clap(long, value_parser)]
     beta: Option<usize>,
 
+    /// Score candidates by the sum of first-stage and rerank scores (residual reranking).
+    /// Only meaningful when the two scores are summable, e.g. the rerank dataset holds the
+    /// residual part of a decomposed representation.
+    #[clap(long, action)]
+    residuals: bool,
+
     /// Early termination strategy for first-stage search ("none", "distance-adaptive", etc).
     #[clap(long, value_parser)]
     #[arg(default_value_t = String::from("none"))]
@@ -718,6 +724,7 @@ where
                 &(),
                 args.alpha,
                 args.beta,
+                args.residuals,
             );
 
             results.extend(
@@ -789,6 +796,7 @@ where
                 &(),
                 args.alpha,
                 args.beta,
+                args.residuals,
             );
 
             results.extend(
@@ -854,6 +862,7 @@ where
                 &(),
                 args.alpha,
                 args.beta,
+                args.residuals,
             );
 
             results.extend(
@@ -925,6 +934,7 @@ where
                 &(),
                 args.alpha,
                 args.beta,
+                args.residuals,
             );
 
             results.extend(

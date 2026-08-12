@@ -4029,10 +4029,13 @@ impl SparseMultivecRerankIndex {
     /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
     /// * `beta` – Beta parameter for early exit. Default: None.
     /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    /// * `residuals` – Score candidates by the sum of first-stage and rerank scores instead of the
+    ///   rerank score alone. Only meaningful when the two scores are summable (e.g. the rerank
+    ///   dataset holds the residual part of a decomposed representation). Default: False.
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
-    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, residuals=false))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
@@ -4046,6 +4049,7 @@ impl SparseMultivecRerankIndex {
         alpha: Option<f32>,
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
+        residuals: bool,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -4072,6 +4076,7 @@ impl SparseMultivecRerankIndex {
             &(),
             alpha,
             beta,
+            residuals,
         );
 
         let mut distances = Vec::with_capacity(k);
@@ -4107,10 +4112,13 @@ impl SparseMultivecRerankIndex {
     /// * `beta` – Beta parameter for early exit. Default: None.
     /// * `early_exit_threshold` – Lambda for early termination. Default: None.
     /// * `num_threads` – Threading model (see above). Default: 0 (all cores).
+    /// * `residuals` – Score candidates by the sum of first-stage and rerank scores instead of the
+    ///   rerank score alone. Only meaningful when the two scores are summable (e.g. the rerank
+    ///   dataset holds the residual part of a decomposed representation). Default: False.
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of total length ≤ `num_queries × k`.
-    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0))]
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0, residuals=false))]
     pub fn batch_search(
         &self,
         py: Python<'_>,
@@ -4127,6 +4135,7 @@ impl SparseMultivecRerankIndex {
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
         num_threads: usize,
+        residuals: bool,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -4165,6 +4174,7 @@ impl SparseMultivecRerankIndex {
                 &(),
                 alpha,
                 beta,
+                residuals,
             );
             let mut distances = Vec::with_capacity(k);
             let mut ids = Vec::with_capacity(k);
@@ -4501,10 +4511,13 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
     /// * `alpha` – Alpha parameter for candidate pruning (0-1). Default: None.
     /// * `beta` – Beta parameter for early exit. Default: None.
     /// * `early_exit_threshold` – Lambda for early termination. Default: None.
+    /// * `residuals` – Score candidates by the sum of first-stage and rerank scores instead of the
+    ///   rerank score alone. Only meaningful when the two scores are summable (e.g. the rerank
+    ///   dataset holds the residual part of a decomposed representation). Default: False.
     ///
     /// # Returns
     /// `(distances, ids)` – two 1-D numpy arrays of length ≤ `k`.
-    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None))]
+    #[pyo3(signature = (query_components, query_values, multivec_query, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, residuals=false))]
     pub fn search(
         &self,
         query_components: PyReadonlyArray1<i32>,
@@ -4518,6 +4531,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
         alpha: Option<f32>,
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
+        residuals: bool,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -4545,6 +4559,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 &(),
                 alpha,
                 beta,
+                residuals,
             ),
             SparseMultivecTwoLevelsPQRerankIndexEnum::M16(rerank_index) => rerank_index.search(
                 sparse_query,
@@ -4555,6 +4570,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 &(),
                 alpha,
                 beta,
+                residuals,
             ),
             SparseMultivecTwoLevelsPQRerankIndexEnum::M32(rerank_index) => rerank_index.search(
                 sparse_query,
@@ -4565,6 +4581,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 &(),
                 alpha,
                 beta,
+                residuals,
             ),
             SparseMultivecTwoLevelsPQRerankIndexEnum::M64(rerank_index) => rerank_index.search(
                 sparse_query,
@@ -4575,6 +4592,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                 &(),
                 alpha,
                 beta,
+                residuals,
             ),
         };
 
@@ -4596,7 +4614,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
     /// - `1` — serial loop, no rayon involvement. Use this to reproduce single-thread
     ///   benchmarks that pin the process via `numactl --physcpubind`.
     /// - `n` — build a temporary rayon pool with `n` threads for the duration of this call.
-    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0))]
+    #[pyo3(signature = (query_components, query_values, sparse_offsets, multivec_queries, n_tokens, token_dim, k_candidates=100, k=10, ef_search=100, alpha=None, beta=None, early_exit_threshold=None, num_threads=0, residuals=false))]
     pub fn batch_search(
         &self,
         py: Python<'_>,
@@ -4613,6 +4631,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
         beta: Option<usize>,
         early_exit_threshold: Option<f32>,
         num_threads: usize,
+        residuals: bool,
     ) -> PyResult<(Py<PyArray1<f32>>, Py<PyArray1<i64>>)> {
         let comp_vec = convert_components_to_u16(query_components.as_slice()?)?;
         let query_values_slice = query_values.as_slice()?;
@@ -4652,6 +4671,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     &(),
                     alpha,
                     beta,
+                    residuals,
                 ),
                 SparseMultivecTwoLevelsPQRerankIndexEnum::M16(rerank_index) => rerank_index.search(
                     sparse_query,
@@ -4662,6 +4682,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     &(),
                     alpha,
                     beta,
+                    residuals,
                 ),
                 SparseMultivecTwoLevelsPQRerankIndexEnum::M32(rerank_index) => rerank_index.search(
                     sparse_query,
@@ -4672,6 +4693,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     &(),
                     alpha,
                     beta,
+                    residuals,
                 ),
                 SparseMultivecTwoLevelsPQRerankIndexEnum::M64(rerank_index) => rerank_index.search(
                     sparse_query,
@@ -4682,6 +4704,7 @@ impl SparseMultivecTwoLevelsPQRerankIndex {
                     &(),
                     alpha,
                     beta,
+                    residuals,
                 ),
             };
             let mut distances = Vec::with_capacity(k);

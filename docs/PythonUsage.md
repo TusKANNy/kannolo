@@ -299,8 +299,13 @@ dists, ids = index.search(
     ef_search=100,
     alpha=0.05,        # First-stage weight (optional)
     beta=2,            # Second-stage early exit (optional)
+    residuals=False,   # Sum first- and second-stage scores (optional)
 )
 ```
+
+`residuals=True` scores each candidate as `first_stage_score + rerank_score` instead of the rerank
+score alone, for setups where the rerank dataset holds the residual part of a decomposed
+representation. Nothing checks that the two scores are summable — that is on the caller.
 
 The batch form adds `sparse_offsets` and takes `multivec_queries` (plural):
 
@@ -313,6 +318,7 @@ dists, ids = index.batch_search(
     n_tokens=8, token_dim=768,
     k_candidates=25, k=10, ef_search=100,
     num_threads=0,
+    residuals=False,   # Sum first- and second-stage scores (optional)
 )
 ```
 

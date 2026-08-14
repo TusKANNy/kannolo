@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::graph::graph::Graph;
-use crate::graph::neighbors::{NeighborData, Neighbors};
+use crate::graph::neighbors::{NeighborData, Neighbors, PlainNeighbors};
 use crate::graph::{GraphTrait, GrowableGraph};
 use crate::utils::CompactArray;
 use vectorium::IndexSerializer;
@@ -17,64 +17,6 @@ use vectorium::core::index::Index;
 use vectorium::distances::Distance;
 use vectorium::vector_encoder::VectorEncoder;
 use vectorium::{Dataset, QueryEvaluator, SpaceUsage, VectorId};
-
-// ---------------------------------------------------------------------------
-// ACORN-γ pre-expanded neighbor structure
-// ---------------------------------------------------------------------------
-
-/// Pre-expanded ground-level neighbor lists for ACORN-γ filtered ANN search.
-///
-/// Built from a completed HNSW index by expanding each node's neighborhood to
-/// include two-hop candidates (neighbors of neighbors), scoring them by distance
-/// to that node, and retaining the top γ·M closest.
-///
-/// At search time, standard beam search is run over these larger lists; predicate-
-/// failing nodes are skipped without further expansion, because the two-hop
-/// connectivity is already embedded in the pre-built lists.
-///
-/// Use [`HNSW::build_acorn_gamma_neighbors`] to construct this.
-pub struct AcornGammaNeighbors {
-    /// `neighbors[v]` holds local node IDs of v's expanded neighborhood,
-    /// sorted by ascending distance to v.
-    neighbors: Box<[Box<[u32]>]>,
-    gamma_m: usize,
-}
-
-impl GraphTrait for AcornGammaNeighbors {
-    /// Hands out the stored list; `scratch` is left untouched.
-    #[inline]
-    fn neighbors<'a>(&'a self, u: usize, _scratch: &'a mut Vec<u32>) -> &'a [u32] {
-        &self.neighbors[u]
-    }
-
-    #[inline]
-    fn n_nodes(&self) -> usize {
-        self.neighbors.len()
-    }
-
-    #[inline]
-    fn n_edges(&self) -> usize {
-        self.neighbors.iter().map(|n| n.len()).sum()
-    }
-
-    #[inline]
-    fn max_degree(&self) -> usize {
-        self.gamma_m
-    }
-
-    /// Ground-level nodes use identity mapping (local ID == global ID).
-    #[inline]
-    fn get_external_id(&self, id: usize) -> usize {
-        id
-    }
-
-    fn get_space_usage_bytes(&self) -> usize {
-        self.neighbors
-            .iter()
-            .map(|n| n.len() * std::mem::size_of::<u32>())
-            .sum()
-    }
-}
 
 /// A `HNSW` struct represents a Hierarchical Navigable Small World (HNSW) graph structure that is used
 /// for approximate nearest neighbor (ANN) search.
@@ -590,22 +532,52 @@ where
     /// Build pre-expanded neighbor lists for ACORN-γ filtered search.
     ///
     /// For each ground-level node `v`, the two-hop neighborhood (direct neighbors
-    /// and their neighbors) is scored by distance to `v` and pruned to `gamma * M`
-    /// entries, sorted closest-first.
+    /// and their neighbors) is scored by distance to `v` and pruned to
+    /// `max(gamma * M, 2M)` entries, sorted closest-first.
     ///
     /// Call this **once** after the standard HNSW build, then pass the result to
-    /// [`search_filtered_gamma`] for fast predicate-aware search.
+    /// [`Self::search_filtered_gamma`] for fast predicate-aware search.
+    ///
+    /// The expanded adjacency is an ordinary [`Graph`]: it is a ground level, so local IDs are
+    /// external IDs and no ID mapping is stored, and `max_degree` is reported as the pruned-to
+    /// size above. The lists are ordered by distance rather than by ID, so the backend has to
+    /// store them verbatim — [`PlainNeighbors`] does, a delta-coded one would not.
+    ///
+    /// Three departures from ACORN-γ as published, all following from this being a pass over a
+    /// finished index rather than a modified insertion algorithm:
+    ///
+    /// 1. **Candidate pool.** ACORN-γ collects `gamma * M` candidates during insertion, from a
+    ///    metadata-agnostic search of its own graph. We take the two-hop neighborhood of a graph
+    ///    whose lists were already cut by HNSW's robust-prune heuristic, so the pool is whatever
+    ///    that heuristic left behind.
+    /// 2. **HNSW's pruning is still in effect.** ACORN replaces the RNG-approximation prune with
+    ///    its own rule precisely because a metadata-blind prune is wrong under a predicate: it
+    ///    drops `v–b` whenever some `a` is closer to `b` than `v` is, and if `a` fails the query
+    ///    predicate the path `v→a→b` that justified the drop does not exist. Both of our ACORN
+    ///    variants sit on top of a graph pruned that way.
+    /// 3. **No `M_beta` compression.** ACORN-γ keeps the nearest `M_beta` candidates verbatim and
+    ///    prunes the rest with a rule that leaves every dropped edge recoverable by a partial
+    ///    expansion at search time. We keep the nearest and drop the rest outright, so the
+    ///    expanded list is *not* a superset of the ground level: the far neighbors the robust
+    ///    prune deliberately kept for navigability are the first a distance sort discards.
     ///
     /// # Arguments
-    /// * `gamma` – Expansion factor (≥ 1). Each node stores up to `gamma * M`
-    ///   neighbors. Larger values improve recall at the cost of memory and build time.
-    pub fn build_acorn_gamma_neighbors(&self, gamma: usize) -> AcornGammaNeighbors {
+    /// * `gamma` – Expansion factor. Each node stores up to `gamma * M` neighbors, floored at
+    ///   the ground level's own `2M` bound so that a small `gamma` cannot shrink the graph it
+    ///   expands. Larger values improve recall at the cost of memory and build time; ACORN
+    ///   chooses it as the reciprocal of the smallest selectivity to be served.
+    pub fn build_acorn_gamma_neighbors(&self, gamma: usize) -> Graph<PlainNeighbors> {
         let n = self.dataset.len();
         let m = self.num_neighbors_per_vec;
-        let gamma_m = (gamma * m).max(1);
         let ground_graph = &self.levels[self.levels.len() - 1];
+        // Floored at the ground level's own degree bound (2M): `gamma * M` alone would make
+        // gamma = 1 halve the budget of the graph being expanded, and gamma = 2 merely match it.
+        // A no-op for gamma >= 2, which is the regime ACORN's gamma is chosen in.
+        let gamma_m = (gamma * m).max(ground_graph.max_degree());
 
-        let mut expanded: Vec<Box<[u32]>> = Vec::with_capacity(n);
+        let mut expanded: Vec<u32> = Vec::with_capacity(n * gamma_m);
+        let mut offsets: Vec<usize> = Vec::with_capacity(n + 1);
+        offsets.push(0);
         // Two scratches: the outer list stays alive while the inner one is produced.
         let mut outer_scratch: Vec<u32> = Vec::new();
         let mut inner_scratch: Vec<u32> = Vec::new();
@@ -646,26 +618,25 @@ where
             scored.sort_unstable_by_key(|a| a.0);
             scored.truncate(gamma_m);
 
-            expanded.push(
-                scored
-                    .into_iter()
-                    .map(|(_, u)| u as u32)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            );
+            expanded.extend(scored.into_iter().map(|(_, u)| u as u32));
+            offsets.push(expanded.len());
         }
 
-        AcornGammaNeighbors {
-            neighbors: expanded.into_boxed_slice(),
+        Graph::from_neighbor_data(
+            NeighborData {
+                data: expanded.into_boxed_slice(),
+                offsets: offsets.into_boxed_slice(),
+            },
             gamma_m,
-        }
+            None,
+        )
     }
 
     /// ACORN-γ filtered approximate nearest-neighbor search.
     ///
-    /// Unlike ACORN-1 ([`search_filtered`]), the two-hop expansion is
+    /// Unlike ACORN-1 ([`Self::search_filtered`]), the two-hop expansion is
     /// **pre-computed** at index construction time (via
-    /// [`build_acorn_gamma_neighbors`]). At search time, standard beam search
+    /// [`Self::build_acorn_gamma_neighbors`]). At search time, standard beam search
     /// runs over the pre-expanded neighbor lists; predicate-failing nodes are
     /// simply skipped — no on-the-fly two-hop expansion is needed.
     ///
@@ -676,15 +647,16 @@ where
     /// * `acorn_gamma` – Pre-built expanded neighbor lists (from `build_acorn_gamma_neighbors`).
     /// * `predicate` – `Fn(vector_id: usize) -> bool`. Only vectors satisfying
     ///   this will appear in the results.
-    pub fn search_filtered_gamma<'q, F>(
+    pub fn search_filtered_gamma<'q, N2, F>(
         &'q self,
         query: <D::Encoder as VectorEncoder>::QueryVector<'q>,
         k: usize,
         search_params: &HNSWSearchConfiguration<<D::Encoder as VectorEncoder>::QueryParams>,
-        acorn_gamma: &AcornGammaNeighbors,
+        acorn_gamma: &Graph<N2>,
         predicate: F,
     ) -> Vec<vectorium::dataset::ScoredVector<<D::Encoder as VectorEncoder>::Distance>>
     where
+        N2: Neighbors,
         F: Fn(usize) -> bool,
     {
         let query_eval = self
@@ -1722,10 +1694,8 @@ mod permute_compress_tests {
     use vectorium::distances::SquaredEuclideanDistance;
     use vectorium::encoders::dense_scalar::PlainDenseQuantizer;
 
-    type PlainHnsw = HNSW<
-        DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
-        Graph<PlainNeighbors>,
-    >;
+    type TestDataset = DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>;
+    type PlainHnsw = HNSW<TestDataset, Graph<PlainNeighbors>>;
 
     fn build_test_hnsw(n: usize, dim: usize) -> PlainHnsw {
         let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
@@ -1739,6 +1709,22 @@ mod permute_compress_tests {
             .with_num_neighbors(8)
             .with_ef_construction(40);
 
+        HNSW::build_index(dataset, &config)
+    }
+
+    /// Same dataset and parameters as [`build_test_hnsw`], built over the fixed-stride backend.
+    fn build_fixed_test_hnsw<N>(n: usize, dim: usize) -> HNSW<TestDataset, Graph<N>>
+    where
+        N: Neighbors + From<NeighborData>,
+    {
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
+        let flat: Vec<f32> = (0..n * dim)
+            .map(|i| (((i * 2654435761u64 as usize) % 1000) as f32) / 1000.0)
+            .collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(40);
         HNSW::build_index(dataset, &config)
     }
 
@@ -1772,8 +1758,35 @@ mod permute_compress_tests {
             .collect()
     }
 
-    /// The `permuted` graph type must return exactly the same results as the baseline:
-    /// reordering changes the internal node order, never the answer.
+    /// Asserts two result sets are equivalent *as answers*: identical distance at every rank,
+    /// with the identity at that rank free to differ.
+    ///
+    /// Comparing `(distance, id)` pairs instead would assert something reordering does not
+    /// promise. When two database vectors are exactly equidistant from the query, which one
+    /// enters the top-k is decided by the order the search reaches them, and that order follows
+    /// the node numbering — which reordering exists to change. The answer is equally good either
+    /// way, so the distance sequence is the invariant and the identities are not.
+    fn assert_results_equivalent(
+        tag: &str,
+        baseline: &[Vec<(SquaredEuclideanDistance, usize)>],
+        other: &[Vec<(SquaredEuclideanDistance, usize)>],
+    ) {
+        assert_eq!(baseline.len(), other.len(), "{tag}: query count differs");
+        for (q, (b, o)) in baseline.iter().zip(other).enumerate() {
+            assert_eq!(b.len(), o.len(), "{tag}: query {q} returned a different k");
+            let (b_dists, o_dists): (Vec<f32>, Vec<f32>) = (
+                b.iter().map(|(d, _)| d.distance()).collect(),
+                o.iter().map(|(d, _)| d.distance()).collect(),
+            );
+            assert_eq!(
+                b_dists, o_dists,
+                "{tag}: query {q} returned different distances"
+            );
+        }
+    }
+
+    /// The `permuted` graph type must return equivalent answers to the baseline: reordering
+    /// changes the internal node order, never the quality of the result.
     #[test]
     fn permuted_graph_matches_baseline_search_results() {
         let n = 200;
@@ -1781,13 +1794,19 @@ mod permute_compress_tests {
         let plain = build_test_hnsw(n, dim);
         let baseline = run_queries(&plain, dim, 5);
 
-        let permuted: HNSW<
-            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
-            Graph<PlainNeighbors>,
-        > = plain.permute_and_encode::<PlainNeighbors>();
+        let permuted: HNSW<TestDataset, Graph<PlainNeighbors>> =
+            plain.permute_and_encode::<PlainNeighbors>();
 
-        let permuted_results = run_queries(&permuted, dim, 5);
-        assert_eq!(baseline, permuted_results);
+        assert_results_equivalent("permuted", &baseline, &run_queries(&permuted, dim, 5));
+
+        // Sanity: the permutation actually reordered nodes, so the check above is not vacuous.
+        // Recomputed here because `permute_and_encode` runs EGB internally and does not return it.
+        let perm = egb::compute_permutation(plain.get_ground_level());
+        let identity_count = perm.iter().enumerate().filter(|&(i, &p)| i == p).count();
+        assert!(
+            identity_count < n,
+            "EGB permutation should reorder at least some nodes"
+        );
     }
 
     /// The original-ID mapping must stay bit-packed: one `usize` per node silently
@@ -1825,6 +1844,114 @@ mod permute_compress_tests {
         );
     }
 
+    /// Every backend must survive a save/load round trip with its search output intact. This
+    /// covers the serialized layout of each `Neighbors` implementation, including the
+    /// fixed-stride one, whose on-disk representation changed when it became a backend.
+    #[test]
+    fn every_backend_survives_serialization_round_trip() {
+        use crate::graph::FixedDegreeNeighbors;
+        use vectorium::IndexSerializer;
+
+        let n = 200;
+        let dim = 8;
+        let plain = build_test_hnsw(n, dim);
+        let baseline = run_queries(&plain, dim, 5);
+
+        let dir = std::env::temp_dir();
+
+        // Each backend is compared against *itself* before the round trip, so this test
+        // isolates serialization: reordering-induced tie-break differences, which the
+        // `permute_and_encode` path can produce, are not in scope here.
+        let p = dir
+            .join("kannolo_rt_plain.idx")
+            .to_str()
+            .unwrap()
+            .to_string();
+        plain.save_index(&p).unwrap();
+        let loaded: PlainHnsw = PlainHnsw::load_index(&p).unwrap();
+        assert_eq!(
+            baseline,
+            run_queries(&loaded, dim, 5),
+            "plain: round trip changed search results"
+        );
+        std::fs::remove_file(&p).ok();
+
+        let p = dir
+            .join("kannolo_rt_fixed.idx")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let fixed: HNSW<TestDataset, Graph<FixedDegreeNeighbors>> = build_fixed_test_hnsw(n, dim);
+        let fixed_before = run_queries(&fixed, dim, 5);
+        assert_eq!(
+            baseline, fixed_before,
+            "fixed backend must reproduce the plain build's results"
+        );
+        fixed.save_index(&p).unwrap();
+        let loaded: HNSW<TestDataset, Graph<FixedDegreeNeighbors>> =
+            IndexSerializer::load_index(&p).unwrap();
+        assert_eq!(
+            fixed_before,
+            run_queries(&loaded, dim, 5),
+            "fixed: round trip changed search results"
+        );
+        std::fs::remove_file(&p).ok();
+
+        let p = dir.join("kannolo_rt_svb.idx").to_str().unwrap().to_string();
+        let svb: HNSW<TestDataset, Graph<StreamVByteNeighbors>> =
+            plain.permute_and_encode::<StreamVByteNeighbors>();
+        let svb_before = run_queries(&svb, dim, 5);
+        svb.save_index(&p).unwrap();
+        let loaded: HNSW<TestDataset, Graph<StreamVByteNeighbors>> =
+            IndexSerializer::load_index(&p).unwrap();
+        assert_eq!(
+            svb_before,
+            run_queries(&loaded, dim, 5),
+            "streamvbyte: round trip changed search results"
+        );
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A delta-coded backend is reachable straight from a build, without the reordering pass:
+    /// the generic `From<GrowableGraph>` sorts the lists because `REQUIRES_SORTED` asks it to.
+    /// The resulting adjacency must be the plain one, sorted and deduplicated.
+    #[test]
+    fn build_index_into_streamvbyte_backend_matches_sorted_plain_lists() {
+        let n = 200;
+        let dim = 8;
+        let plain = build_test_hnsw(n, dim);
+
+        let encoder = PlainDenseQuantizer::<f32, SquaredEuclideanDistance>::new(dim);
+        let flat: Vec<f32> = (0..n * dim)
+            .map(|i| (((i * 2654435761u64 as usize) % 1000) as f32) / 1000.0)
+            .collect();
+        let dataset = DenseDataset::from_raw(flat.into_boxed_slice(), n, encoder);
+        let config = HNSWBuildConfiguration::default()
+            .with_num_neighbors(8)
+            .with_ef_construction(40);
+        let compressed: HNSW<
+            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
+            Graph<StreamVByteNeighbors>,
+        > = HNSW::build_index(dataset, &config);
+
+        let plain_ground = plain.get_ground_level();
+        let svb_ground = compressed.get_ground_level();
+        assert_eq!(plain_ground.n_nodes(), svb_ground.n_nodes());
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for v in 0..plain_ground.n_nodes() {
+            let mut expected: Vec<u32> = plain_ground.neighbors(v, &mut a).to_vec();
+            expected.sort_unstable();
+            expected.dedup();
+            assert_eq!(
+                expected,
+                svb_ground.neighbors(v, &mut b).to_vec(),
+                "node {v}: compressed backend must hold the sorted, deduplicated plain list"
+            );
+        }
+    }
+
     /// Same as above for the `streamvbyte` graph type: compression must be lossless
     /// with respect to the search output.
     #[test]
@@ -1834,22 +1961,30 @@ mod permute_compress_tests {
         let plain = build_test_hnsw(n, dim);
         let baseline = run_queries(&plain, dim, 5);
 
-        let compressed: HNSW<
-            DenseDataset<PlainDenseQuantizer<f32, SquaredEuclideanDistance>>,
-            Graph<StreamVByteNeighbors>,
-        > = plain.permute_and_encode::<StreamVByteNeighbors>();
+        let compressed: HNSW<TestDataset, Graph<StreamVByteNeighbors>> =
+            plain.permute_and_encode::<StreamVByteNeighbors>();
 
-        let compressed_results = run_queries(&compressed, dim, 5);
-        assert_eq!(baseline, compressed_results);
+        assert_results_equivalent("streamvbyte", &baseline, &run_queries(&compressed, dim, 5));
 
-        // Sanity: the backend is engaged and the permutation did reorder some nodes.
-        // Recomputed here because `permute_and_encode` runs EGB internally and does not return it.
-        assert!(compressed.space_usage_bytes() > 0);
-        let perm = egb::compute_permutation(plain.get_ground_level());
-        let identity_count = perm.iter().enumerate().filter(|&(i, &p)| i == p).count();
+        // Compression must be lossless on the adjacency itself, which is the property exact
+        // result equality was really reaching for: every list decodes back to the permuted
+        // plain list, so any difference above can only come from scoring, not from the graph.
+        let permuted: HNSW<TestDataset, Graph<PlainNeighbors>> =
+            plain.permute_and_encode::<PlainNeighbors>();
+        let (uncompressed_ground, compressed_ground) =
+            (permuted.get_ground_level(), compressed.get_ground_level());
+        assert_eq!(uncompressed_ground.n_nodes(), compressed_ground.n_nodes());
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for v in 0..uncompressed_ground.n_nodes() {
+            assert_eq!(
+                uncompressed_ground.neighbors(v, &mut a),
+                compressed_ground.neighbors(v, &mut b),
+                "node {v}: StreamVByte decoding must reproduce the uncompressed list"
+            );
+        }
         assert!(
-            identity_count < n,
-            "EGB permutation should reorder at least some nodes"
+            compressed_ground.get_space_usage_bytes() < uncompressed_ground.get_space_usage_bytes(),
+            "the compressed backend should use less space than the plain one"
         );
     }
 
@@ -2092,6 +2227,35 @@ mod acorn_gamma_search_tests {
                 expanded_deg >= orig_deg,
                 "node {v}: expanded {expanded_deg} < original {orig_deg}"
             );
+        }
+    }
+
+    /// gamma = 1 is the case the `2M` floor exists for: `gamma * M` alone would give every node
+    /// half the ground level's degree budget, turning the expansion into a contraction.
+    #[test]
+    fn build_acorn_gamma_neighbors_never_shrinks_below_the_ground_level() {
+        let hnsw = build_1d_hnsw(50);
+        let ground = &hnsw.levels[hnsw.levels.len() - 1];
+
+        for gamma in [1usize, 2] {
+            let acorn_gamma = hnsw.build_acorn_gamma_neighbors(gamma);
+            assert!(
+                acorn_gamma.max_degree() >= ground.max_degree(),
+                "gamma {gamma}: budget {} < ground level {}",
+                acorn_gamma.max_degree(),
+                ground.max_degree()
+            );
+
+            for v in 0..50usize {
+                let mut scratch = Vec::new();
+                let orig_deg = ground.neighbors(v, &mut scratch).len();
+                let mut gamma_scratch = Vec::new();
+                let expanded_deg = acorn_gamma.neighbors(v, &mut gamma_scratch).len();
+                assert!(
+                    expanded_deg >= orig_deg,
+                    "gamma {gamma}, node {v}: expanded {expanded_deg} < original {orig_deg}"
+                );
+            }
         }
     }
 

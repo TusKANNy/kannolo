@@ -6,8 +6,7 @@ use crate::graph::Graph;
 use crate::graph::graph::Graph as GenericGraph;
 use crate::graph::neighbors::{PlainNeighbors, StreamVByteNeighbors};
 use crate::hnsw::{
-    AcornGammaNeighbors, EarlyTerminationStrategy, HNSW, HNSWBuildConfiguration,
-    HNSWSearchConfiguration,
+    EarlyTerminationStrategy, HNSW, HNSWBuildConfiguration, HNSWSearchConfiguration,
 };
 use half::f16;
 use vectorium::IndexSerializer;
@@ -45,7 +44,7 @@ enum DensePlainHNSWEnum {
 #[pyclass]
 pub struct DensePlainHNSW {
     inner: DensePlainHNSWEnum,
-    acorn_gamma: Option<AcornGammaNeighbors>,
+    acorn_gamma: Option<Graph>,
 }
 
 #[pymethods]

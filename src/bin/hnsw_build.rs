@@ -5,7 +5,8 @@ use half::f16;
 use serde::{Deserialize, Serialize};
 use std::process;
 
-use kannolo::graph::graph::{Graph, GraphFixedDegree, GrowableGraph};
+use kannolo::graph::GraphFixedDegree;
+use kannolo::graph::graph::{Graph, GrowableGraph};
 use kannolo::graph::neighbors::{
     MAX_NEIGHBORS_PER_NODE, NeighborData, Neighbors, PlainNeighbors, StreamVByteNeighbors,
 };

@@ -26,7 +26,7 @@ The CLI and the Python API name these differently: the CLI names the *storage fo
 
 All four return identical search results. They differ only in index size and query speed.
 
-`fixed-degree` is unrelated to compression — it pre-dates this feature and trades some space for simpler/faster access patterns.
+`fixed-degree` is a third neighbor-storage backend alongside plain and StreamVByte, one that pads every node's list to a common stride so a list can be located without an offsets array. 
 
 The EGB reordering is worth having on its own: it clusters nodes that are traversed together, so a beam search touches fewer cache lines and **queries get faster**. That is what `permuted` gives you. Any reordered index also stores a ground-level inverse permutation so results come back as original dataset IDs, which costs about `ceil(log2(n))` bits per vector — so `permuted` comes out marginally *larger* than `standard`, and it buys query speed rather than space.
 
@@ -106,9 +106,13 @@ StreamVByte blocks support adjacency lists of **at most 256 neighbors per node**
 
 Both front ends check this before building rather than letting it fail at the end: the CLI exits with an error, and Python raises `ValueError` from the build call.
 
-## Index format break
+## Index format breaks
 
-Permuted indexes carry a ground-level inverse permutation that the serialized `HNSW` did not previously have. Indexes are encoded with bincode's fixed-int configuration, which is positional and not self-describing, so this is a **hard format break in both directions**: index files written before this change cannot be loaded, and any index saved from this version cannot be read by an older build. Both fail with a decode error. Rebuild your indexes after upgrading — this applies to every graph type, not just `permuted`/`streamvbyte`.
+Indexes are encoded with bincode's fixed-int configuration, which is positional and not self-describing: any change to a serialized struct's fields is a hard break in both directions, failing with a decode error rather than a diagnosable message. Two such breaks have happened.
+
+**When permutation landed (0.8.0).** Permuted indexes carry a ground-level inverse permutation that the serialized `HNSW` did not previously have. This broke every graph type, not just `permuted`/`streamvbyte`.
+
+**When fixed-degree became a backend (0.10.0).** `GraphFixedDegree` used to be its own type with its own storage and its own ID mapping; it is now `Graph<FixedDegreeNeighbors>`, so its serialized layout is the one every other graph type already used. **Only `fixed-degree` indexes are affected** — files written by 0.9.2 as `standard`, `permuted`, or `streamvbyte` still load, since the `HNSW` and `Graph` structs are byte-for-byte the same as before. Rebuild any `fixed-degree` index.
 
 The same non-self-describing format is why `load` cannot infer `graph_type` (or `metric`) and why passing the wrong one fails inside the decoder. The Python `load` wraps that failure with a message naming both as the likely cause.
 

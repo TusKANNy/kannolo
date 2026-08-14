@@ -5,7 +5,8 @@ use clap::{Parser, ValueEnum};
 use half::f16;
 use std::fs::File;
 
-use kannolo::graph::graph::{Graph, GraphFixedDegree, GraphTrait};
+use kannolo::graph::GraphFixedDegree;
+use kannolo::graph::graph::{Graph, GraphTrait};
 use kannolo::graph::neighbors::{PlainNeighbors, StreamVByteNeighbors};
 use kannolo::hnsw::{EarlyTerminationStrategy, HNSW, HNSWSearchConfiguration};
 use vectorium::IndexSerializer;

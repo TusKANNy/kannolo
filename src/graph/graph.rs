@@ -1,14 +1,13 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use optional::Optioned;
 use serde::{Deserialize, Serialize};
 use vectorium::core::dataset::ScoredItemGeneric;
 use vectorium::distances::Distance;
 use vectorium::vector_encoder::{QueryEvaluator, VectorEncoder};
 use vectorium::{Dataset, VectorId};
 
-use crate::graph::neighbors::{NeighborData, Neighbors, PlainNeighbors};
+use crate::graph::neighbors::{NeighborData, Neighbors};
 use crate::hnsw_utils::from_max_heap_to_min_heap;
 use crate::utils::{CompactArray, invert_mapping, validate_permutation};
 use crate::visited_set::create_visited_set;
@@ -323,6 +322,20 @@ pub trait GraphTrait {
     /// two-hop neighbor expansion: when a direct neighbor does not satisfy the predicate,
     /// its own neighbors are also inspected ("jumping over" non-matching nodes).
     ///
+    /// This expansion is *conditional*, where ACORN-1 as published expands every visited node's
+    /// list in full — all one-hop and two-hop neighbors — and truncates the filtered result to
+    /// `M`. A passing neighbor enters the frontier and is expanded on its own turn, so it is a
+    /// failing neighbor, never expanded, whose connectivity has to be restored here. The two are
+    /// not equivalent: a passing neighbor the beam never pops has its own neighbors reached by
+    /// the published form and not by this one. Nothing is truncated to `M` either, so the beam
+    /// width alone bounds the work.
+    ///
+    /// The index underneath also differs. Published ACORN-1 is ACORN-γ's construction at
+    /// `gamma = 1, M_beta = M`, i.e. each node keeps its `M` nearest candidates and HNSW's
+    /// RNG-approximation prune is not applied — ACORN argues that prune is unsound under a
+    /// predicate, since it drops `v–b` on the strength of a path `v→a→b` that disappears when
+    /// `a` fails the filter. This runs over an ordinary robust-pruned index instead.
+    ///
     /// # Arguments
     /// * `dataset` – Dataset containing the raw vectors.
     /// * `entry_node` – `(distance, local_id)` starting point for the search.
@@ -466,14 +479,14 @@ pub trait GraphTrait {
 
     /// ACORN-γ filtered search on a pre-expanded neighbor graph.
     ///
-    /// Unlike [`acorn_search_candidates_filtered`], this method performs **no two-hop
-    /// expansion** at query time. It is designed for use with [`AcornGammaNeighbors`]
-    /// whose `neighbors()` already returns γ·M pre-expanded candidates (two-hop union,
-    /// pruned by distance). Predicate-failing nodes are simply skipped without further
-    /// expansion — connectivity is guaranteed by the pre-built lists.
+    /// Unlike `acorn_search_candidates_filtered`, this method performs **no two-hop
+    /// expansion** at query time. It is designed for the pre-expanded adjacency built by
+    /// [`crate::hnsw::HNSW::build_acorn_gamma_neighbors`], whose `neighbors()` already returns
+    /// γ·M candidates (two-hop union, pruned by distance). Predicate-failing nodes are simply
+    /// skipped without further expansion — connectivity is guaranteed by the pre-built lists.
     ///
     /// # Arguments
-    /// Same as [`acorn_search_candidates_filtered`].
+    /// Same as `acorn_search_candidates_filtered`.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     fn acorn_gamma_search_filtered<'e, D, F>(
@@ -1062,10 +1075,14 @@ impl<N: Neighbors> GraphTrait for Graph<N> {
     }
 }
 
-impl From<GrowableGraph> for Graph<PlainNeighbors> {
-    /// Converts a `GrowableGraph` into a compact plain `Graph` by removing padding.
-    /// Neighbor order within each node is left untouched, so the `standard` build path keeps
-    /// producing exactly the same graph as before the backend became pluggable.
+impl<N: Neighbors + From<NeighborData>> From<GrowableGraph> for Graph<N> {
+    /// Converts a `GrowableGraph` into a compact `Graph` over any backend, by removing padding.
+    ///
+    /// Neighbor order within each node is left untouched unless the target backend demands
+    /// otherwise (`N::REQUIRES_SORTED`), so the `standard` build path keeps producing exactly the
+    /// same graph as before the backend became pluggable. For a delta-coded backend the lists are
+    /// sorted and deduplicated here, which is what makes such a backend reachable straight from a
+    /// build rather than only through the reordering pass.
     fn from(growable_graph: GrowableGraph) -> Self {
         let n_nodes = growable_graph.n_nodes();
         let max_degree = growable_graph.max_degree();
@@ -1082,18 +1099,67 @@ impl From<GrowableGraph> for Graph<PlainNeighbors> {
                 .iter()
                 .position(|&v| v == u32::MAX)
                 .unwrap_or(max_degree);
+            let list_start = neighbors.len();
             neighbors.extend_from_slice(&slots[..len]);
+            if N::REQUIRES_SORTED {
+                let list = &mut neighbors[list_start..];
+                list.sort_unstable();
+                let kept = {
+                    let mut w = list_start;
+                    for i in list_start..neighbors.len() {
+                        if i == list_start || neighbors[i] != neighbors[i - 1] {
+                            neighbors[w] = neighbors[i];
+                            w += 1;
+                        }
+                    }
+                    w
+                };
+                neighbors.truncate(kept);
+            }
             offsets.push(neighbors.len());
         }
 
         let final_mapping = growable_graph.ids_mapping.map(CompactArray::from);
 
         Graph {
-            neighbors: PlainNeighbors::from(NeighborData {
+            neighbors: N::from(NeighborData {
                 data: neighbors.into_boxed_slice(),
                 offsets: offsets.into_boxed_slice(),
             }),
             ids_mapping: final_mapping,
+            max_degree,
+            n_nodes,
+        }
+    }
+}
+
+impl<N> Graph<N>
+where
+    N: Neighbors + From<NeighborData>,
+{
+    /// Builds a graph directly from adjacency lists.
+    ///
+    /// This is the entry point for passes that produce their own neighbor lists rather than
+    /// deriving them from a [`GrowableGraph`] or from another `Graph` — the ACORN-γ expansion of
+    /// [`crate::hnsw::HNSW::build_acorn_gamma_neighbors`] is one such pass.
+    ///
+    /// `max_degree` is the degree bound the caller wants reported; it is not enforced here.
+    /// `ids_mapping` is the optional local-to-external ID translation (`None` when the two ID
+    /// spaces coincide, which is the case for a ground level); it is bit-packed on the way in,
+    /// exactly as the [`GrowableGraph`] conversion does.
+    ///
+    /// Note that delta-coded backends such as [`crate::graph::neighbors::StreamVByteNeighbors`]
+    /// require each list to be sorted ascending; a caller handing over lists in any other order
+    /// must use a backend that stores them verbatim.
+    pub fn from_neighbor_data(
+        data: NeighborData,
+        max_degree: usize,
+        ids_mapping: Option<Vec<usize>>,
+    ) -> Self {
+        let n_nodes = data.offsets.len().saturating_sub(1);
+        Graph {
+            neighbors: N::from(data),
+            ids_mapping: ids_mapping.map(CompactArray::from),
             max_degree,
             n_nodes,
         }
@@ -1198,130 +1264,13 @@ where
     }
 }
 
-/// A representation of a graph where the adjacency lists of the nodes are stored in a fixed degree format.
-/// If a node's degree is less than the maximum degree, it is padded with `None` values.
-/// None values are represented as `usize::MAX`. The nodes ids are in the range `[0, len)`
-/// Node ids are represented as `u32` but they are returned as usize ones.
-/// Moreover, the largest value is reserved. This means that we allow a
-/// maximum of `u32::MAX - 1` nodes.
-///
-/// # Fields
-/// - `neighbors`: A list of all neighbors for vectors in the graph. The neighbors for each vector
-///   are stored in a contiguous block.
-/// - `max_degree`: The maximum degree of any node in the graph.
-/// - `n_edges`: The number of edges in the graph.
-/// - `n_nodes`: The number of nodes in the graph.
-///
-#[derive(Serialize, Deserialize)]
-pub struct GraphFixedDegree {
-    neighbors: Box<[Optioned<u32>]>, // Using Optioned<u32> to represent neighbors, where None is represented by u32::MAX
-    ids_mapping: Option<Box<[usize]>>, // This is used to map the internal IDs to external IDs
-    max_degree: usize,
-    n_edges: usize,
-    n_nodes: usize,
-}
-
-impl Default for GraphFixedDegree {
-    fn default() -> Self {
-        GraphFixedDegree {
-            neighbors: Box::new([]),
-            ids_mapping: None, // No mapping by default
-            max_degree: 0,
-            n_edges: 0,
-            n_nodes: 0,
-        }
-    }
-}
-
-impl GraphTrait for GraphFixedDegree {
-    #[inline]
-    fn neighbors<'a>(&'a self, u: usize, scratch: &'a mut Vec<u32>) -> &'a [u32] {
-        let start = u * self.max_degree;
-        let end = start + self.max_degree;
-        scratch.clear();
-        scratch.extend(
-            self.neighbors[start..end]
-                .iter()
-                .take_while(|&opt| opt.is_some())
-                .map(|opt| opt.unwrap()),
-        );
-        scratch
-    }
-
-    #[inline]
-    fn n_nodes(&self) -> usize {
-        self.n_nodes
-    }
-
-    #[inline]
-    fn max_degree(&self) -> usize {
-        self.max_degree
-    }
-
-    #[inline]
-    fn n_edges(&self) -> usize {
-        self.n_edges
-    }
-
-    #[inline]
-    fn get_external_id(&self, id: usize) -> usize {
-        if let Some(mapping) = &self.ids_mapping {
-            if id >= mapping.len() {
-                panic!("ID out of bounds: {}", id);
-            }
-            mapping[id]
-        } else {
-            id
-        }
-    }
-
-    fn get_space_usage_bytes(&self) -> usize {
-        let neighbors_size = self.neighbors.len() * std::mem::size_of::<Optioned<u32>>();
-        let ids_mapping_size = self
-            .ids_mapping
-            .as_ref()
-            .map_or(0, |mapping| mapping.len() * std::mem::size_of::<usize>());
-
-        neighbors_size + ids_mapping_size
-    }
-}
-
-impl From<GrowableGraph> for GraphFixedDegree {
-    /// Converts a `GrowableGraph` into a fixed-degree `GraphFixedDegree` (preserves padding).
-    fn from(growable_graph: GrowableGraph) -> Self {
-        let ids_mapping = growable_graph
-            .ids_mapping
-            .map(|mapping| mapping.into_boxed_slice());
-
-        GraphFixedDegree {
-            // GraphFixedDegree is serialized, so it keeps the `Optioned<u32>` representation;
-            // this one-off remap is cold compared to the build it follows.
-            neighbors: growable_graph
-                .neighbors
-                .iter()
-                .map(|&v| {
-                    if v == u32::MAX {
-                        Optioned::none()
-                    } else {
-                        Optioned::some(v)
-                    }
-                })
-                .collect(),
-            ids_mapping,
-            max_degree: growable_graph.max_degree,
-            n_edges: growable_graph.n_edges,
-            n_nodes: growable_graph.n_nodes,
-        }
-    }
-}
-
 // GrowableGraph is build-only and never serialized.
 #[derive(Default)]
 pub struct GrowableGraph {
-    // `u32::MAX` marks an empty slot — the same sentinel `Optioned<u32>` uses for `None`.
-    // Storing plain `u32` rather than `Optioned<u32>` is what lets `neighbors` hand out a
-    // subslice of this buffer instead of copying into the caller's scratch on every node
-    // expansion, which the construction search does tens of millions of times.
+    // `u32::MAX` marks an empty slot, the same sentinel the fixed-stride backend uses. Storing
+    // plain `u32` rather than an optional wrapper is what lets `neighbors` hand out a subslice
+    // of this buffer instead of copying into the caller's scratch on every node expansion,
+    // which the construction search does tens of millions of times.
     neighbors: Vec<u32>,
     ids_mapping: Option<Vec<usize>>,
     max_degree: usize,
@@ -1408,30 +1357,6 @@ impl<N: Neighbors> From<Graph<N>> for GrowableGraph {
             n_edges,
             n_nodes,
             inserted_nodes: n_nodes,
-        }
-    }
-}
-
-impl From<GraphFixedDegree> for GrowableGraph {
-    fn from(graph: GraphFixedDegree) -> Self {
-        let ids_mapping = graph.ids_mapping.map(|mapping| mapping.into_vec());
-        GrowableGraph {
-            neighbors: graph
-                .neighbors
-                .iter()
-                .map(|opt| {
-                    if opt.is_some() {
-                        opt.unwrap()
-                    } else {
-                        u32::MAX
-                    }
-                })
-                .collect(),
-            ids_mapping,
-            max_degree: graph.max_degree,
-            n_edges: graph.n_edges,
-            n_nodes: graph.n_nodes,
-            inserted_nodes: graph.n_nodes,
         }
     }
 }

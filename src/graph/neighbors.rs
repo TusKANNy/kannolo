@@ -12,6 +12,12 @@ pub struct NeighborData {
 /// Trait for neighbor-list storage backends (plain or compressed).
 #[allow(clippy::len_without_is_empty)]
 pub trait Neighbors {
+    /// Whether this backend needs each adjacency list sorted ascending on construction.
+    /// Delta-coding backends do, since they reconstruct by prefix sum; backends that store
+    /// neighbor IDs verbatim do not care and must not have their list order disturbed.
+    /// Conversions that feed a backend consult this before touching list order.
+    const REQUIRES_SORTED: bool = false;
+
     fn len(&self) -> usize;
     fn n_nodes(&self) -> usize;
 
@@ -61,6 +67,77 @@ impl Neighbors for PlainNeighbors {
     fn space_usage_bytes(&self) -> usize {
         self.data.len() * std::mem::size_of::<u32>()
             + self.offsets.len() * std::mem::size_of::<usize>()
+    }
+}
+
+/// Neighbors stored at a fixed stride, with no offsets array.
+///
+/// Every node owns exactly `stride` contiguous slots and unused ones hold the `u32::MAX`
+/// sentinel, so a node's list starts at `node_id * stride` — computed arithmetically, with no
+/// dependent load on an offsets array. The trade is space: the padding of partially-filled
+/// lists is retained rather than compacted away, which is why this backend is an alternative to
+/// [`PlainNeighbors`] rather than a complement to it. It is also mutually exclusive with
+/// compression, since padding is exactly what a compressed layout would remove.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct FixedDegreeNeighbors {
+    /// `stride`-sized slots per node, sentinel-padded.
+    slots: Box<[u32]>,
+    stride: usize,
+    /// Held explicitly rather than derived as `slots.len() / stride`, which is undefined for a
+    /// level whose nodes all have empty lists — a real case for a one-node top level.
+    n_nodes: usize,
+    /// Number of real (non-sentinel) neighbors, i.e. the logical edge count.
+    logical_len: usize,
+}
+
+impl From<NeighborData> for FixedDegreeNeighbors {
+    /// Re-pads variable-length lists to the longest one, which is the stride this backend needs.
+    fn from(nd: NeighborData) -> Self {
+        let n_nodes = nd.offsets.len().saturating_sub(1);
+        let stride = (0..n_nodes)
+            .map(|v| nd.offsets[v + 1] - nd.offsets[v])
+            .max()
+            .unwrap_or(0);
+
+        let mut slots = vec![u32::MAX; n_nodes * stride];
+        for v in 0..n_nodes {
+            let (start, end) = (nd.offsets[v], nd.offsets[v + 1]);
+            slots[v * stride..v * stride + (end - start)].copy_from_slice(&nd.data[start..end]);
+        }
+
+        FixedDegreeNeighbors {
+            slots: slots.into_boxed_slice(),
+            stride,
+            n_nodes,
+            logical_len: nd.data.len(),
+        }
+    }
+}
+
+impl Neighbors for FixedDegreeNeighbors {
+    fn len(&self) -> usize {
+        self.logical_len
+    }
+
+    fn n_nodes(&self) -> usize {
+        self.n_nodes
+    }
+
+    /// Hands out the non-sentinel prefix of the node's slots; `scratch` is left untouched.
+    /// Neighbors occupy a contiguous prefix, so the first sentinel ends the list.
+    #[inline]
+    fn get<'a>(&'a self, node_id: usize, _scratch: &'a mut Vec<u32>) -> &'a [u32] {
+        let start = node_id * self.stride;
+        let slots = &self.slots[start..start + self.stride];
+        let len = slots
+            .iter()
+            .position(|&v| v == u32::MAX)
+            .unwrap_or(self.stride);
+        &slots[..len]
+    }
+
+    fn space_usage_bytes(&self) -> usize {
+        self.slots.len() * std::mem::size_of::<u32>()
     }
 }
 
@@ -141,6 +218,9 @@ impl StreamVByteNeighbors {
 }
 
 impl Neighbors for StreamVByteNeighbors {
+    /// Delta coding reconstructs by prefix sum, so the input lists must be ascending.
+    const REQUIRES_SORTED: bool = true;
+
     fn len(&self) -> usize {
         self.logical_len
     }
@@ -217,6 +297,39 @@ mod tests {
     #[test]
     fn streamvbyte_neighbors_roundtrip() {
         roundtrip::<StreamVByteNeighbors>(&[&[1, 2, 3], &[], &[0, 5], &[7]]);
+    }
+
+    #[test]
+    fn fixed_degree_neighbors_roundtrip() {
+        roundtrip::<FixedDegreeNeighbors>(&[&[1, 2, 3], &[], &[0, 5], &[7]]);
+    }
+
+    /// The stride comes from the longest list, so a level whose nodes all have empty lists has
+    /// no slots at all. Node count must still be reported from the input, not divided out of an
+    /// empty buffer.
+    #[test]
+    fn fixed_degree_neighbors_all_lists_empty() {
+        let n: FixedDegreeNeighbors = FixedDegreeNeighbors::from(build(&[&[], &[], &[]]));
+        assert_eq!(n.n_nodes(), 3);
+        assert_eq!(n.len(), 0);
+        assert_eq!(n.space_usage_bytes(), 0);
+        let mut scratch = Vec::new();
+        for v in 0..3 {
+            assert!(n.get(v, &mut scratch).is_empty());
+        }
+    }
+
+    /// Padding is retained, so the footprint is `n_nodes * longest_list`, and a node's list is
+    /// still handed out as a borrowed prefix rather than copied into the scratch.
+    #[test]
+    fn fixed_degree_neighbors_pads_to_longest_list() {
+        let n: FixedDegreeNeighbors = FixedDegreeNeighbors::from(build(&[&[1, 2, 3], &[4], &[]]));
+        assert_eq!(n.n_nodes(), 3);
+        assert_eq!(n.len(), 4);
+        assert_eq!(n.space_usage_bytes(), 3 * 3 * std::mem::size_of::<u32>());
+        let mut scratch = vec![99u32];
+        assert_eq!(n.get(1, &mut scratch), &[4]);
+        assert_eq!(scratch, vec![99u32], "scratch must be left untouched");
     }
 
     #[test]

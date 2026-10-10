@@ -78,6 +78,28 @@ pub(super) fn convert_components_to_u16(components: &[i32]) -> PyResult<Vec<u16>
     Ok(out)
 }
 
+/// Rejects sparse components and values of different lengths.
+pub(super) fn check_same_len(components: usize, values: usize) -> PyResult<()> {
+    if components != values {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "components and values must have the same length, got {components} and {values}"
+        )));
+    }
+    Ok(())
+}
+
+/// Converts `i64` offsets to `usize`, rejecting negative ones.
+pub(super) fn offsets_to_usize(offsets: &[i64]) -> PyResult<Vec<usize>> {
+    offsets
+        .iter()
+        .map(|&x| {
+            usize::try_from(x).map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("Offsets must be non-negative")
+            })
+        })
+        .collect()
+}
+
 pub(super) fn validate_offsets(offsets: &[usize], values_len: usize) -> PyResult<()> {
     if offsets.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -116,6 +138,7 @@ where
     V: ValueType + Float + FromF32,
     D: ScalarSparseSupportedDistance,
 {
+    check_same_len(components.len(), values.len())?;
     validate_offsets(&offsets, values.len())?;
 
     let encoder = PlainSparseQuantizer::<u16, V, D>::new(dim, dim);
@@ -146,6 +169,24 @@ pub(super) fn load_index_err<E: std::fmt::Debug>(e: E) -> PyErr {
          arguments given here match the ones used when the index was built, and that the file \
          was written by this version of kannolo."
     ))
+}
+
+/// Pads `(score, id)` results to `k` entries with `inf` / `-1` and appends them to the buffers.
+pub(super) fn push_pairs(
+    results: Vec<(f32, usize)>,
+    k: usize,
+    distances: &mut Vec<f32>,
+    ids: &mut Vec<i64>,
+) {
+    let found = results.len().min(k);
+    for (d, id) in results.into_iter().take(k) {
+        distances.push(d);
+        ids.push(id as i64);
+    }
+    for _ in found..k {
+        distances.push(f32::INFINITY);
+        ids.push(-1);
+    }
 }
 
 pub(super) fn push_results<D: Distance>(

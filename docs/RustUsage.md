@@ -1,6 +1,6 @@
 ## Command-Line Usage
 
-kANNolo provides five command-line binaries for index building and search. This page is a
+kANNolo provides command-line binaries for index building and search. This page is a
 task-oriented walkthrough; [Binaries.md](Binaries.md) is the exhaustive flag reference.
 
 **Binaries:**
@@ -9,6 +9,13 @@ task-oriented walkthrough; [Binaries.md](Binaries.md) is the exhaustive flag ref
 - `ivf_build` – Build an IVF (inverted file) index; dense only
 - `ivf_search` – Search an IVF index
 - `hnsw_rerank_search` – Two-stage search: sparse first-stage + multivector reranking
+- `hnsw_rerank_build_dense`, `hnsw_rerank_search_dense` – Two-stage dense index: compressed
+  first stage, `f16` or RaBitQ-ext reranking
+- `hnsw_rerank_build_sparse`, `hnsw_rerank_search_sparse` – Two-stage sparse index: optionally
+  L1-pruned and quantized first stage, `f16` or residual reranking
+
+The two-stage indexes are also available as a library, in `kannolo::rerank`
+(`DenseRerankIndex`, `SparseRerankIndex`); see the module documentation for an example.
 
 The binaries require the `cli` feature; `hnsw_rerank_search` also requires `multivec`. A plain
 `cargo build` compiles only the library:

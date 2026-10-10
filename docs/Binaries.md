@@ -3,7 +3,8 @@
 This document describes the current CLI surface for:
 - `hnsw_build`
 - `hnsw_search`
-- `hnsw_rerank_search_dense`
+- `hnsw_rerank_build_dense`, `hnsw_rerank_search_dense`
+- `hnsw_rerank_build_sparse`, `hnsw_rerank_search_sparse`
 - `ivf_build`
 - `ivf_search`
 
@@ -67,27 +68,58 @@ Options:
       --num-runs <NUM_RUNS>              [default: 1]
 ```
 
-## `hnsw_rerank_search_dense`
+## Two-stage indexes: `hnsw_rerank_{build,search}_{dense,sparse}`
 
-Two-stage dense search: a compressed HNSW first stage over PQ / RaBitQ / RaBitQ-ext codes,
-reranked against a plain `f16` copy of the same collection. The dense counterpart of
-`hnsw_rerank_search`, which is sparse-multivector search.
+A two-stage index has an HNSW first stage that retrieves `--k-candidates` candidates and a rerank
+dataset that rescores them. The build binaries take one collection, build both stages, and save
+them to one file; the search binaries load that file. The files are the same ones the Python
+classes `DenseRerankHNSW` and `SparseRerankHNSW` save and load, so either side can build and the
+other search.
 
-The graph is always built over `f16` and only its *dataset* is replaced by codes, so the compressed representation never takes part in construction. The rerank file is the same collection at plain `f16`, in the original vector order.
+Index files carry no header, so the search binary must be given the build options that select the
+index type: they are listed for each pair below.
+
+Both search binaries share the search options: `--k-candidates` (first-stage candidates to
+rerank), `--ef-search` (first-stage candidate list size), `--alpha` (candidate pruning on the
+first-stage score), `--beta` (early exit during reranking), `--early-termination` and `--lambda`,
+and `--num-runs`. Results are written as `query_id  doc_id  rank  score`.
+
+### Dense
+
+The first stage is a graph built over `f16` whose dataset is then encoded with PQ, RaBitQ or
+RaBitQ-ext. The rerank stage is the collection at plain `f16`, or RaBitQ-ext codes with `--rerank-bits 2|4|8`. `--residual-rerank` encodes `x − x̂` instead, and scores a candidate as first-stage plus rerank score; it needs `--rerank-bits`, a `rabitq` or `rabitq-ext` first stage, and dot product.
 
 ```bash
-Usage: hnsw_rerank_search_dense [OPTIONS] --index-file <INDEX_FILE> --rerank-file <RERANK_FILE> --query-file <QUERY_FILE> --encoder <ENCODER>
+Usage: hnsw_rerank_build_dense [OPTIONS] --data-file <DATA_FILE> --output-file <OUTPUT_FILE> --encoder <ENCODER>
+
+Options:
+  -d, --data-file <DATA_FILE>            f32 .npy of shape (n, dim)
+  -o, --output-file <OUTPUT_FILE>
+      --encoder <ENCODER>                [possible values: pq, rabitq, rabitq-ext]
+      --pq-subspaces <PQ_SUBSPACES>      [default: 32]
+      --rabitq-total-bits <BITS>         [default: 4] rabitq-ext only [2, 4, 8]
+      --rerank-bits <RERANK_BITS>        [default: 0] 0 for f16, or 2, 4, 8 for RaBitQ-ext
+      --residual-rerank
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, permuted, streamvbyte]
+      --distance <DISTANCE>              [default: dotproduct]
+      --m <M>                            [default: 32]
+      --ef-construction <EF_CONSTRUCTION> [default: 200]
+```
+
+```bash
+Usage: hnsw_rerank_search_dense [OPTIONS] --index-file <INDEX_FILE> --query-file <QUERY_FILE> --encoder <ENCODER>
 
 Options:
   -i, --index-file <INDEX_FILE>
-  -r, --rerank-file <RERANK_FILE>
-  -q, --query-file <QUERY_FILE>
+  -q, --query-file <QUERY_FILE>          f32 .npy
   -o, --output-path <OUTPUT_PATH>
       --encoder <ENCODER>                [possible values: pq, rabitq, rabitq-ext]
-      --graph-type <GRAPH_TYPE>          [default: permuted] [possible values: standard, permuted, streamvbyte]
+      --pq-subspaces <PQ_SUBSPACES>      [default: 32]
+      --rabitq-query-bits <BITS>         [default: 1] rabitq only (1..=8)
+      --rerank-bits <RERANK_BITS>        [default: 0]
+      --residual-rerank
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, permuted, streamvbyte]
       --distance <DISTANCE>              [default: dotproduct]
-      --pq-subspaces <PQ_SUBSPACES>      [default: 0]
-      --rabitq-query-bits <RABITQ_QUERY_BITS>  [default: 1]
   -k, --k <K>                            [default: 10]
       --k-candidates <K_CANDIDATES>      [default: 100]
       --ef-search <EF_SEARCH>            [default: 100]
@@ -98,16 +130,78 @@ Options:
       --num-runs <NUM_RUNS>              [default: 1]
 ```
 
-`--k-candidates` is the frontier knob: it sets how many first-stage candidates are reranked.
-`--ef-search` sizes the first-stage candidate list and is usually a multiple of
-`--k-candidates`. `--alpha` prunes candidates whose first-stage score falls outside a relative
-slack of the k-th best; `--beta` is rerank early exit and is off unless given.
+Must match the build: `--encoder`, `--pq-subspaces`, `--distance`, `--graph-type`,
+`--residual-rerank`, and whether `--rerank-bits` is 0 or one of 2, 4, 8. RaBitQ-ext's total bits and the exact
+rerank bits are stored with the index. `--rabitq-query-bits` only changes how the query is encoded,
+so it can differ from the build.
 
-`--pq-subspaces` must match what the index was built with, for `--encoder pq`: it names the
-monomorphization to load the index as. There is no matching flag for `--encoder rabitq-ext` — the
-document code width is stored with the encoder and comes back with the index. `--rabitq-query-bits`
-applies to `--encoder rabitq` and describes only how the query is processed, so it can be varied
-without rebuilding.
+```bash
+hnsw_rerank_build_dense --data-file train.npy --output-file idx.bin \
+  --encoder rabitq-ext --rabitq-total-bits 4 --rerank-bits 8 --graph-type permuted
+hnsw_rerank_search_dense --index-file idx.bin --query-file queries.npy \
+  --encoder rabitq-ext --rerank-bits 8 --graph-type permuted \
+  -k 10 --k-candidates 50 --ef-search 50 --output-path results.tsv
+```
+
+### Sparse
+
+Dot product only, over collections in Seismic binary format. Three build options decide what each
+stage holds:
+
+- `--prune-percentage` below 100 L1-prunes the first stage to the components carrying that
+  percentage of each vector's L1 mass.
+- `--first-stage-value-type` stores the first stage as `f16` or `fixedu8`. The rerank stage is
+  always `f16`.
+- `--residual-rerank` stores only the pruned-away components in the rerank stage and sums the two
+  scores; with an `f16` first stage this is the exact score at `f16` precision, and each non-zero
+  is stored once.
+  Without it the rerank stage holds the full vectors.
+
+No pruning with `--residual-rerank` (the residual would be empty) and no pruning with an `f16`
+first stage (the rerank stage would be an identical copy) are rejected.
+
+```bash
+Usage: hnsw_rerank_build_sparse [OPTIONS] --data-file <DATA_FILE> --output-file <OUTPUT_FILE>
+
+Options:
+  -d, --data-file <DATA_FILE>
+  -o, --output-file <OUTPUT_FILE>
+      --prune-percentage <PRUNE_PERCENTAGE>  required; 100 means no pruning
+      --residual-rerank
+      --first-stage-value-type <TYPE>    [default: f16] [possible values: f16, fixedu8]
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, permuted, streamvbyte]
+      --m <M>                            [default: 32]
+      --ef-construction <EF_CONSTRUCTION> [default: 200]
+```
+
+```bash
+Usage: hnsw_rerank_search_sparse [OPTIONS] --index-file <INDEX_FILE> --query-file <QUERY_FILE>
+
+Options:
+  -i, --index-file <INDEX_FILE>
+  -q, --query-file <QUERY_FILE>          Seismic binary format
+  -o, --output-path <OUTPUT_PATH>
+      --residual-rerank
+      --first-stage-value-type <TYPE>    [default: f16] [possible values: f16, fixedu8]
+      --graph-type <GRAPH_TYPE>          [default: standard] [possible values: standard, permuted, streamvbyte]
+  -k, --k <K>                            [default: 10]
+      --k-candidates <K_CANDIDATES>      [default: 100]
+      --ef-search <EF_SEARCH>            [default: 100]
+      --alpha <ALPHA>
+      --beta <BETA>
+      --early-termination <EARLY_TERMINATION> [default: none] [possible values: none, distance-adaptive]
+      --lambda <LAMBDA>
+      --num-runs <NUM_RUNS>              [default: 1]
+```
+
+Must match the build: `--first-stage-value-type`, `--graph-type` and `--residual-rerank`.
+
+```bash
+hnsw_rerank_build_sparse --data-file documents.bin --output-file idx.bin \
+  --prune-percentage 60 --residual-rerank --m 32 --ef-construction 1000
+hnsw_rerank_search_sparse --index-file idx.bin --query-file queries.bin --residual-rerank \
+  -k 10 --k-candidates 100 --ef-search 100 --output-path results.tsv
+```
 
 ## `ivf_build`
 

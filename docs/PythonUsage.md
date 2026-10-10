@@ -27,7 +27,10 @@ from kannolo import (
     SparseMultivecTwoLevelsPQRerankIndex, # Sparse HNSW + Two-level PQ multivector rerank
 
     # Dense reranking
-    DenseRerankHNSW,     # Compressed dense HNSW + plain f16 rerank
+    DenseRerankHNSW,     # Compressed dense HNSW + f16 or RaBitQ-ext rerank
+
+    # Sparse reranking
+    SparseRerankHNSW,    # Sparse HNSW over pruned/compressed vectors + rerank with residuals/full vectors
 )
 import numpy as np
 ```
@@ -146,9 +149,9 @@ index = SparseFlatIndex.build_from_arrays(components, values, offsets)
 
 ### Dense Reranking
 
-A two-stage dense index: a compressed HNSW first stage over PQ / RaBitQ / RaBitQ-ext codes, reranked against a plain `f16` copy of the same collection.
+A two-stage dense index: a compressed HNSW first stage over PQ / RaBitQ / RaBitQ-ext codes, reranked against the same collection at plain `f16` (the default) or as RaBitQ-ext codes (`rerank_bits`).
 
-The graph is always built over `f16` and only its *dataset* is then replaced by codes, so the compressed representation never takes part in construction. The rerank dataset is the same collection at plain `f16`, so the index holds both — this trades memory for speed, rather than saving memory the way `DensePQHNSW` does.
+The graph is always built over `f16` and only its *dataset* is then replaced by codes, so the compressed representation never takes part in construction. With an `f16` rerank stage the index holds the collection twice, which trades memory for speed, unlike `DensePQHNSW`; RaBitQ-ext rerank codes make the second copy smaller.
 
 ```python
 data = np.random.randn(10000, 768).astype(np.float32)
@@ -177,7 +180,23 @@ index = DenseRerankHNSW.build_from_array(
 - `pq_subspaces` (int): applies to `"pq"`. Default: 32
 - `rabitq_total_bits` (int): document code width for `"rabitq-ext"`. Default: 4
 - `rabitq_query_bits` (int): query code width for `"rabitq"`. Default: 1
+- `rerank_bits` (int): the rerank stage's encoding. `0` is plain `f16`; `2`, `4` or `8` store
+  RaBitQ-ext codes instead, which shrinks the rerank dataset. Default: 0
+- `residual_rerank` (bool): encode `x - x̂` (what the first stage left out) in the rerank stage
+  and score a candidate as first-stage plus rerank score. Needs `rerank_bits > 0`, a `"rabitq"`
+  or `"rabitq-ext"` first stage, and `metric="dotproduct"`. Default: False
 - `m`, `ef_construction`, `metric`, `graph_type`: as for every HNSW index above
+
+The graph, the first-stage codes and the candidate lists do not depend on `rerank_bits`: only the
+rescoring changes.
+
+```python
+# RaBitQ-ext 4-bit first stage, reranked on 8-bit RaBitQ-ext codes instead of f16
+index = DenseRerankHNSW.build_from_array(
+    data.flatten(), dim=768,
+    encoder="rabitq-ext", rabitq_total_bits=4, rerank_bits=8,
+)
+```
 
 Or straight from a `.npy` collection, where `dim` comes from the file's shape:
 
@@ -188,6 +207,48 @@ index = DenseRerankHNSW.build_from_file(
     encoder="pq", pq_subspaces=32,
 )
 ```
+
+### Sparse Reranking
+
+A two-stage sparse index (dot product). Both stages are built from one collection: an HNSW
+first stage over a reduced version of each vector, and a rerank stage that rescores its
+candidates. Three build options decide what each stage holds:
+
+- `prune_percentage` (float, in `[0, 100]`, required): the first stage keeps, per vector, the
+  components carrying the top `prune_percentage`% of its L1 mass. 100 means no pruning
+- `first_stage_value_type` (str): `"f16"` or `"fixedu8"`. The rerank stage is always `f16`.
+  Default: `"f16"`
+- `residual_rerank` (bool): store only the pruned-away components in the rerank stage and score a
+  candidate as first-stage plus rerank score. Needs `prune_percentage < 100`. Default: False
+
+| `prune_percentage` | `residual_rerank` | first stage | index |
+|---|---|---|---|
+| < 100 | True | `f16` | L1-pruned first stage, exact rescoring at `f16` precision; each non-zero stored once |
+| < 100 | False | any | pruned first stage, rescored on the full vectors |
+| < 100 | True | `fixedu8` | pruned and quantized first stage; the summed score is approximate |
+| 100 | False | `fixedu8` | quantized first stage, rescored on the full `f16` vectors |
+
+`prune_percentage=100` is rejected with `residual_rerank=True` (the residual would be empty) and
+with an `f16` first stage (the rerank stage would be an identical copy).
+
+```python
+from kannolo import SparseRerankHNSW
+
+index = SparseRerankHNSW.build_from_file(
+    "data.bin",                  # Seismic binary format
+    prune_percentage=60.0, residual_rerank=True,
+    m=32, ef_construction=200,
+)
+
+distances, ids = index.search(
+    query_components, query_values,
+    k_candidates=100, k=10, ef_search=100,
+)
+```
+
+`build_from_arrays(components, values, offsets, ...)` takes the collection as flat arrays, with
+the same options. `batch_search` takes the same arguments plus `num_threads`, with queries in the
+flattened sparse format described under [Search Operations](#search-operations).
 
 ### Multivector Reranking
 
@@ -248,6 +309,9 @@ index = DenseRerankHNSW.load(
     metric="dotproduct", graph_type="standard",
     encoder="pq", pq_subspaces=32,
 )
+index = SparseRerankHNSW.load(
+    "my_index.bin", first_stage_value_type="f16", graph_type="standard", residual_rerank=True,
+)
 index = SparseMultivecRerankIndex.load("my_index.bin")
 index = SparseMultivecTwoLevelsPQRerankIndex.load("my_index.bin", pq_subspaces=32)
 ```
@@ -265,6 +329,8 @@ For `DenseRerankHNSW` two arguments behave differently from the rest:
   describes how a query is processed and touches nothing that was stored. One saved index
   therefore serves every query width, and `set_query_bits` can change it again afterwards
   without saving anything.
+- `rerank_bits` must be `0` for an index built with the `f16` rerank stage and `2`, `4` or `8`
+  otherwise (the exact width is stored), and `residual_rerank` must match the build.
 
 For the two-stage classes, `save`/`load` round-trips the index as it stands, whereas
 `build_from_file` reconstructs it from a first-stage index plus the original dataset — so
@@ -375,7 +441,7 @@ dists, ids = index.search(
 ```
 
 `k_candidates` is the knob to sweep: it sets how many first-stage candidates get reranked
-against the exact `f16` vectors. `ef_search` is usually a multiple of it. `alpha` keeps only
+against the rerank stage. `ef_search` is usually a multiple of it. `alpha` keeps only
 candidates whose first-stage score is within a relative slack of the k-th best.
 
 #### Sweeping the RaBitQ query width
@@ -508,7 +574,8 @@ by `save()`: call `build_acorn_gamma` again after `load()`.
 | Sparse vectors, standard | `SparsePlainHNSW` | Plain encoding, good recall |
 | Sparse vectors, memory limited | `SparseFixedU8HNSW` or `SparseDotVByteHNSW` | Compressed |
 | Sparse vectors, ground truth/exhaustive search | `SparseFlatIndex` | Exhaustive, exact |
-| Dense vectors, compressed first stage + exact rerank | `DenseRerankHNSW` | Compressed HNSW + plain `f16` rerank; holds both, so it trades memory for speed |
+| Dense vectors, compressed first stage + rerank | `DenseRerankHNSW` | Compressed HNSW + `f16` or RaBitQ-ext rerank |
+| Sparse vectors, pruned or quantized first stage + rerank | `SparseRerankHNSW` | L1-pruned HNSW + residual or full-vector rerank |
 | Multivector retrieval | `SparseMultivecRerankIndex` | Sparse first-stage + multivec rerank |
 | Multivector + quantization | `SparseMultivecTwoLevelsPQRerankIndex` | Sparse + PQ rerank |
 

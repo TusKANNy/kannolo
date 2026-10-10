@@ -21,6 +21,6 @@ pub use hnsw::{
     DensePQHNSW, DensePlainHNSW, SparseDotVByteHNSW, SparseFixedU8HNSW, SparseFixedU16HNSW,
     SparsePlainHNSW,
 };
-pub use rerank::DenseRerankHNSW;
+pub use rerank::{DenseRerankHNSW, SparseRerankHNSW};
 #[cfg(feature = "multivec")]
 pub use rerank::{SparseMultivecRerankIndex, SparseMultivecTwoLevelsPQRerankIndex};

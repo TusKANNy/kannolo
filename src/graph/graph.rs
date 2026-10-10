@@ -39,6 +39,12 @@ pub trait GraphTrait {
     #[must_use]
     fn n_edges(&self) -> usize;
 
+    /// Average out-degree, `n_edges / n_nodes`.
+    #[must_use]
+    fn avg_degree(&self) -> usize {
+        self.n_edges() / self.n_nodes().max(1)
+    }
+
     /// Returns the maximum degree of any node in the graph.
     #[must_use]
     fn max_degree(&self) -> usize;
@@ -218,7 +224,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited_table = create_visited_set(ef, lambda, self.n_nodes());
+        let mut visited_table = create_visited_set(ef, lambda, self.avg_degree(), self.n_nodes());
 
         // Scratch for `neighbors`, reused for every expanded node. The slice it backs is walked
         // twice, to prefetch and to score: producing the list twice would make the compressed
@@ -371,7 +377,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(ef, lambda, self.n_nodes());
+        let mut visited = create_visited_set(ef, lambda, self.avg_degree(), self.n_nodes());
 
         // Always add the entry to the traversal set so we can expand from it even
         // when it does not satisfy the predicate.
@@ -512,7 +518,7 @@ pub trait GraphTrait {
             Reverse<ScoredItemGeneric<<D::Encoder as VectorEncoder>::Distance, usize>>,
         > = BinaryHeap::with_capacity(ef);
 
-        let mut visited = create_visited_set(ef, lambda, self.n_nodes());
+        let mut visited = create_visited_set(ef, lambda, self.avg_degree(), self.n_nodes());
 
         // Always add the entry to C (traversal); add to W (results) only if predicate passes.
         visited.insert(entry_node.vector);

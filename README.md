@@ -119,14 +119,14 @@ The crate exposes three feature flags:
 |---------|-----------------|:-------:|
 | `multivec` | Multivector reranking indexes (`SparseMultivecRerankIndex`, `SparseMultivecTwoLevelsPQRerankIndex`) and the `hnsw_rerank_search` CLI binary | No |
 | `python` | PyO3 bindings — activated automatically by maturin when building the Python wheel | No |
-| `cli` | CLI binaries: `hnsw_build`, `hnsw_search`, `hnsw_rerank_search_dense`, `ivf_build`, `ivf_search` (combine with `multivec` to also get `hnsw_rerank_search`) | No |
+| `cli` | CLI binaries: `hnsw_build`, `hnsw_search`, `hnsw_rerank_{build,search}_{dense,sparse}`, `ivf_build`, `ivf_search` (combine with `multivec` to also get `hnsw_rerank_search`) | No |
 
 If you want to compile the **library only** (dense and sparse indexes, no multivec, no binaries):
 ```bash
 RUSTFLAGS="-C target-cpu=native" cargo build --release
 ```
 
-If you want the **CLI binaries** `hnsw_build`, `hnsw_search`, `hnsw_rerank_search_dense`, `ivf_build` and `ivf_search` (dense and sparse):
+If you want the **CLI binaries** `hnsw_build`, `hnsw_search`, the two-stage `hnsw_rerank_{build,search}_{dense,sparse}`, `ivf_build` and `ivf_search` (dense and sparse):
 ```bash
 RUSTFLAGS="-C target-cpu=native" cargo build --release --features cli
 ```

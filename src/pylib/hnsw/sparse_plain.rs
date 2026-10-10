@@ -183,6 +183,16 @@ impl SparsePlainHNSW {
         Ok(SparsePlainHNSW { inner })
     }
 
+    /// Bytes held by the dataset and all graph levels.
+    pub fn space_usage_bytes(&self) -> usize {
+        match &self.inner {
+            SparsePlainHNSWEnum::Euclidean(index) => index.space_usage_bytes(),
+            SparsePlainHNSWEnum::DotProduct(index) => index.space_usage_bytes(),
+            SparsePlainHNSWEnum::EuclideanStreamVByte(index) => index.space_usage_bytes(),
+            SparsePlainHNSWEnum::DotProductStreamVByte(index) => index.space_usage_bytes(),
+        }
+    }
+
     pub fn save(&self, path: &str) -> PyResult<()> {
         match &self.inner {
             SparsePlainHNSWEnum::Euclidean(index) => index.save_index(path).map_err(|e| {

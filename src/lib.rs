@@ -26,6 +26,8 @@ use crate::pylib::SparseMultivecTwoLevelsPQRerankIndex;
 #[cfg(feature = "python")]
 use crate::pylib::SparsePlainHNSW as SparsePlainIndexPy;
 #[cfg(feature = "python")]
+use crate::pylib::SparseRerankHNSW;
+#[cfg(feature = "python")]
 use pyo3::prelude::PyModule;
 #[cfg(feature = "python")]
 use pyo3::{Bound, PyResult, pymodule};
@@ -35,7 +37,7 @@ pub mod utils;
 pub mod visited_set;
 
 pub mod indexes;
-pub use indexes::{hnsw, hnsw_utils, ivf};
+pub use indexes::{hnsw, hnsw_utils, ivf, rerank};
 
 #[cfg(feature = "python")]
 #[pymodule]
@@ -49,6 +51,7 @@ pub fn kannolo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DenseFlatIndex>()?;
     m.add_class::<SparseFlatIndex>()?;
     m.add_class::<DenseRerankHNSW>()?;
+    m.add_class::<SparseRerankHNSW>()?;
     #[cfg(feature = "multivec")]
     m.add_class::<SparseMultivecRerankIndex>()?;
     #[cfg(feature = "multivec")]
